@@ -208,6 +208,8 @@ impl Migrator {
                 22,
                 "catalog_translations",
                 include_str!("../../migrations/022_catalog_translations.sql"),
+            ),
+            (
                 23,
                 "store_locations",
                 include_str!("../../migrations/023_store_locations.sql"),
