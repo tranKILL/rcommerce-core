@@ -437,10 +437,7 @@ pub async fn initiate_checkout(
         }
         Err(e) => {
             tracing::error!("Failed to initiate checkout: {}", e);
-            Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": e.to_string()})),
-            ))
+            Err(super::error_json(e))
         }
     }
 }
@@ -490,10 +487,7 @@ pub async fn select_shipping(
         }
         Err(e) => {
             tracing::error!("Failed to select shipping: {}", e);
-            Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": e.to_string()})),
-            ))
+            Err(super::error_json(e))
         }
     }
 }
@@ -537,12 +531,7 @@ pub async fn complete_checkout(
             .customer_service
             .find_by_id(auth.customer_id)
             .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-            })?
+            .map_err(super::error_json)?
             .ok_or_else(|| {
                 (
                     StatusCode::UNAUTHORIZED,
@@ -659,10 +648,7 @@ pub async fn complete_checkout(
         }
         Err(e) => {
             tracing::error!("Failed to complete checkout: {}", e);
-            Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": e.to_string()})),
-            ))
+            Err(super::error_json(e))
         }
     }
 }
@@ -929,10 +915,7 @@ pub async fn confirm_checkout(
         }
         Err(e) => {
             tracing::error!("Failed to confirm checkout: {}", e);
-            Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": e.to_string()})),
-            ))
+            Err(super::error_json(e))
         }
     }
 }
