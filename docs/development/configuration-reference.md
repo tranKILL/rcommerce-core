@@ -508,6 +508,29 @@ How it behaves:
   `rcommerce search reindex`. It builds a new index and swaps the alias, so
   search keeps working while it runs.
 
+## Several Stores
+
+One process can serve several isolated stores, each with its own database, token secret and audience, upload directory and payment credentials, selected by host name. See [Several stores in one process](../deployment/multi-store.md).
+
+```toml
+[stores.shop-a]
+hostnames = ["shop-a.example"]
+role = "merchant"            # or "catalogue"
+
+[stores.shop-a.database]
+database = "rc_shop_a"
+
+[stores.shop-a.security.jwt]
+secret = "a-different-secret-of-at-least-32-bytes"
+```
+
+Related settings:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `security.jwt.audience` | `rcommerce-api` (`rcommerce-api:<store>` for a store) | `aud` of issued tokens, required on every token |
+| `server.trust_forwarded_host` | `false` | Choose the store from `X-Forwarded-Host` (trusted reverse proxy only) |
+
 ## Compatibility Configuration
 
 ```toml

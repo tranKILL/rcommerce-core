@@ -152,6 +152,11 @@ pub struct AppState {
     /// Elasticsearch catalogue search (`[search] engine = "elasticsearch"`);
     /// None = PostgreSQL full-text search
     pub catalog_search: Option<Arc<rcommerce_core::search::ElasticsearchCatalog>>,
+    /// Store this state serves ("default" for a single store)
+    pub store_slug: String,
+    /// Base URL of the storefront, for links in e-mails (password reset,
+    /// e-mail verification)
+    pub storefront_url: String,
 }
 
 impl AppState {
@@ -272,6 +277,8 @@ impl AppState {
             default_currency: params.default_currency,
             settlement_sync,
             catalog_search: None,
+            store_slug: "default".to_string(),
+            storefront_url: "http://localhost:3000".to_string(),
         }
     }
 }
