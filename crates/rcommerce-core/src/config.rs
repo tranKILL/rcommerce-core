@@ -82,6 +82,10 @@ pub struct Config {
     /// or URLs, so one store cannot use another's credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store: Option<crate::stores::StoreDefinition>,
+
+    /// Catalogue sync: publishing this store's catalogue, or copying from one
+    #[serde(default)]
+    pub catalogue: CatalogueConfig,
 }
 
 /// Catalogue search: PostgreSQL full-text search (default) or Elasticsearch
@@ -116,6 +120,33 @@ impl Default for SearchConfig {
     }
 }
 
+/// Catalogue sync (see `rcommerce_core::catalogue`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CatalogueConfig {
+    /// Log product and category changes so stores can sync from this database
+    #[serde(default)]
+    pub publish_changes: bool,
+
+    /// PostgreSQL URL of the catalogue database this store copies from; no
+    /// sync without it
+    #[serde(default)]
+    pub source_url: Option<String>,
+
+    /// Seconds between automatic syncs; 0 = only on POST /admin/catalogue/sync
+    #[serde(default = "default_catalogue_sync_interval")]
+    pub sync_interval_seconds: u64,
+}
+
+impl Default for CatalogueConfig {
+    fn default() -> Self {
+        Self {
+            publish_changes: false,
+            source_url: None,
+            sync_interval_seconds: default_catalogue_sync_interval(),
+        }
+    }
+}
+
 fn default_search_engine() -> String {
     "postgres".to_string()
 }
@@ -126,6 +157,10 @@ fn default_search_index() -> String {
 
 fn default_search_locales() -> Vec<String> {
     vec!["en".to_string()]
+}
+
+fn default_catalogue_sync_interval() -> u64 {
+    300
 }
 
 fn default_currency_string() -> String {

@@ -95,6 +95,7 @@ pub async fn build_app(config: &Config) -> Result<Router> {
     if stores.is_empty() {
         let app_state = create_app_state(config).await?;
         spawn_abandoned_order_sweeper(config, &app_state);
+        spawn_catalogue_sync_loop(config, &app_state);
         spawn_subscription_billing_loop(config, &app_state);
         Ok(build_router(
             app_state,
@@ -128,6 +129,7 @@ async fn build_multi_store_router(
         );
         let app_state = create_app_state(&store.config).await?;
         spawn_abandoned_order_sweeper(&store.config, &app_state);
+        spawn_catalogue_sync_loop(&store.config, &app_state);
         spawn_subscription_billing_loop(&store.config, &app_state);
         let router = build_router(
             app_state,
@@ -259,6 +261,7 @@ async fn run_tls_server(config: Config) -> Result<()> {
     // Initialize application state
     let app_state = create_app_state(&config).await?;
     spawn_abandoned_order_sweeper(&config, &app_state);
+    spawn_catalogue_sync_loop(&config, &app_state);
     spawn_subscription_billing_loop(&config, &app_state);
 
     // Build main API router (HTTPS)
@@ -927,6 +930,7 @@ async fn create_app_state(config: &Config) -> Result<AppState> {
     {
         app_state.storefront_url = url.trim_end_matches('/').to_string();
     }
+    app_state.catalogue_sync = init_catalogue(config, &app_state.db).await?;
     Ok(app_state)
 }
 
@@ -1042,6 +1046,51 @@ fn build_cors_layer(config: &CorsConfig) -> CorsLayer {
 /// Spawn the abandoned-order sweeper when configured
 /// (`[orders] auto_cancel_pending_minutes`). First sweep ~60s after startup,
 /// then every 300s. Silent when disabled.
+/// Catalogue sync setup: change logging when this store publishes its catalogue
+/// (switched off again when the setting is removed), and the sync from
+/// `[catalogue] source_url` when set
+async fn init_catalogue(
+    config: &Config,
+    db: &Database,
+) -> Result<Option<Arc<rcommerce_core::catalogue::CatalogueSync>>> {
+    rcommerce_core::catalogue::set_publishing(db.pool(), config.catalogue.publish_changes).await?;
+    let Some(url) = &config.catalogue.source_url else {
+        return Ok(None);
+    };
+    let source_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect_lazy(url)
+        .map_err(|e| rcommerce_core::Error::Config(format!("catalogue.source_url: {}", e)))?;
+    let source = Arc::new(rcommerce_core::catalogue::PgCatalogueSource::new(
+        source_pool,
+    ));
+    info!("Catalogue sync enabled");
+    Ok(Some(Arc::new(
+        rcommerce_core::catalogue::CatalogueSync::new(source, db.pool().clone()),
+    )))
+}
+
+/// Periodic catalogue sync (`[catalogue] sync_interval_seconds`, 0 = off)
+fn spawn_catalogue_sync_loop(config: &Config, app_state: &AppState) {
+    let interval = config.catalogue.sync_interval_seconds;
+    let Some(sync) = app_state.catalogue_sync.clone().filter(|_| interval > 0) else {
+        return;
+    };
+    tokio::spawn(async move {
+        loop {
+            match sync.run(false).await {
+                Ok(report) if report.products_copied + report.products_deactivated > 0 => info!(
+                    "catalogue sync: {} product(s) copied, {} deactivated",
+                    report.products_copied, report.products_deactivated
+                ),
+                Ok(_) => {}
+                Err(e) => warn!("catalogue sync failed: {}", e),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+        }
+    });
+}
+
 fn spawn_abandoned_order_sweeper(config: &Config, app_state: &AppState) {
     let Some(minutes) = config.orders.auto_cancel_pending_minutes else {
         return;
@@ -1388,6 +1437,7 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         .merge(crate::routes::coupon_router())
         .merge(crate::routes::subscription_admin_router())
         .merge(crate::routes::dunning_admin_router())
+        .merge(crate::routes::catalogue_admin_router())
         .route_layer(middleware::from_fn_with_state(app_state, admin_middleware));
 
     Router::new()

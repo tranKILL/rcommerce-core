@@ -157,6 +157,8 @@ pub struct AppState {
     /// Base URL of the storefront, for links in e-mails (password reset,
     /// e-mail verification)
     pub storefront_url: String,
+    /// Catalogue sync from `[catalogue] source_url` (None when unconfigured)
+    pub catalogue_sync: Option<Arc<rcommerce_core::catalogue::CatalogueSync>>,
 }
 
 impl AppState {
@@ -279,6 +281,7 @@ impl AppState {
             catalog_search: None,
             store_slug: "default".to_string(),
             storefront_url: "http://localhost:3000".to_string(),
+            catalogue_sync: None,
         }
     }
 }
