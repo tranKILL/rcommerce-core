@@ -6,17 +6,18 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::middleware::JwtAuth;
+use crate::middleware::{staff_access::staff_can, JwtAuth};
 use crate::state::AppState;
 use rcommerce_core::{models::CreateAddressRequest, services::PaginationParams, Error};
+use rcommerce_core::{Action, Resource};
 
 /// List customers (admin only)
 pub async fn list_customers(
     State(state): State<AppState>,
     Extension(auth): Extension<JwtAuth>,
 ) -> Result<Json<serde_json::Value>, Error> {
-    // Check admin permission
-    if !auth.is_admin() {
+    // Admins and staff with customers:read
+    if !staff_can(&state, &auth, Resource::Customers, Action::Read).await {
         return Err(Error::unauthorized("Admin access required"));
     }
 
@@ -62,8 +63,9 @@ pub async fn get_customer(
     Path(id): Path<Uuid>,
     Extension(auth): Extension<JwtAuth>,
 ) -> Result<Json<serde_json::Value>, Error> {
-    // Users can only access their own profile unless admin
-    if auth.customer_id != id && !auth.is_admin() {
+    // Users can only access their own profile; admins and customers:read staff any
+    if auth.customer_id != id && !staff_can(&state, &auth, Resource::Customers, Action::Read).await
+    {
         return Err(Error::unauthorized("Access denied"));
     }
 

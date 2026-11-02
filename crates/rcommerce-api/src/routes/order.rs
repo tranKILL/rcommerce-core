@@ -13,9 +13,10 @@ use rcommerce_core::Error;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::middleware::JwtAuth;
+use crate::middleware::{staff_access::staff_can, JwtAuth};
 use crate::state::AppState;
 use axum::Extension;
+use rcommerce_core::{Action, Resource};
 
 /// Create order request from API
 #[derive(Debug, Deserialize)]
@@ -140,12 +141,14 @@ pub struct OrderItemResponse {
 
 const ORDER_COLUMNS: &str = "id, order_number, customer_id, customer_email, currency::text AS currency_text, order_type, subtotal, tax_total, shipping_total, discount_total, total, status, payment_status, fulfillment_status, shipping_address_id, billing_address_id, payment_method, shipping_method, notes, tags, draft, subscription_id, billing_cycle, coupon_code, coupon_id, ip_address, user_agent, metadata, shipping_address, billing_address, created_at, updated_at, completed_at, cancelled_at";
 
-/// List orders for the authenticated customer (or all orders for admin)
+/// List orders for the authenticated customer (all orders for admins and
+/// staff with `orders:read`)
 pub async fn list_orders(
     State(state): State<AppState>,
     Extension(auth): Extension<JwtAuth>,
 ) -> Json<serde_json::Value> {
-    let query = if auth.is_admin() {
+    let all = staff_can(&state, &auth, Resource::Orders, Action::Read).await;
+    let query = if all {
         format!(
             "SELECT {} FROM orders ORDER BY created_at DESC LIMIT 50",
             ORDER_COLUMNS
@@ -157,7 +160,7 @@ pub async fn list_orders(
         )
     };
 
-    let result = if auth.is_admin() {
+    let result = if all {
         sqlx::query_as::<_, rcommerce_core::models::Order>(&query)
             .fetch_all(state.db.pool())
             .await
@@ -250,8 +253,10 @@ pub async fn get_order(
         }
     };
 
-    // Customers can only access their own orders unless admin
-    if order.customer_id != Some(auth.customer_id) && !auth.is_admin() {
+    // Customers can only access their own orders; admins and orders:read staff any
+    if order.customer_id != Some(auth.customer_id)
+        && !staff_can(&state, &auth, Resource::Orders, Action::Read).await
+    {
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Access denied"})),
@@ -368,7 +373,10 @@ pub async fn create_order(
     Extension(auth): Extension<JwtAuth>,
     Json(request): Json<CreateOrderRequest>,
 ) -> Result<(StatusCode, Json<OrderResponse>), (StatusCode, Json<serde_json::Value>)> {
-    let customer_id = resolve_order_customer(&auth, request.customer_id);
+    let for_others = auth.is_admin()
+        || (request.customer_id.is_some_and(|id| id != auth.customer_id)
+            && staff_can(&state, &auth, Resource::Orders, Action::Write).await);
+    let customer_id = resolve_order_customer(&auth, request.customer_id, for_others);
     let currency = state
         .default_currency
         .parse::<rcommerce_core::models::Currency>()
@@ -740,8 +748,14 @@ pub async fn create_order(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
-fn resolve_order_customer(auth: &JwtAuth, requested_customer_id: Option<Uuid>) -> Option<Uuid> {
-    if auth.is_admin() {
+/// The customer an order is created for: the caller, unless it may create
+/// orders for others (global admins, staff with `orders:write`)
+fn resolve_order_customer(
+    auth: &JwtAuth,
+    requested_customer_id: Option<Uuid>,
+    for_others: bool,
+) -> Option<Uuid> {
+    if for_others {
         requested_customer_id
     } else {
         Some(auth.customer_id)
@@ -775,7 +789,9 @@ async fn get_invoice(
     .ok_or_else(|| (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Order not found"}))))?;
 
     // Check access
-    if order.customer_id != Some(auth.customer_id) && !auth.is_admin() {
+    if order.customer_id != Some(auth.customer_id)
+        && !staff_can(&state, &auth, Resource::Orders, Action::Read).await
+    {
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Access denied"})),
@@ -842,7 +858,9 @@ pub async fn cancel_order(
             .await?
             .ok_or_else(|| Error::not_found("Order not found"))?;
 
-    if customer_id != Some(auth.customer_id) && !auth.is_admin() {
+    if customer_id != Some(auth.customer_id)
+        && !staff_can(&state, &auth, Resource::Orders, Action::Write).await
+    {
         return Err(Error::forbidden("Access denied"));
     }
 
@@ -885,7 +903,7 @@ pub async fn refund_order(
     Path(id): Path<Uuid>,
     Json(request): Json<RefundOrderRequest>,
 ) -> Result<Json<OrderResponse>, Error> {
-    if !auth.is_admin() {
+    if !staff_can(&state, &auth, Resource::Payments, Action::Write).await {
         return Err(Error::forbidden("Admin access required"));
     }
 
@@ -927,7 +945,7 @@ pub async fn create_fulfillment(
     Path(id): Path<Uuid>,
     Json(request): Json<CreateFulfillmentRequest>,
 ) -> Result<(StatusCode, Json<OrderResponse>), Error> {
-    if !auth.is_admin() {
+    if !staff_can(&state, &auth, Resource::Orders, Action::Write).await {
         return Err(Error::forbidden("Admin access required"));
     }
 
@@ -1103,7 +1121,7 @@ pub async fn update_order_status(
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateOrderStatusRequest>,
 ) -> Result<Json<OrderResponse>, Error> {
-    if !auth.is_admin() {
+    if !staff_can(&state, &auth, Resource::Orders, Action::Write).await {
         return Err(Error::forbidden("Admin access required"));
     }
 
@@ -1328,10 +1346,13 @@ mod tests {
         for permissions in [vec!["read"], vec!["read", "write"]] {
             let auth = auth(&permissions);
             assert_eq!(
-                resolve_order_customer(&auth, Some(Uuid::new_v4())),
+                resolve_order_customer(&auth, Some(Uuid::new_v4()), false),
                 Some(auth.customer_id)
             );
-            assert_eq!(resolve_order_customer(&auth, None), Some(auth.customer_id));
+            assert_eq!(
+                resolve_order_customer(&auth, None, false),
+                Some(auth.customer_id)
+            );
         }
     }
 
@@ -1340,10 +1361,10 @@ mod tests {
         let auth = auth(&["read", "write", "admin"]);
         let customer_id = Uuid::new_v4();
         assert_eq!(
-            resolve_order_customer(&auth, Some(customer_id)),
+            resolve_order_customer(&auth, Some(customer_id), true),
             Some(customer_id)
         );
-        assert_eq!(resolve_order_customer(&auth, None), None);
+        assert_eq!(resolve_order_customer(&auth, None, true), None);
     }
 
     #[test]
