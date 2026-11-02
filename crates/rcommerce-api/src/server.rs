@@ -162,12 +162,9 @@ async fn build_multi_store_router(
     }
     // Outermost: the shared rate limiter runs before any store's router, so the
     // dispatcher resolves the client IP itself (each store's router does it again)
-    let resolver =
-        ClientIpResolver::from_config(&config.rate_limiting).map_err(rcommerce_core::Error::Config)?;
-    app = app.layer(middleware::from_fn_with_state(
-        resolver,
-        resolve_client_ip,
-    ));
+    let resolver = ClientIpResolver::from_config(&config.rate_limiting)
+        .map_err(rcommerce_core::Error::Config)?;
+    app = app.layer(middleware::from_fn_with_state(resolver, resolve_client_ip));
     Ok(app)
 }
 
