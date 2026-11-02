@@ -21,6 +21,7 @@ R Commerce provides a complete API-first ecommerce platform with:
 | [04-coupon-api.md](04-coupon-api.md) | Coupon and discount API |
 | [05-store-locations-api.md](05-store-locations-api.md) | Branches and pickup points: opening hours, open now, pickup time |
 | [statistics.md](statistics.md) | Statistics and analytics API |
+| [staff-roles.md](staff-roles.md) | Staff roles: partial admin access for back-office accounts |
 
 ## API Endpoints
 

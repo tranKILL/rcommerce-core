@@ -229,6 +229,11 @@ impl Migrator {
                 "catalogue_sync",
                 include_str!("../../migrations/024_catalogue_sync.sql"),
             ),
+            (
+                27,
+                "staff_roles",
+                include_str!("../../migrations/027_staff_roles.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {
