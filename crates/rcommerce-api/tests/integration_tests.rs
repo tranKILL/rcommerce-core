@@ -2128,45 +2128,6 @@ async fn test_confirm_checkout_cart_mismatch_returns_404() {
     app.cleanup().await.ok();
 }
 
-/// Helper macro for running tests with reporting
-#[macro_export]
-macro_rules! test_with_report {
-    ($name:expr, $body:expr) => {{
-        let mut reporter = TestReporter::new($name);
-        let result = $body(&mut reporter).await;
-        reporter.finalize(result.is_ok());
-        result.unwrap();
-    }};
-}
-
-/// Generate index of all test reports
-#[tokio::test]
-async fn z_generate_report_index() {
-    // This test runs last and generates an index of all reports
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Reports are saved immediately by each test (relative to workspace root)
-    let output_dir = "./test-reports/detailed";
-
-    // Count existing reports
-    let mut count = 0;
-    if let Ok(entries) = std::fs::read_dir(output_dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                if name.ends_with("_report.json") {
-                    count += 1;
-                }
-            }
-        }
-    }
-
-    println!(
-        "📊 Generated {} detailed test reports in: {}/",
-        count, output_dir
-    );
-    println!("📊 View index: open {}/index.html", output_dir);
-}
-
 /// Store locations (branches, opening hours, pickup time)
 #[tokio::test]
 #[ignore = "Requires PostgreSQL database with proper permissions"]
