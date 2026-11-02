@@ -70,6 +70,18 @@ pub struct Config {
     /// Catalogue search backend
     #[serde(default)]
     pub search: SearchConfig,
+
+    /// Several stores in one process: `[stores.<slug>]` tables merged onto
+    /// this configuration (see `stores::Config::expand_stores`). Empty for a
+    /// single store.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub stores: std::collections::BTreeMap<String, toml::Value>,
+
+    /// Set on a store's merged configuration; None for a single store. A
+    /// store never falls back to process environment variables for secrets
+    /// or URLs, so one store cannot use another's credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store: Option<crate::stores::StoreDefinition>,
 }
 
 /// Catalogue search: PostgreSQL full-text search (default) or Elasticsearch
@@ -303,6 +315,12 @@ pub struct ServerConfig {
 
     #[serde(default)]
     pub limits: LimitsConfig,
+
+    /// With several stores: pick the store from `X-Forwarded-Host` (set by a
+    /// trusted reverse proxy) instead of `Host`. Leave off when clients reach
+    /// the server directly, since clients control that header.
+    #[serde(default)]
+    pub trust_forwarded_host: bool,
 }
 
 impl Default for ServerConfig {
@@ -314,6 +332,7 @@ impl Default for ServerConfig {
             graceful_shutdown_timeout_secs: default_graceful_shutdown(),
             cors: CorsConfig::default(),
             limits: LimitsConfig::default(),
+            trust_forwarded_host: false,
         }
     }
 }
@@ -621,6 +640,12 @@ pub struct JwtConfig {
 
     #[serde(default = "default_jwt_refresh_expiry")]
     pub refresh_expiry_hours: u64,
+
+    /// `aud` claim of issued tokens, required on verification. Each store
+    /// gets its own ("rcommerce-api:<store>"), so a token from one store is
+    /// refused by another.
+    #[serde(default = "default_jwt_audience")]
+    pub audience: String,
 }
 
 impl Default for JwtConfig {
@@ -629,8 +654,13 @@ impl Default for JwtConfig {
             secret: default_jwt_secret(),
             expiry_hours: default_jwt_expiry(),
             refresh_expiry_hours: default_jwt_refresh_expiry(),
+            audience: default_jwt_audience(),
         }
     }
+}
+
+fn default_jwt_audience() -> String {
+    "rcommerce-api".to_string()
 }
 
 fn default_jwt_secret() -> String {
