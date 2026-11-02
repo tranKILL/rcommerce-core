@@ -181,7 +181,7 @@ mod tests {
         assert!(body["error"].as_str().unwrap().contains("Card declined"));
         let (status, body) = error_json(Error::not_found("Order not found"));
         assert_eq!(status, 404);
-        assert!(body["error"].as_str().unwrap().contains("Card declined"));
+        assert!(body["error"].as_str().unwrap().contains("Order not found"));
     }
 
     #[test]
