@@ -2627,6 +2627,110 @@ async fn test_concurrent_cancellations_cancel_an_order_once() {
     app.cleanup().await.ok();
 }
 
+/// Staff roles also open other accounts' orders and profiles on the customer
+/// routes, as far as their permissions go
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_staff_roles_reach_other_accounts_orders_and_profiles() {
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (owner, _) = app.create_test_customer().await.unwrap();
+    let (staff, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&staff.email, &password).await.unwrap();
+    let order_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO orders (id, order_number, customer_id, customer_email, status, payment_status, fulfillment_status, subtotal, total) VALUES ($1, $2, $3, $4, 'confirmed', 'paid', 'pending', 60, 60)",
+    )
+    .bind(order_id)
+    .bind(format!("TEST-STAFF-{order_id}"))
+    .bind(owner.id)
+    .bind(&owner.email)
+    .execute(&app.db_pool)
+    .await
+    .unwrap();
+    let product_id = app
+        .create_test_product("Staff Test Wheel", Decimal::from(30), 10)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO order_items (id, order_id, product_id, title, quantity, price, total) VALUES ($1, $2, $3, 'Test wheel', 2, 30, 60)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(order_id)
+    .bind(product_id)
+    .execute(&app.db_pool)
+    .await
+    .unwrap();
+    let order = format!("/orders/{order_id}");
+    let profile = format!("/customers/{}", owner.id);
+    let fulfill = format!("{order}/fulfillments");
+    let parcel =
+        || Some(serde_json::json!({"carrier": "UPS", "tracking_number": "1Z999AA99999999999"}));
+
+    // Without a role, another account's order and profile stay closed
+    assert_eq!(
+        admin_api_call(&app, &token, Method::GET, &order, None)
+            .await
+            .0,
+        403
+    );
+    assert_eq!(
+        admin_api_call(&app, &token, Method::GET, &profile, None)
+            .await
+            .0,
+        401
+    );
+
+    let role =
+        serde_json::json!({"name": "Support", "permissions": ["orders:read", "customers:read"]});
+    let (status, body) =
+        admin_api_call(&app, &admin, Method::POST, "/admin/staff/roles", Some(role)).await;
+    assert_eq!(status, 201, "{body}");
+    let role_id = body["role"]["id"].as_str().unwrap().to_string();
+    let assign = serde_json::json!({"role_ids": [role_id]});
+    let roles_path = format!("/admin/staff/members/{}/roles", staff.id);
+    assert_eq!(
+        admin_api_call(&app, &admin, Method::PUT, &roles_path, Some(assign))
+            .await
+            .0,
+        200
+    );
+
+    // orders:read and customers:read open them for reading
+    let (status, body) = admin_api_call(&app, &token, Method::GET, &order, None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["id"], order_id.to_string());
+    let (status, body) = admin_api_call(&app, &token, Method::GET, &profile, None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        admin_api_call(&app, &token, Method::GET, "/customers", None)
+            .await
+            .0,
+        200
+    );
+    assert_eq!(
+        admin_api_call(&app, &token, Method::POST, &fulfill, parcel())
+            .await
+            .0,
+        403
+    );
+
+    // orders:write lets it fulfil the order
+    let widen = serde_json::json!({"permissions": ["orders:write", "customers:read"]});
+    let role_path = format!("/admin/staff/roles/{role_id}");
+    assert_eq!(
+        admin_api_call(&app, &admin, Method::PUT, &role_path, Some(widen))
+            .await
+            .0,
+        200
+    );
+    let (status, body) = admin_api_call(&app, &token, Method::POST, &fulfill, parcel()).await;
+    assert_eq!(status, 201, "{body}");
+
+    app.cleanup().await.ok();
+}
+
 /// Helper macro for running tests with reporting
 #[macro_export]
 macro_rules! test_with_report {

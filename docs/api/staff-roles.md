@@ -31,6 +31,24 @@ Routes outside this table stay reserved to global admins: `/admin/api-keys` and
 the staff management routes below. A new admin route is closed to staff until
 it is added to the table in `crates/rcommerce-api/src/middleware/staff_access.rs`.
 
+## Other accounts' data on customer routes
+
+Some customer routes let admins reach any account's data. A staff role opens
+them as follows (an account's own data needs no role):
+
+| Route | Needs |
+|---|---|
+| `GET /orders` (all orders instead of the caller's), `GET /orders/:id`, `GET /orders/:id/invoice` | `orders:read` |
+| `POST /orders` for another customer, `POST /orders/:id/cancel`, `POST /orders/:id/fulfillments`, `PUT /orders/:id/status` | `orders:write` |
+| `POST /orders/:id/refund` | `payments:write` |
+| `GET /customers`, `GET /customers/:id` | `customers:read` |
+
+Global admins pass without a role lookup. For anyone else, the lookup (one
+indexed query) is made only when the data is not the caller's own, except on
+`GET /orders`, which checks on each call whether to list all orders.
+Payment, subscription and dunning routes still reserve other accounts' data to
+global admins.
+
 ## Managing roles
 
 These routes are for global admins only.

@@ -4,9 +4,14 @@
 //! a staff role granting the route's resource: `read` for GET and HEAD, `write`
 //! otherwise. A route outside [`ADMIN_AREAS`] stays admin-only (API keys, staff
 //! management), so a new admin route is closed to staff until it is listed here.
+//!
+//! Customer routes that let admins reach other accounts' data (any order, any
+//! customer) ask [`staff_can`] instead.
 
 use axum::http::Method;
-use rcommerce_core::{Action, Resource};
+use rcommerce_core::{services::ScopeChecker, Action, Resource, StaffService};
+
+use crate::{middleware::JwtAuth, state::AppState};
 
 /// Admin route prefixes (inside `/api/v1`) and the resource that guards them
 const ADMIN_AREAS: &[(&str, Resource)] = &[
@@ -34,6 +39,31 @@ pub fn staff_permission(method: &Method, path: &str) -> Option<(Resource, Action
         || (*method == Method::POST && READ_ONLY_POSTS.contains(&path));
     let action = if reads { Action::Read } else { Action::Write };
     Some((*resource, action))
+}
+
+/// Whether the caller may act on other accounts' data for `resource`: global
+/// admins always, anyone else when one of its staff roles grants `action`.
+/// Costs one query for non-admins, so ask only on the branch that needs it
+/// (after an ownership check fails). A failed lookup is logged and denies.
+pub async fn staff_can(
+    state: &AppState,
+    auth: &JwtAuth,
+    resource: Resource,
+    action: Action,
+) -> bool {
+    if auth.is_admin() {
+        return true;
+    }
+    match StaffService::new(state.db.clone())
+        .permissions_for(auth.customer_id)
+        .await
+    {
+        Ok(granted) => ScopeChecker::new(&granted).is_ok_and(|c| c.can(resource, action)),
+        Err(e) => {
+            tracing::error!("Failed to load staff permissions: {}", e);
+            false
+        }
+    }
 }
 
 /// Whether `path` is `prefix` or below it (`/products` covers `/products/1`,
