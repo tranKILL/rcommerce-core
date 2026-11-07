@@ -2323,6 +2323,130 @@ async fn test_store_locations() {
     app.cleanup().await.ok();
 }
 
+/// Stock status per branch: saleable = available - reserved, `low` at or
+/// below the reorder point, `out` without stock, untracked products always in
+/// stock; private branches are never listed
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_stock_status_per_branch() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let tracked = app
+        .create_test_product("Stock Test Cement", Decimal::from(9), 0)
+        .await
+        .unwrap();
+    let untracked = app
+        .create_test_product("Stock Test Service", Decimal::from(5), 0)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE products SET inventory_management = (id = $1) WHERE id IN ($1, $2)")
+        .bind(tracked)
+        .bind(untracked)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    // Three public branches (in display order) and a private warehouse
+    let mut branches = Vec::new();
+    for (i, (slug, public)) in [
+        ("alpha", true),
+        ("beta", true),
+        ("gamma", true),
+        ("depot", false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO inventory_locations (name, code, slug, is_public, sort_order) VALUES ($1, $2, $1, $3, $4) RETURNING id",
+        )
+        .bind(slug)
+        .bind(format!("STK-{}", slug.to_uppercase()))
+        .bind(public)
+        .bind(i as i32)
+        .fetch_one(&app.db_pool)
+        .await
+        .unwrap();
+        branches.push(id);
+    }
+    // alpha: 50 - 5 reserved, low at 10 -> in stock; beta: 8, low at 10 -> low;
+    // gamma: no row -> out; depot: plenty, but private
+    for (location, available, reserved, reorder) in [
+        (branches[0], 50, 5, 10),
+        (branches[1], 8, 0, 10),
+        (branches[3], 500, 0, 10),
+    ] {
+        sqlx::query(
+            "INSERT INTO inventory_levels (product_id, location_id, available_quantity, reserved_quantity, reorder_point) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(tracked)
+        .bind(location)
+        .bind(available)
+        .bind(reserved)
+        .bind(reorder)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    }
+    let get = |path: String| {
+        let (client, url) = (
+            app.http_client.clone(),
+            format!("{}/api/v1{}", app.base_url(), path),
+        );
+        async move {
+            let response = client.get(url).send().await.unwrap();
+            let status = response.status().as_u16();
+            (
+                status,
+                response
+                    .json::<serde_json::Value>()
+                    .await
+                    .unwrap_or_default(),
+            )
+        }
+    };
+
+    let (status, body) = get(format!("/products/{tracked}/availability")).await;
+    assert_eq!(status, 200, "{body}");
+    let seen: Vec<(String, String)> = body["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| {
+            (
+                b["slug"].as_str().unwrap().to_string(),
+                b["status"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let expected = [("alpha", "in_stock"), ("beta", "low"), ("gamma", "out")];
+    assert_eq!(seen, expected.map(|(s, t)| (s.to_string(), t.to_string())));
+    assert_eq!(
+        get(format!("/products/{}/availability", Uuid::new_v4()))
+            .await
+            .0,
+        404
+    );
+
+    // One branch, a page of products, in the order asked
+    let (status, body) = get(format!(
+        "/locations/beta/availability?product_ids={untracked},{tracked}"
+    ))
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["products"][0]["product_id"], untracked.to_string());
+    assert_eq!(body["products"][0]["status"], "in_stock");
+    assert_eq!(body["products"][1]["status"], "low");
+    let depot = format!("/locations/depot/availability?product_ids={tracked}");
+    assert_eq!(get(depot).await.0, 404);
+    assert_eq!(
+        get("/locations/beta/availability?product_ids=nope".to_string())
+            .await
+            .0,
+        400
+    );
+
+    app.cleanup().await.ok();
+}
+
 /// Helper macro for running tests with reporting
 #[macro_export]
 macro_rules! test_with_report {

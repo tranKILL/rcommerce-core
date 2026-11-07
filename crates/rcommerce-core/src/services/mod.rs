@@ -14,6 +14,7 @@ pub mod order_service;
 pub mod product_service;
 pub mod review_service;
 pub mod statistics_service;
+pub mod stock_availability;
 pub mod subscription_service;
 
 pub use api_key_scopes::{presets as scope_presets, Action, Resource, Scope, ScopeChecker};
