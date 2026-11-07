@@ -156,3 +156,37 @@ The list replaces all weekly hours. A weekday that isn't listed is closed. Range
 ```
 
 Give both times, or neither for a day closed all day. Several rows on the same date give several ranges.
+
+## Stock per branch
+
+A product's stock at a public location is a status, from its `inventory_levels` rows there (the product and its variants):
+
+| Status | When |
+|---|---|
+| `in_stock` | available minus reserved is above the location's reorder point for the product |
+| `low` | at or below the reorder point, and above 0 |
+| `out` | 0 or below, or no stock row at that location |
+
+Products that do not track inventory (`inventory_management = false`) are always `in_stock`. Quantities are not exposed.
+
+### `GET /api/v1/products/:id/availability`
+
+The product's status at every public, active location, in display order. `404` for an unknown product.
+
+```json
+{
+  "product_id": "…",
+  "branches": [
+    { "location_id": "…", "slug": "alpha", "name": "Alpha", "status": "in_stock" },
+    { "location_id": "…", "slug": "beta", "name": "Beta", "status": "low" }
+  ]
+}
+```
+
+### `GET /api/v1/locations/:id_or_slug/availability?product_ids=<id>,<id>`
+
+The status of up to 100 products at one location, in one query: a listing page asks once for all its products. Products come back in the order asked; unknown ids are left out. `404` for an unknown or private location, `400` for an invalid or empty id list.
+
+```json
+{ "location": "beta", "products": [ { "product_id": "…", "status": "low" } ] }
+```

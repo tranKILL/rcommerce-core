@@ -15,6 +15,7 @@ use rcommerce_core::models::location::{
 };
 use rcommerce_core::repository::LocationRepository;
 use rcommerce_core::services::location_service::{distance_km, OpeningSchedule, OpeningStatus};
+use rcommerce_core::services::stock_availability;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -170,6 +171,70 @@ pub async fn get_location(
     Ok(Json(list.remove(0)))
 }
 
+/// Most products one availability request may ask about (a listing page)
+const MAX_AVAILABILITY_PRODUCTS: usize = 100;
+
+/// Query of `GET /locations/:id_or_slug/availability`
+#[derive(Debug, Deserialize)]
+pub struct AvailabilityQuery {
+    /// Comma-separated product ids
+    pub product_ids: String,
+}
+
+/// A product's stock status at every public location
+///
+/// GET /api/v1/products/:id/availability
+pub async fn product_availability(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, rcommerce_core::Error> {
+    let branches = stock_availability::product_stock_by_branch(state.db.pool(), id)
+        .await?
+        .ok_or_else(|| rcommerce_core::Error::not_found("Product not found"))?;
+    Ok(Json(
+        serde_json::json!({ "product_id": id, "branches": branches }),
+    ))
+}
+
+/// The stock status of a page of products at one public location, in one query
+///
+/// GET /api/v1/locations/:id_or_slug/availability?product_ids=<id>,<id>
+pub async fn location_availability(
+    State(state): State<AppState>,
+    Path(id_or_slug): Path<String>,
+    Query(query): Query<AvailabilityQuery>,
+) -> Result<Json<serde_json::Value>, rcommerce_core::Error> {
+    let ids = parse_product_ids(&query.product_ids)?;
+    let products =
+        stock_availability::location_stock_for_products(state.db.pool(), &id_or_slug, &ids)
+            .await?
+            .ok_or_else(|| rcommerce_core::Error::not_found("Location not found"))?;
+    Ok(Json(
+        serde_json::json!({ "location": id_or_slug, "products": products }),
+    ))
+}
+
+/// Comma-separated product ids: 1 to 100 valid UUIDs
+fn parse_product_ids(list: &str) -> Result<Vec<Uuid>, rcommerce_core::Error> {
+    let ids = list
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            Uuid::parse_str(id).map_err(|_| {
+                rcommerce_core::Error::validation(format!("Invalid product id: {}", id))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if ids.is_empty() || ids.len() > MAX_AVAILABILITY_PRODUCTS {
+        return Err(rcommerce_core::Error::validation(format!(
+            "product_ids must list 1 to {} products",
+            MAX_AVAILABILITY_PRODUCTS
+        )));
+    }
+    Ok(ids)
+}
+
 fn require_admin(auth: &JwtAuth) -> Result<(), rcommerce_core::Error> {
     if auth.is_admin() {
         Ok(())
@@ -315,6 +380,11 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/locations", get(list_locations))
         .route("/locations/:id_or_slug", get(get_location))
+        .route(
+            "/locations/:id_or_slug/availability",
+            get(location_availability),
+        )
+        .route("/products/:id/availability", get(product_availability))
 }
 
 /// Location management routes (mounted behind the admin middleware)
@@ -340,6 +410,16 @@ pub fn admin_router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn availability_takes_one_to_a_hundred_product_ids() {
+        let id = Uuid::new_v4();
+        assert_eq!(parse_product_ids(&format!(" {id} ,")).unwrap(), vec![id]);
+        assert!(parse_product_ids("").is_err());
+        assert!(parse_product_ids("not-a-uuid").is_err());
+        let many = vec![id.to_string(); 101].join(",");
+        assert!(parse_product_ids(&many).is_err());
+    }
 
     #[test]
     fn near_parameter_accepts_coordinates_only() {
