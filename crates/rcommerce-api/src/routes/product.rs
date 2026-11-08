@@ -405,7 +405,9 @@ pub async fn get_product(
         .map(|t| serde_json::json!({"locale": t.locale, "slug": t.slug}))
         .collect();
 
-    Ok(Json(serde_json::json!({
+    let is_admin = auth.as_ref().is_some_and(|a| a.is_admin());
+    let cost_price = p.cost_price;
+    let mut body = serde_json::json!({
     "product": {
         "id": p.id,
         "title": t.map_or(&p.title, |t| &t.title),
@@ -417,7 +419,6 @@ pub async fn get_product(
         "gtin": p.gtin,
         "price": p.price,
         "compare_at_price": p.compare_at_price,
-                "cost_price": p.cost_price,
                 "currency": p.currency,
                 "product_type": format!("{:?}", p.product_type).to_lowercase(),
                 "inventory_quantity": inventory_quantity,
@@ -458,7 +459,12 @@ pub async fn get_product(
                     })).collect::<Vec<_>>()
                 })).collect::<Vec<_>>()
             }
-        })))
+        });
+    // What the store paid is internal: only back-office users see it
+    if is_admin {
+        body["product"]["cost_price"] = serde_json::json!(cost_price);
+    }
+    Ok(Json(body))
 }
 
 /// Derive a short purchase-option label from a pack product's title.
