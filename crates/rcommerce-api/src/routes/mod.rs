@@ -10,6 +10,7 @@ pub mod customer;
 pub mod downloads;
 pub mod dunning;
 pub mod email_helpers;
+pub mod inventory;
 pub mod invoice;
 pub mod location;
 pub mod newsletter;
@@ -72,6 +73,8 @@ pub use downloads::{
 };
 pub use dunning::{admin_router as dunning_admin_router, router as dunning_router};
 pub use location::{admin_router as location_admin_router, router as location_router};
+
+pub use inventory::admin_router as inventory_admin_router;
 pub use newsletter::router as newsletter_router;
 pub use order::router as order_router;
 pub use payment::router as payment_router;

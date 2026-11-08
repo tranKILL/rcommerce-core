@@ -1664,6 +1664,8 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         // Outgoing webhook management and download links for order items
         .merge(crate::routes::webhook_router())
         .merge(crate::routes::downloads_admin_router())
+
+        .merge(crate::routes::inventory_admin_router())
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             admin_middleware,
