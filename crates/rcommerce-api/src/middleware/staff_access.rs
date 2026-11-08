@@ -23,6 +23,7 @@ const ADMIN_AREAS: &[(&str, Resource)] = &[
     ("/coupons", Resource::Coupons),
     ("/admin/subscriptions", Resource::Payments),
     ("/admin/dunning", Resource::Payments),
+    ("/admin/inventory", Resource::Inventory),
 ];
 
 /// POST routes that only read, so `read` is enough
@@ -97,6 +98,18 @@ mod tests {
         assert_eq!(
             staff_permission(&Method::POST, "/admin/dunning/process"),
             Some((Resource::Payments, Action::Write))
+        );
+    }
+
+    #[test]
+    fn stock_management_needs_the_inventory_permission() {
+        assert_eq!(
+            staff_permission(&Method::GET, "/admin/inventory/levels"),
+            Some((Resource::Inventory, Action::Read))
+        );
+        assert_eq!(
+            staff_permission(&Method::POST, "/admin/inventory/receipts"),
+            Some((Resource::Inventory, Action::Write))
         );
     }
 

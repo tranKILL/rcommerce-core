@@ -26,6 +26,7 @@ A role lists permissions in the API key scope format, `<resource>:<action>`:
 | `/coupons/...` (`POST /coupons/validate` needs only `read`) | `coupons` |
 | `/admin/statistics/...`, `/admin/stats` | `reports` |
 | `/admin/subscriptions/...`, `/admin/dunning/...` | `payments` |
+| `/admin/inventory/...` | `inventory` |
 
 Routes outside this table stay reserved to global admins: `/admin/api-keys` and
 the staff management routes below. A new admin route is closed to staff until
