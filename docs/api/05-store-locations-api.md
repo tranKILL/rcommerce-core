@@ -163,7 +163,7 @@ A product's stock at a public location is a status, from its `inventory_levels` 
 
 | Status | When |
 |---|---|
-| `in_stock` | available minus reserved is above the location's reorder point for the product |
+| `in_stock` | free stock (`available_quantity`, which already excludes stock committed to orders) minus active cart holds is above the location's reorder point for the product |
 | `low` | at or below the reorder point, and above 0 |
 | `out` | 0 or below, or no stock row at that location |
 
