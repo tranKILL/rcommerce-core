@@ -479,7 +479,12 @@ mod tests {
             "rcommerce-api:a"
         );
         assert!(b.verify_access_token(&token).is_err());
-        let refresh = a.generate_refresh_token(id, false).unwrap();
+        let session = super::super::auth_session::SessionToken {
+            session_id: Uuid::new_v4(),
+            token_id: Uuid::new_v4(),
+            expires_at: Utc::now() + Duration::days(1),
+        };
+        let refresh = a.generate_refresh_token(id, &session).unwrap();
         assert!(b.verify_token(&refresh).is_err());
 
         // A single store keeps the historical audience, so existing tokens stay valid
