@@ -57,7 +57,7 @@ use rcommerce_core::repository::{
 use rcommerce_core::services::{
     AuthService, CartService, CouponService, CustomerService, OrderService, ProductService,
 };
-use rcommerce_core::services::{CheckoutConfig, CheckoutService};
+use rcommerce_core::services::{CheckoutConfig, CheckoutService, PickupLocations};
 use rcommerce_core::shipping::ShippingProviderFactory;
 use rcommerce_core::StripeGateway;
 use rcommerce_core::{Config, FileUploadService};
@@ -212,14 +212,17 @@ impl TestApp {
         let checkout_config = CheckoutConfig::default();
         let payment_gateway_arc: Arc<dyn rcommerce_core::PaymentGateway> =
             Arc::new(rcommerce_core::payment::gateways::MockPaymentGateway::new());
-        let checkout_service = Arc::new(CheckoutService::new(
-            cart_service_arc.clone(),
-            tax_service.clone(),
-            order_service_arc.clone(),
-            payment_gateway_arc,
-            shipping_factory.clone(),
-            checkout_config,
-        ));
+        let checkout_service = Arc::new(
+            CheckoutService::new(
+                cart_service_arc.clone(),
+                tax_service.clone(),
+                order_service_arc.clone(),
+                payment_gateway_arc,
+                shipping_factory.clone(),
+                checkout_config,
+            )
+            .with_pickup_locations(PickupLocations::new(db.pool().clone())),
+        );
 
         // Create app state
         let params = AppStateParams::new(
@@ -3481,6 +3484,168 @@ async fn test_cart_merge_adds_quantities_of_the_same_product() {
     assert_eq!(quantity(guest_only), vec![1]);
     // 5 x 10.00 + 2.50
     assert_eq!(merged.cart.subtotal, Decimal::new(5250, 2));
+    app.cleanup().await.ok();
+}
+
+/// A public pickup location open every day, all day; returns its id
+async fn create_pickup_location(app: &TestApp, admin: &str) -> Uuid {
+    let code = format!("PK{}", &Uuid::new_v4().simple().to_string()[..6]);
+    let url = |path: &str| format!("{}/api/v1{}", app.base_url(), path);
+    let response = app
+        .http_client
+        .post(url("/admin/locations"))
+        .bearer_auth(admin)
+        .json(&serde_json::json!({
+            "name": format!("Pickup {code}"), "code": code, "slug": code.to_lowercase(),
+            "is_public": true, "is_pickup_point": true,
+            "timezone": "Europe/Brussels", "country_code": "BE"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 201);
+    let created: serde_json::Value = response.json().await.unwrap();
+    let id: Uuid = created["id"].as_str().unwrap().parse().unwrap();
+    let ranges: Vec<_> = (1..=7)
+        .map(|d| serde_json::json!({"weekday": d, "opens_at": "00:00:00", "closes_at": "23:59:00"}))
+        .collect();
+    let response = app
+        .http_client
+        .put(url(&format!("/admin/locations/{id}/opening-hours")))
+        .bearer_auth(admin)
+        .json(&serde_json::json!({ "ranges": ranges }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 204);
+    id
+}
+
+/// POST a checkout step as a guest; the status and the JSON body
+async fn checkout_step(
+    app: &TestApp,
+    step: &str,
+    body: serde_json::Value,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let response = app
+        .http_client
+        .post(format!("{}/api/v1/checkout/{step}", app.base_url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response.json().await.unwrap_or_default())
+}
+
+/// Collecting at a store location: each public pickup location is a free rate
+/// with its ready time; choosing it reserves the order's stock at that location.
+/// A delivery may name the location it leaves from, which must exist.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_checkout_pickup_at_a_store_location() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    // Stock only at the pickup location, none at the default one
+    let product = app
+        .create_test_product("Pickup only", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 5, None)
+        .await
+        .unwrap();
+    let (cart_id, _) = app.create_guest_cart().await.unwrap();
+    add_guest_item(&app, cart_id, product).await;
+
+    let (status, summary) = checkout_step(
+        &app,
+        "initiate",
+        serde_json::json!({"cart_id": cart_id, "shipping_address": ownership_test_address(), "currency": "USD"}),
+    )
+    .await;
+    assert!(status.is_success(), "{summary}");
+    let rates = summary["available_shipping_rates"].as_array().unwrap();
+    let pickup = rates
+        .iter()
+        .find(|r| r["service_code"] == location.to_string())
+        .unwrap_or_else(|| panic!("no pickup rate for the location: {rates:?}"))
+        .clone();
+    assert_eq!(pickup["provider_id"], "pickup");
+    assert_eq!(
+        pickup["total_cost"]
+            .as_str()
+            .unwrap()
+            .parse::<Decimal>()
+            .unwrap(),
+        Decimal::ZERO
+    );
+    assert!(pickup["delivery_date"].is_string(), "ready time: {pickup}");
+
+    let (status, done) = checkout_step(
+        &app,
+        "complete",
+        serde_json::json!({
+            "cart_id": cart_id, "shipping_address": ownership_test_address(),
+            "payment_method": {"type": "stripe_elements"}, "customer_email": "pickup@example.com",
+            "selected_shipping_rate": pickup, "test": true
+        }),
+    )
+    .await;
+    assert!(status.is_success(), "{done}");
+    let reserved_at: Vec<Uuid> =
+        sqlx::query_scalar("SELECT location_id FROM stock_reservations WHERE product_id = $1")
+            .bind(product)
+            .fetch_all(&app.db_pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        reserved_at,
+        vec![location],
+        "stock reserved at the pickup location"
+    );
+    let order_id: Uuid = done["order"]["id"].as_str().unwrap().parse().unwrap();
+    let pickup_meta: serde_json::Value =
+        sqlx::query_scalar("SELECT metadata->'pickup' FROM orders WHERE id = $1")
+            .bind(order_id)
+            .fetch_one(&app.db_pool)
+            .await
+            .unwrap();
+    assert_eq!(pickup_meta["location_id"], location.to_string());
+    assert!(pickup_meta["ready_at"].is_string(), "{pickup_meta}");
+
+    // A delivery from a location that does not exist is refused
+    let (cart_id, _) = app.create_guest_cart().await.unwrap();
+    add_guest_item(&app, cart_id, product).await;
+    let (status, summary) = checkout_step(
+        &app,
+        "initiate",
+        serde_json::json!({"cart_id": cart_id, "shipping_address": ownership_test_address(), "currency": "USD"}),
+    )
+    .await;
+    assert!(status.is_success(), "{summary}");
+    let carrier = summary["available_shipping_rates"][0].clone();
+    assert_ne!(carrier["provider_id"], "pickup");
+    let (status, refused) = checkout_step(
+        &app,
+        "complete",
+        serde_json::json!({
+            "cart_id": cart_id, "shipping_address": ownership_test_address(),
+            "payment_method": {"type": "stripe_elements"}, "customer_email": "pickup@example.com",
+            "selected_shipping_rate": carrier, "fulfillment_location_id": Uuid::new_v4(), "test": true
+        }),
+    )
+    .await;
+    assert_eq!(status, 400, "{refused}");
+
+    // Unlist the location so later tests see only their own
+    sqlx::query("UPDATE inventory_locations SET is_public = false WHERE id = $1")
+        .bind(location)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
     app.cleanup().await.ok();
 }
 

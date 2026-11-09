@@ -711,6 +711,7 @@ impl SubscriptionService<crate::repository::PostgresSubscriptionRepository> {
                 coupon_code: None,
                 coupon_id: None,
                 test: false,
+                fulfillment_location_id: None,
             })
             .await?;
 

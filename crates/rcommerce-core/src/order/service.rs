@@ -149,12 +149,16 @@ impl OrderService {
             let reservation_id = if item.skip_inventory_reservation {
                 None
             } else {
+                let location_id = match request.fulfillment_location_id {
+                    Some(id) => id,
+                    None => self.get_default_location_id().await?,
+                };
                 let reservation = self
                     .inventory_service
                     .reserve_stock(crate::inventory::StockReservation::new(
                         item.product_id,
                         item.variant_id,
-                        self.get_default_location_id().await?, // Support first active location
+                        location_id,
                         None, // Will be updated after order creation
                         item.quantity,
                         chrono::Utc::now() + chrono::Duration::minutes(30),

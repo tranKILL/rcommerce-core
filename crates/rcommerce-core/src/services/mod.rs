@@ -4,6 +4,7 @@ pub mod auth_session;
 pub mod bundle_service;
 pub(crate) mod cart_mutation;
 pub mod cart_service;
+pub mod checkout_pickup;
 pub mod checkout_service;
 pub mod coupon_service;
 pub mod customer_service;
@@ -27,6 +28,7 @@ pub use auth_service::JwtClaims;
 pub use auth_service::TokenType;
 pub use bundle_service::BundleService;
 pub use cart_service::CartService;
+pub use checkout_pickup::PickupLocations;
 pub use checkout_service::{
     CheckoutConfig, CheckoutResult, CheckoutService, CheckoutSummary, CompleteCheckoutRequest,
     ConfirmCheckoutRequest, InitiateCheckoutRequest, SelectShippingRequest,
