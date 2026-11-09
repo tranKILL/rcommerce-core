@@ -343,8 +343,7 @@ impl CatalogI18nRepository {
         limit: i64,
         offset: i64,
     ) -> Result<SearchPage> {
-        let (Some((prefix, words)), Some(pattern)) =
-            (search_tsqueries(query), search_words(query))
+        let (Some((prefix, words)), Some(pattern)) = (search_tsqueries(query), search_words(query))
         else {
             return Ok(SearchPage::default());
         };
@@ -522,7 +521,7 @@ impl CatalogI18nRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::{search_tsqueries, substring_pattern};
+    use super::{search_tsqueries, search_words};
 
     #[test]
     fn search_tsqueries_builds_prefix_and_word_queries() {
@@ -539,8 +538,11 @@ mod tests {
     #[test]
     fn search_words_are_split_and_escaped() {
         assert_eq!(search_words("boormachine").as_deref(), Some("boormachine"));
-        assert_eq!(search_words(" boor   machine ").as_deref(), Some("boor machine"));
-        assert_eq!(search_words("100%_x").as_deref(), Some("100\%\_x"));
+        assert_eq!(
+            search_words(" boor   machine ").as_deref(),
+            Some("boor machine")
+        );
+        assert_eq!(search_words("100%_x").as_deref(), Some(r"100\%\_x"));
         assert_eq!(search_words("   "), None);
     }
 

@@ -86,7 +86,14 @@ pub async fn list_products(
         None
     };
 
-    let page = product_page(&state, &i18n, &params, locale.as_deref(), category_filter, sort);
+    let page = product_page(
+        &state,
+        &i18n,
+        &params,
+        locale.as_deref(),
+        category_filter,
+        sort,
+    );
     let product_list = match page.await {
         Ok(list) => list,
         Err(e) => {
