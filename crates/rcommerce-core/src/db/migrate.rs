@@ -239,6 +239,11 @@ impl Migrator {
                 "stock_movement_actor",
                 include_str!("../../migrations/028_stock_movement_actor.sql"),
             ),
+            (
+                29,
+                "auth_sessions",
+                include_str!("../../migrations/029_auth_sessions.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {
