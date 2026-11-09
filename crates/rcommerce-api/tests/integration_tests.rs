@@ -2878,7 +2878,8 @@ async fn test_download_and_webhook_routes_are_served_with_their_auth() {
     app.cleanup().await.ok();
 }
 
-/// Stock status per branch: saleable = available - reserved, `low` at or
+/// Stock status per branch: saleable = free stock - active cart holds
+/// (committed stock is already out of `available_quantity`), `low` at or
 /// below the reorder point, `out` without stock, untracked products always in
 /// stock; private branches are never listed
 #[tokio::test]
@@ -2922,11 +2923,13 @@ async fn test_stock_status_per_branch() {
         .unwrap();
         branches.push(id);
     }
-    // alpha: 50 - 5 reserved, low at 10 -> in stock; beta: 8, low at 10 -> low;
-    // gamma: no row -> out; depot: plenty, but private
+    // alpha: 15 free (40 more committed to orders, not counted) - 3 held, plus
+    // an expired hold that no longer counts, low at 10 -> in stock;
+    // beta: 12 free - 4 held = 8, low at 10 -> low; gamma: no row -> out;
+    // depot: plenty, but private
     for (location, available, reserved, reorder) in [
-        (branches[0], 50, 5, 10),
-        (branches[1], 8, 0, 10),
+        (branches[0], 15, 40, 10),
+        (branches[1], 12, 0, 10),
         (branches[3], 500, 0, 10),
     ] {
         sqlx::query(
@@ -2937,6 +2940,22 @@ async fn test_stock_status_per_branch() {
         .bind(available)
         .bind(reserved)
         .bind(reorder)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    }
+    for (location, quantity, minutes) in [
+        (branches[0], 3, 30),
+        (branches[0], 10, -5),
+        (branches[1], 4, 30),
+    ] {
+        sqlx::query(
+            "INSERT INTO stock_reservations (product_id, location_id, quantity, status, expires_at)              VALUES ($1, $2, $3, 'active', NOW() + make_interval(mins => $4))",
+        )
+        .bind(tracked)
+        .bind(location)
+        .bind(quantity)
+        .bind(minutes)
         .execute(&app.db_pool)
         .await
         .unwrap();

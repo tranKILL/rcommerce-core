@@ -1,8 +1,10 @@
 //! Stock per branch for the storefront ("in stock at <branch>", "low stock")
 //!
 //! A product's stock at a public location is its saleable quantity there: the
-//! `inventory_levels` rows of the product and its variants, available minus
-//! reserved. It is reported as a status, not a quantity:
+//! free stock of the product and its variants (`available_quantity` of its
+//! `inventory_levels` rows, which already excludes stock committed to orders)
+//! minus the active, unexpired cart holds (`stock_reservations`). It is
+//! reported as a status, not a quantity:
 //! - `out` at 0 or below (or no stock row at that location),
 //! - `low` at or below the location's reorder point for the product,
 //! - `in_stock` above it.
@@ -90,7 +92,10 @@ pub async fn product_stock_by_branch(
     };
     let rows = sqlx::query_as::<_, StockRow>(
         "SELECT l.id, l.slug, l.name, \
-                COALESCE(SUM(lv.available_quantity - lv.reserved_quantity), 0)::BIGINT AS saleable, \
+                (COALESCE(SUM(lv.available_quantity), 0) - \
+                 COALESCE((SELECT SUM(r.quantity) FROM stock_reservations r \
+                           WHERE r.product_id = $1 AND r.location_id = l.id \
+                             AND r.status::text = 'active' AND r.expires_at > NOW()), 0))::BIGINT AS saleable, \
                 COALESCE(MAX(lv.reorder_point), 0)::BIGINT AS low_at, $2 AS tracked \
          FROM inventory_locations l \
          LEFT JOIN inventory_levels lv ON lv.location_id = l.id AND lv.product_id = $1 \
@@ -133,7 +138,10 @@ pub async fn location_stock_for_products(
     };
     let rows = sqlx::query_as::<_, StockRow>(
         "SELECT p.id, NULL::TEXT AS slug, p.title AS name, \
-                COALESCE(SUM(lv.available_quantity - lv.reserved_quantity), 0)::BIGINT AS saleable, \
+                (COALESCE(SUM(lv.available_quantity), 0) - \
+                 COALESCE((SELECT SUM(r.quantity) FROM stock_reservations r \
+                           WHERE r.product_id = p.id AND r.location_id = $1 \
+                             AND r.status::text = 'active' AND r.expires_at > NOW()), 0))::BIGINT AS saleable, \
                 COALESCE(MAX(lv.reorder_point), 0)::BIGINT AS low_at, \
                 p.inventory_management AS tracked \
          FROM products p \
