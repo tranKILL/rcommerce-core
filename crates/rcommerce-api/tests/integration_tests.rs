@@ -3649,6 +3649,155 @@ async fn test_checkout_pickup_at_a_store_location() {
     app.cleanup().await.ok();
 }
 
+/// Status and JSON body of a GET (or a POST with `body`) as `token`
+async fn call_json(
+    app: &TestApp,
+    token: &str,
+    path: &str,
+    body: Option<serde_json::Value>,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let url = format!("{}/api/v1{path}", app.base_url());
+    let request = match body {
+        Some(body) => app.http_client.post(url).json(&body),
+        None => app.http_client.get(url),
+    };
+    let response = request.bearer_auth(token).send().await.unwrap();
+    let status = response.status();
+    (status, response.json().await.unwrap_or_default())
+}
+
+/// A paid guest order collected at `location`; returns its id
+async fn place_pickup_order(app: &TestApp, location: Uuid, product: Uuid, email: &str) -> String {
+    let (cart_id, _) = app.create_guest_cart().await.unwrap();
+    add_guest_item(app, cart_id, product).await;
+    let (_, summary) = checkout_step(
+        app,
+        "initiate",
+        serde_json::json!({"cart_id": cart_id, "shipping_address": ownership_test_address(), "currency": "USD"}),
+    )
+    .await;
+    let rate = summary["available_shipping_rates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["service_code"] == location.to_string())
+        .unwrap()
+        .clone();
+    let (status, done) = checkout_step(
+        app,
+        "complete",
+        serde_json::json!({
+            "cart_id": cart_id, "shipping_address": ownership_test_address(),
+            "payment_method": {"type": "stripe_elements"}, "customer_email": email,
+            "selected_shipping_rate": rate, "test": true
+        }),
+    )
+    .await;
+    assert!(status.is_success(), "{done}");
+    done["order"]["id"].as_str().unwrap().to_string()
+}
+
+/// Staff list a branch's pickup orders (paged, filtered by status, branch and
+/// search) and take one through ready and collected, which frees its reserved
+/// stock. Customers see only their own orders and cannot move pickups.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_staff_order_list_and_pickup_steps() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let customer_token = app.login(&customer.email, &password).await.unwrap();
+    let location = create_pickup_location(&app, &admin).await;
+    let product = app
+        .create_test_product("Counter pickup", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 5, None)
+        .await
+        .unwrap();
+    let order = place_pickup_order(&app, location, product, "counter@example.com").await;
+
+    let path = format!("/orders?location_id={location}&pickup=true&status=confirmed&per_page=10");
+    let (status, list) = call_json(&app, &admin, &path, None).await;
+    assert_eq!(status, 200, "{list}");
+    assert_eq!(list["meta"]["total"], 1, "{list}");
+    let found = &list["orders"][0];
+    assert_eq!(found["id"], order);
+    assert_eq!(found["item_count"], 1);
+    assert_eq!(found["pickup"]["location_id"], location.to_string());
+    let (_, by_email) = call_json(&app, &admin, "/orders?q=COUNTER%40example", None).await;
+    assert!(by_email["orders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|o| o["id"] == order));
+    let (status, _) = call_json(&app, &admin, "/orders?status=shipped", None).await;
+    assert_eq!(status, 400);
+    let (_, mine) = call_json(&app, &customer_token, "/orders?pickup=true", None).await;
+    assert!(mine["orders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|o| o["id"] != order));
+
+    let step = |name: &str| format!("/orders/{order}/pickup/{name}");
+    let collected = serde_json::json!({"collected_by": "J. Mason"});
+    let (status, _) = call_json(
+        &app,
+        &customer_token,
+        &step("ready"),
+        Some(serde_json::json!({})),
+    )
+    .await;
+    assert_eq!(status, 403);
+    let (status, _) = call_json(&app, &admin, &step("collected"), Some(collected.clone())).await;
+    assert_eq!(status, 400, "not ready yet");
+    let (status, ready) =
+        call_json(&app, &admin, &step("ready"), Some(serde_json::json!({}))).await;
+    assert_eq!(status, 200, "{ready}");
+    assert_eq!(ready["status"], "processing");
+    assert!(ready["pickup"]["ready_marked_at"].is_string(), "{ready}");
+    let (status, _) = call_json(&app, &admin, &step("ready"), Some(serde_json::json!({}))).await;
+    assert_eq!(status, 400, "already ready");
+    let (status, _) = call_json(
+        &app,
+        &admin,
+        &step("collected"),
+        Some(serde_json::json!({"collected_by": " "})),
+    )
+    .await;
+    assert_eq!(status, 400, "a name is required");
+    let (status, done) = call_json(&app, &admin, &step("collected"), Some(collected)).await;
+    assert_eq!(status, 200, "{done}");
+    assert_eq!(done["status"], "completed");
+    assert_eq!(done["fulfillment_status"], "delivered");
+    assert_eq!(done["pickup"]["collected_by"], "J. Mason");
+
+    let (available, reserved): (i32, i32) = sqlx::query_as(
+        "SELECT available_quantity, reserved_quantity FROM inventory_levels
+          WHERE product_id = $1 AND location_id = $2",
+    )
+    .bind(product)
+    .bind(location)
+    .fetch_one(&app.db_pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (available, reserved),
+        (4, 0),
+        "the collected article left the branch"
+    );
+
+    sqlx::query("UPDATE inventory_locations SET is_public = false WHERE id = $1")
+        .bind(location)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    app.cleanup().await.ok();
+}
+
 /// Helper macro for running tests with reporting
 #[macro_export]
 macro_rules! test_with_report {

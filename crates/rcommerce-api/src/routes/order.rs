@@ -13,6 +13,7 @@ use rcommerce_core::Error;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::order_pickup::{fulfillment_location_of, pickup_of, OrderPickup};
 use crate::middleware::{staff_access::staff_can, JwtAuth};
 use crate::state::AppState;
 use axum::Extension;
@@ -64,6 +65,15 @@ pub struct OrderResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fulfillments: Vec<OrderFulfillmentResponse>,
     pub created_at: String,
+    /// Collection at a store location (pickup orders only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pickup: Option<OrderPickup>,
+    /// Location the order's stock was reserved at, when checkout chose one
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fulfillment_location_id: Option<Uuid>,
+    /// Number of articles (order lists, which leave `items` empty)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_count: Option<i64>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -139,87 +149,35 @@ pub struct OrderItemResponse {
     pub total: Decimal,
 }
 
-const ORDER_COLUMNS: &str = "id, order_number, customer_id, customer_email, currency::text AS currency_text, order_type, subtotal, tax_total, shipping_total, discount_total, total, status, payment_status, fulfillment_status, shipping_address_id, billing_address_id, payment_method, shipping_method, notes, tags, draft, subscription_id, billing_cycle, coupon_code, coupon_id, ip_address, user_agent, metadata, shipping_address, billing_address, created_at, updated_at, completed_at, cancelled_at";
+pub(crate) const ORDER_COLUMNS: &str = "id, order_number, customer_id, customer_email, currency::text AS currency_text, order_type, subtotal, tax_total, shipping_total, discount_total, total, status, payment_status, fulfillment_status, shipping_address_id, billing_address_id, payment_method, shipping_method, notes, tags, draft, subscription_id, billing_cycle, coupon_code, coupon_id, ip_address, user_agent, metadata, shipping_address, billing_address, created_at, updated_at, completed_at, cancelled_at";
 
-/// List orders for the authenticated customer (all orders for admins and
-/// staff with `orders:read`)
-pub async fn list_orders(
-    State(state): State<AppState>,
-    Extension(auth): Extension<JwtAuth>,
-) -> Json<serde_json::Value> {
-    let all = staff_can(&state, &auth, Resource::Orders, Action::Read).await;
-    let query = if all {
-        format!(
-            "SELECT {} FROM orders ORDER BY created_at DESC LIMIT 50",
-            ORDER_COLUMNS
-        )
-    } else {
-        format!(
-            "SELECT {} FROM orders WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 50",
-            ORDER_COLUMNS
-        )
-    };
-
-    let result = if all {
-        sqlx::query_as::<_, rcommerce_core::models::Order>(&query)
-            .fetch_all(state.db.pool())
-            .await
-    } else {
-        sqlx::query_as::<_, rcommerce_core::models::Order>(&query)
-            .bind(auth.customer_id)
-            .fetch_all(state.db.pool())
-            .await
-    };
-
-    match result {
-        Ok(orders) => {
-            let order_responses: Vec<OrderResponse> = orders
-                .into_iter()
-                .map(|o| OrderResponse {
-                    id: o.id,
-                    order_number: o.order_number,
-                    customer_id: o.customer_id,
-                    customer_email: o.customer_email,
-                    status: format!("{:?}", o.status).to_lowercase(),
-                    payment_status: format!("{:?}", o.payment_status).to_lowercase(),
-                    fulfillment_status: format!("{:?}", o.fulfillment_status).to_lowercase(),
-                    currency: o.currency.to_string(),
-                    subtotal: o.subtotal,
-                    tax_total: o.tax_total,
-                    shipping_total: o.shipping_total,
-                    discount_total: o.discount_total,
-                    coupon_code: o.coupon_code.clone(),
-                    total: o.total,
-                    items: vec![], // Will be populated separately
-                    payments: vec![],
-                    billing_address: o.billing_address.clone(),
-                    shipping_address: o.shipping_address.clone(),
-                    notes: o.notes.clone(),
-                    fulfillments: vec![],
-                    created_at: o.created_at.to_rfc3339(),
-                })
-                .collect();
-
-            Json(serde_json::json!({
-                "orders": order_responses,
-                "meta": {
-                    "total": order_responses.len(),
-                    "page": 1,
-                    "per_page": 50,
-                }
-            }))
-        }
-        Err(e) => {
-            tracing::error!("Failed to list orders: {}", e);
-            Json(serde_json::json!({
-                "orders": [],
-                "meta": {
-                    "total": 0,
-                    "page": 1,
-                    "per_page": 50,
-                }
-            }))
-        }
+/// An order without its lines, payments or fulfillments, for order lists
+pub(crate) fn order_summary(o: rcommerce_core::models::Order) -> OrderResponse {
+    OrderResponse {
+        id: o.id,
+        order_number: o.order_number,
+        customer_id: o.customer_id,
+        customer_email: o.customer_email,
+        status: format!("{:?}", o.status).to_lowercase(),
+        payment_status: format!("{:?}", o.payment_status).to_lowercase(),
+        fulfillment_status: format!("{:?}", o.fulfillment_status).to_lowercase(),
+        currency: o.currency.to_string(),
+        subtotal: o.subtotal,
+        tax_total: o.tax_total,
+        shipping_total: o.shipping_total,
+        discount_total: o.discount_total,
+        coupon_code: o.coupon_code.clone(),
+        total: o.total,
+        items: vec![],
+        payments: vec![],
+        billing_address: o.billing_address.clone(),
+        shipping_address: o.shipping_address.clone(),
+        notes: o.notes.clone(),
+        fulfillments: vec![],
+        created_at: o.created_at.to_rfc3339(),
+        pickup: pickup_of(&o.metadata),
+        fulfillment_location_id: fulfillment_location_of(&o.metadata),
+        item_count: None,
     }
 }
 
@@ -361,6 +319,9 @@ pub async fn get_order(
         notes: order.notes.clone(),
         fulfillments,
         created_at: order.created_at.to_rfc3339(),
+        pickup: pickup_of(&order.metadata),
+        fulfillment_location_id: fulfillment_location_of(&order.metadata),
+        item_count: None,
     }))
 }
 
@@ -743,6 +704,9 @@ pub async fn create_order(
         notes: order.notes.clone(),
         fulfillments: vec![],
         created_at: order.created_at.to_rfc3339(),
+        pickup: pickup_of(&order.metadata),
+        fulfillment_location_id: fulfillment_location_of(&order.metadata),
+        item_count: None,
     };
 
     Ok((StatusCode::CREATED, Json(response)))
@@ -1159,7 +1123,10 @@ pub async fn update_order_status(
 }
 
 /// Fetch an order by id (models::Order shape used by the response builders)
-async fn fetch_order(state: &AppState, id: Uuid) -> Result<rcommerce_core::models::Order, Error> {
+pub(crate) async fn fetch_order(
+    state: &AppState,
+    id: Uuid,
+) -> Result<rcommerce_core::models::Order, Error> {
     sqlx::query_as::<_, rcommerce_core::models::Order>(&format!(
         "SELECT {} FROM orders WHERE id = $1",
         ORDER_COLUMNS
@@ -1206,7 +1173,7 @@ async fn attach_refunds(state: &AppState, order_id: Uuid, payments: &mut [OrderP
 }
 
 /// Build an order response with items and payment records loaded
-async fn build_order_response(
+pub(crate) async fn build_order_response(
     state: &AppState,
     order: rcommerce_core::models::Order,
 ) -> Result<OrderResponse, Error> {
@@ -1284,6 +1251,9 @@ async fn build_order_response(
         notes: order.notes.clone(),
         fulfillments,
         created_at: order.created_at.to_rfc3339(),
+        pickup: pickup_of(&order.metadata),
+        fulfillment_location_id: fulfillment_location_of(&order.metadata),
+        item_count: None,
     })
 }
 
@@ -1320,13 +1290,24 @@ fn map_models_status(status: rcommerce_core::models::OrderStatus) -> LifecycleOr
 /// Router for order routes
 pub fn router() -> Router<AppState> {
     axum::Router::new()
-        .route("/orders", get(list_orders).post(create_order))
+        .route(
+            "/orders",
+            get(super::order_list::list_orders).post(create_order),
+        )
         .route("/orders/:id", get(get_order))
         .route("/orders/:id/invoice", get(get_invoice))
         .route("/orders/:id/cancel", post(cancel_order))
         .route("/orders/:id/refund", post(refund_order))
         .route("/orders/:id/fulfillments", post(create_fulfillment))
         .route("/orders/:id/status", put(update_order_status))
+        .route(
+            "/orders/:id/pickup/ready",
+            post(super::order_pickup::mark_ready),
+        )
+        .route(
+            "/orders/:id/pickup/collected",
+            post(super::order_pickup::mark_collected),
+        )
 }
 
 #[cfg(test)]

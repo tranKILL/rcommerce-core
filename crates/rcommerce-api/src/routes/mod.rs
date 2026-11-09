@@ -15,6 +15,8 @@ pub mod invoice;
 pub mod location;
 pub mod newsletter;
 pub mod order;
+pub mod order_list;
+pub mod order_pickup;
 pub mod payment;
 pub mod product;
 pub mod review;
