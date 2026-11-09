@@ -244,6 +244,11 @@ impl Migrator {
                 "auth_sessions",
                 include_str!("../../migrations/029_auth_sessions.sql"),
             ),
+            (
+                30,
+                "catalog_search_text",
+                include_str!("../../migrations/030_catalog_search_text.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

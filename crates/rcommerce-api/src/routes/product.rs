@@ -21,7 +21,27 @@ use rcommerce_core::repository::{
 };
 use rcommerce_core::services::product_service::ProductList;
 use rcommerce_core::services::{PaginationInfo, PaginationParams};
-use rcommerce_core::Resource;
+use rcommerce_core::{Error, Resource, SortDirection, SortParams};
+
+/// The order a listing asks for (`None`: newest first)
+fn listing_sort(sort: Option<&str>) -> Result<Option<SortParams>, Error> {
+    let (field, direction) = match sort.map(str::trim).filter(|s| !s.is_empty()) {
+        None | Some("newest") => return Ok(None),
+        Some("price_asc") => ("price", SortDirection::Asc),
+        Some("price_desc") => ("price", SortDirection::Desc),
+        Some("name_asc") => ("title", SortDirection::Asc),
+        Some("name_desc") => ("title", SortDirection::Desc),
+        Some(_) => {
+            return Err(Error::validation(
+                "sort must be newest, price_asc, price_desc, name_asc or name_desc",
+            ))
+        }
+    };
+    Ok(Some(SortParams {
+        field: field.to_string(),
+        direction,
+    }))
+}
 
 /// `?lang=` on storefront routes. The language is part of the URL (not
 /// Accept-Language) so CDN and browser caches key on it without `Vary`.
@@ -41,7 +61,13 @@ fn requested_locale(lang: Option<&str>) -> Option<String> {
 pub async fn list_products(
     State(state): State<AppState>,
     Query(params): Query<ListProductsParams>,
-) -> Json<serde_json::Value> {
+) -> Result<Json<serde_json::Value>, Error> {
+    let sort = listing_sort(params.sort.as_deref())?;
+    if let (Some(min), Some(max)) = (params.min_price, params.max_price) {
+        if min > max {
+            return Err(Error::validation("min_price is above max_price"));
+        }
+    }
     let locale = requested_locale(params.lang.as_deref());
     let i18n = CatalogI18nRepository::new(state.db.pool().clone());
     let category_filter = if let Some(category_slug) = params.category.as_deref() {
@@ -50,54 +76,63 @@ pub async fn list_products(
             .await
         {
             Ok(Some(id)) => Some(id),
-            Ok(None) => return Json(empty_product_list()),
+            Ok(None) => return Ok(Json(empty_product_list())),
             Err(e) => {
                 tracing::error!("Failed to lookup category {}: {}", category_slug, e);
-                return Json(empty_product_list());
+                return Ok(Json(empty_product_list()));
             }
         }
     } else {
         None
     };
 
-    let page = product_page(&state, &i18n, &params, locale.as_deref(), category_filter);
+    let page = product_page(&state, &i18n, &params, locale.as_deref(), category_filter, sort);
     let product_list = match page.await {
         Ok(list) => list,
         Err(e) => {
             tracing::error!("Failed to list products: {}", e);
-            return Json(empty_product_list());
+            return Ok(Json(empty_product_list()));
         }
     };
 
     let cards = ProductCards::load(&state, &product_list.products, locale.as_deref()).await;
     let products = cards.into_cards(product_list.products);
-    Json(product_list_json(products, &product_list.pagination))
+    Ok(Json(product_list_json(products, &product_list.pagination)))
 }
 
-/// The requested page: search hits in relevance order with `?q=`, otherwise
-/// the active products (of the category, if any)
+/// The requested page: with `?q=` alone, search hits in relevance order (in the
+/// requested language); otherwise the active products matching the category, the
+/// search words (base text and SKUs), the price range, in the requested order
 async fn product_page(
     state: &AppState,
     i18n: &CatalogI18nRepository,
     params: &ListProductsParams,
     locale: Option<&str>,
     category_id: Option<Uuid>,
+    sort: Option<SortParams>,
 ) -> rcommerce_core::Result<ProductList> {
     let pagination = PaginationParams {
         page: params.page.filter(|p| *p >= 1).unwrap_or(1),
         per_page: params.per_page.unwrap_or(20).clamp(1, 100),
     };
-    match params.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
-        Some(query) => search_page(state, i18n, query, locale, category_id, &pagination).await,
-        None => {
+    let query = params.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
+    let plain_search = sort.is_none() && params.min_price.is_none() && params.max_price.is_none();
+    match query {
+        Some(query) if plain_search => {
+            search_page(state, i18n, query, locale, category_id, &pagination).await
+        }
+        _ => {
             let filter = rcommerce_core::models::ProductFilter {
                 status: Some(rcommerce_core::models::ProductStatus::Active),
                 category_id,
+                query: query.map(str::to_string),
+                price_min: params.min_price,
+                price_max: params.max_price,
                 ..Default::default()
             };
             state
                 .product_service
-                .list_products(Some(filter), pagination)
+                .list_products_sorted(Some(filter), pagination, sort)
                 .await
         }
     }
@@ -281,6 +316,12 @@ async fn search_page(
             .search(query, locale, category_id, limit, offset)
             .await
         {
+            // No hit in Elasticsearch: PostgreSQL also matches SKUs and spellings
+            // such as "25kg" for "25 kg"
+            Ok(hits) if hits.total == 0 => {
+                i18n.search_products(query, locale, category_id, limit, offset)
+                    .await?
+            }
             Ok(hits) => hits,
             Err(e) => {
                 tracing::warn!("Elasticsearch search failed, using PostgreSQL: {}", e);
@@ -320,9 +361,16 @@ async fn search_page(
 pub struct ListProductsParams {
     /// Category slug (base or translated)
     category: Option<String>,
-    /// Full-text search: every word must match, as the prefix of a title word or as
-    /// a whole word in the title or description
+    /// Search: a SKU first, then full text (every word as a title-word prefix or a
+    /// whole word), then every word as a substring ignoring case, accents, spaces
+    /// and decimal comma vs dot
     q: Option<String>,
+    /// `newest` (default), `price_asc`, `price_desc`, `name_asc` or `name_desc`
+    sort: Option<String>,
+    /// Lowest price, excluding tax
+    min_price: Option<rust_decimal::Decimal>,
+    /// Highest price, excluding tax
+    max_price: Option<rust_decimal::Decimal>,
     /// 1-based page number (default 1)
     page: Option<i64>,
     /// Page size, clamped to 1..=100 (default 20)

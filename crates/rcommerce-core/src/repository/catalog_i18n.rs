@@ -76,16 +76,15 @@ pub fn search_tsqueries(input: &str) -> Option<(String, String)> {
     Some((prefix, words.join(" & ")))
 }
 
-/// ILIKE pattern matching the words in order anywhere in a title:
-/// "boor machine" -> "%boor%machine%". Only letters and digits are kept, so the
-/// input cannot add wildcards of its own.
-fn substring_pattern(input: &str) -> Option<String> {
-    let words: Vec<&str> = input
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .take(8)
+/// The words of a query for SEARCH_SUBSTRING: at most 8, escaped for LIKE, joined by
+/// spaces ("25kg  ciment" -> "25kg ciment"); `%` and `_` are taken literally.
+fn search_words(input: &str) -> Option<String> {
+    let words: Vec<String> = input
+        .split_whitespace()
+        .take(crate::repository::postgres::product_search::MAX_SEARCH_TERMS)
+        .map(crate::repository::postgres::product_search::escape_like)
         .collect();
-    (!words.is_empty()).then(|| format!("%{}%", words.join("%")))
+    (!words.is_empty()).then(|| words.join(" "))
 }
 
 /// Translation constraint violations become client errors
@@ -152,17 +151,44 @@ const SEARCH_FULL_TEXT: &str = search_sql!(
     "h.rank DESC, p.created_at DESC, p.id"
 );
 
-/// $1 = substring_pattern, matched on titles (trigram indexes, migration 025)
-const SEARCH_SUBSTRING: &str = search_sql!(
+/// $1 = a query that is a SKU: products whose SKU or a variant SKU equals it,
+/// ignoring case ($2, the locale, is not needed here)
+const SEARCH_SKU: &str = search_sql!(
     "
     WITH hits AS (
+        SELECT p.id FROM products p
+        WHERE lower(p.sku) = lower($1) AND ($2::text IS NULL OR $2::text IS NOT NULL)
+        UNION
+        SELECT v.product_id FROM product_variants v WHERE lower(v.sku) = lower($1)
+    )",
+    "p.created_at DESC, p.id"
+);
+
+/// $1 = search_words (space-separated, escaped for LIKE): every word must appear in
+/// the title (translated in $2, else base) or a SKU, compared through
+/// catalog_search_text (migration 030: case, accents, spaces, decimal comma)
+const SEARCH_SUBSTRING: &str = search_sql!(
+    "
+    WITH words AS (
+        SELECT catalog_search_text(w) AS w FROM unnest(string_to_array($1, ' ')) AS w WHERE w <> ''
+    ), hits AS (
         SELECT t.product_id AS id
         FROM product_translations t
-        WHERE t.locale = $2 AND t.title ILIKE $1
+        JOIN products p ON p.id = t.product_id
+        WHERE t.locale = $2
+          AND NOT EXISTS (SELECT 1 FROM words WHERE NOT (
+              catalog_search_text(t.title) LIKE '%' || words.w || '%' ESCAPE '\\'
+              OR catalog_search_text(p.sku) LIKE '%' || words.w || '%' ESCAPE '\\'
+              OR EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id
+                         AND catalog_search_text(v.sku) LIKE '%' || words.w || '%' ESCAPE '\\')))
         UNION ALL
         SELECT p.id
         FROM products p
-        WHERE p.title ILIKE $1
+        WHERE NOT EXISTS (SELECT 1 FROM words WHERE NOT (
+              catalog_search_text(p.title) LIKE '%' || words.w || '%' ESCAPE '\\'
+              OR catalog_search_text(p.sku) LIKE '%' || words.w || '%' ESCAPE '\\'
+              OR EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id
+                         AND catalog_search_text(v.sku) LIKE '%' || words.w || '%' ESCAPE '\\')))
           AND NOT EXISTS (SELECT 1 FROM product_translations t WHERE t.product_id = p.id AND t.locale = $2)
     )",
     "p.created_at DESC, p.id"
@@ -318,10 +344,20 @@ impl CatalogI18nRepository {
         offset: i64,
     ) -> Result<SearchPage> {
         let (Some((prefix, words)), Some(pattern)) =
-            (search_tsqueries(query), substring_pattern(query))
+            (search_tsqueries(query), search_words(query))
         else {
             return Ok(SearchPage::default());
         };
+        // A reference typed as is (one word) goes straight to its product
+        if !query.trim().contains(char::is_whitespace) {
+            let sku = query.trim();
+            let page = self
+                .search_page(SEARCH_SKU, sku, None, locale, category_id, limit, offset)
+                .await?;
+            if page.total > 0 {
+                return Ok(page);
+            }
+        }
         let page = self
             .search_page(
                 SEARCH_FULL_TEXT,
@@ -501,17 +537,11 @@ mod tests {
     }
 
     #[test]
-    fn substring_pattern_keeps_words_in_order() {
-        assert_eq!(
-            substring_pattern("boormachine").as_deref(),
-            Some("%boormachine%")
-        );
-        assert_eq!(
-            substring_pattern("boor machine").as_deref(),
-            Some("%boor%machine%")
-        );
-        assert_eq!(substring_pattern("100%_x").as_deref(), Some("%100%x%"));
-        assert_eq!(substring_pattern("%_"), None);
+    fn search_words_are_split_and_escaped() {
+        assert_eq!(search_words("boormachine").as_deref(), Some("boormachine"));
+        assert_eq!(search_words(" boor   machine ").as_deref(), Some("boor machine"));
+        assert_eq!(search_words("100%_x").as_deref(), Some("100\%\_x"));
+        assert_eq!(search_words("   "), None);
     }
 
     #[test]
