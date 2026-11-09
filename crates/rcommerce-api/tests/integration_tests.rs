@@ -3018,6 +3018,9 @@ async fn test_stock_status_per_branch() {
         400
     );
 
+    app.cleanup().await.ok();
+}
+
 /// Stock management: receipt, adjustments, refusals, movement history, and
 /// the product total kept equal to the sum of the changes
 #[tokio::test]
