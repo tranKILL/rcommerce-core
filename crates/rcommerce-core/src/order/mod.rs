@@ -127,6 +127,9 @@ pub struct CreateOrderRequest {
     /// Test-mode order (spec 2.2): sandbox gateway runs, admin test-order
     /// actions, or flagged test payment methods set this.
     pub test: bool,
+    /// Location whose stock the order reserves (a pickup location, or the
+    /// branch a delivery leaves from); the first active location when `None`
+    pub fulfillment_location_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone)]

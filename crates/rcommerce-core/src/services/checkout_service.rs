@@ -16,6 +16,7 @@ use crate::{
     order::service::OrderDetail,
     order::{CreateOrderItem, CreateOrderRequest, OrderService},
     payment::{CreatePaymentRequest, PaymentGateway, PaymentMethod},
+    services::checkout_pickup::{pickup_location, PickupLocations},
     services::CartService,
     shipping::{Package, RateOptions, ShippingProviderFactory, ShippingRate},
     tax::{
@@ -36,6 +37,8 @@ pub struct CheckoutService {
     /// Coupon lookups (code -> id) when persisting the coupon on the order;
     /// None = coupon linkage is skipped.
     coupon_service: Option<Arc<crate::services::CouponService>>,
+    /// Store locations offered as pickup rates; None = no pickup in checkout
+    pickup: Option<Arc<PickupLocations>>,
     config: CheckoutConfig,
 }
 
@@ -194,6 +197,9 @@ pub struct CompleteCheckoutRequest {
     /// Stored-card consent id (verified by the storefront before checkout).
     /// Mandatory when `subscription` is present.
     pub payment_consent_id: Option<String>,
+    /// Location the order's stock comes from when it is delivered; a pickup
+    /// rate always uses its own location
+    pub fulfillment_location_id: Option<Uuid>,
 }
 
 /// Checkout result
@@ -265,7 +271,37 @@ impl CheckoutService {
             payment_gateway,
             shipping_factory,
             coupon_service,
+            pickup: None,
             config,
+        }
+    }
+
+    /// Offer the store's pickup locations as free shipping rates; the order's
+    /// stock is then reserved at the chosen location
+    pub fn with_pickup_locations(mut self, pickup: PickupLocations) -> Self {
+        self.pickup = Some(Arc::new(pickup));
+        self
+    }
+
+    /// The location the order's stock is reserved at: the pickup location of a
+    /// pickup rate, else the requested location (which must be active), else
+    /// none (the order service's default location)
+    async fn fulfillment_location(
+        &self,
+        rate: &ShippingRate,
+        requested: Option<Uuid>,
+    ) -> Result<Option<Uuid>> {
+        if let Some(id) = pickup_location(rate) {
+            return Ok(Some(id));
+        }
+        let Some(id) = requested else {
+            return Ok(None);
+        };
+        match &self.pickup {
+            Some(pickup) if !pickup.is_active(id).await? => {
+                Err(Error::validation("Unknown fulfillment location"))
+            }
+            _ => Ok(Some(id)),
         }
     }
 
@@ -577,6 +613,9 @@ impl CheckoutService {
         // Shipping is not taxed (matches the legacy WooCommerce setup); EU VAT
         // comes from the tax-zone rates (10% per EU country) on items only.
         let shipping_total = validated_rate.total_cost;
+        let fulfillment_location_id = self
+            .fulfillment_location(&validated_rate, request.fulfillment_location_id)
+            .await?;
 
         // Subscription validation: single-product carts only, and a stored
         // card consent is required to bill future renewals.
@@ -711,7 +750,15 @@ impl CheckoutService {
             "vat_id": request.vat_id,
             "shipping_carrier": validated_rate.carrier,
             "shipping_service": validated_rate.service_code,
+            "fulfillment_location_id": fulfillment_location_id,
         });
+        if pickup_location(&validated_rate).is_some() {
+            order_metadata["pickup"] = serde_json::json!({
+                "location_id": fulfillment_location_id,
+                "location_name": validated_rate.service_name,
+                "ready_at": validated_rate.delivery_date,
+            });
+        }
         if let Some(ref sub) = subscription {
             order_metadata["subscription"] = serde_json::json!({
                 "interval": sub.interval,
@@ -747,6 +794,7 @@ impl CheckoutService {
             coupon_code: cart_coupon_code,
             coupon_id: cart_coupon_id,
             metadata: order_metadata,
+            fulfillment_location_id,
         };
 
         let order = self
@@ -1356,9 +1404,12 @@ impl CheckoutService {
         // Use the injected shipping factory
         let aggregator =
             crate::shipping::ShippingRateAggregator::new((*self.shipping_factory).clone());
-        let rates = aggregator
+        let mut rates = aggregator
             .get_all_rates(&origin, destination, package, &options)
             .await?;
+        if let Some(pickup) = &self.pickup {
+            rates.extend(pickup.rates(&currency.to_string(), Utc::now()).await?);
+        }
 
         Ok(rates)
     }
@@ -2134,6 +2185,7 @@ mod tests {
             test: None,
             subscription: None,
             payment_consent_id: None,
+            fulfillment_location_id: None,
         }
     }
 

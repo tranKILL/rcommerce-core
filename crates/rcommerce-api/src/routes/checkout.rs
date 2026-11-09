@@ -71,6 +71,10 @@ pub struct CompleteCheckoutApiRequest {
     pub subscription: Option<rcommerce_core::services::SubscriptionCheckoutOption>,
     /// Verified stored-card consent id. Mandatory when `subscription` is set.
     pub payment_consent_id: Option<String>,
+    /// Location the order's stock comes from when it is delivered (a pickup
+    /// rate always uses its own location). Default: the first active location.
+    #[serde(default)]
+    pub fulfillment_location_id: Option<Uuid>,
 }
 
 /// Request to confirm checkout after client-side payment confirmation
@@ -138,6 +142,9 @@ pub struct ShippingRateResponse {
     pub rate: Decimal,
     pub currency: String,
     pub delivery_days: Option<i32>,
+    /// Expected delivery, or when a pickup order is ready for collection
+    #[serde(default)]
+    pub delivery_date: Option<chrono::DateTime<chrono::Utc>>,
     pub total_cost: Decimal,
 }
 
@@ -151,6 +158,7 @@ impl From<rcommerce_core::shipping::ShippingRate> for ShippingRateResponse {
             rate: rate.rate,
             currency: rate.currency,
             delivery_days: rate.delivery_days,
+            delivery_date: rate.delivery_date,
             total_cost: rate.total_cost,
         }
     }
@@ -166,7 +174,7 @@ impl From<ShippingRateResponse> for rcommerce_core::shipping::ShippingRate {
             rate: rate.rate,
             currency: rate.currency,
             delivery_days: rate.delivery_days,
-            delivery_date: None,
+            delivery_date: rate.delivery_date,
             estimated: true,
             insurance_fee: None,
             fuel_surcharge: None,
@@ -596,6 +604,7 @@ pub async fn complete_checkout(
         test: request.test,
         subscription: request.subscription,
         payment_consent_id: request.payment_consent_id,
+        fulfillment_location_id: request.fulfillment_location_id,
     };
 
     // Call checkout service

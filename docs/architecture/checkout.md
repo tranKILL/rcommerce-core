@@ -575,6 +575,37 @@ let shipment = Shipment {
 let rates = provider.calculate_rates(&shipment).await?;
 ```
 
+### Collecting at a store location
+
+Every store location that is active, public and a pickup point (see the
+[Store Locations API](../api/05-store-locations-api.md)) is offered after the carrier
+rates as a free rate:
+
+```json
+{
+  "provider_id": "pickup",
+  "carrier": "pickup",
+  "service_code": "96b2803c-d951-4d24-9de2-26687cdc9cc4",
+  "service_name": "North branch",
+  "rate": "0",
+  "currency": "EUR",
+  "delivery_days": null,
+  "delivery_date": "2026-11-10T07:00:00Z",
+  "total_cost": "0"
+}
+```
+
+- `service_code` is the location's id.
+- `delivery_date` is when an order placed now is ready: the location's first opening
+  after its `pickup_lead_minutes`. It is `null` when the location has no opening hours.
+- Choosing the rate in `/checkout/complete` reserves the order's stock at that location
+  and stores `metadata.pickup` (`location_id`, `location_name`, `ready_at`) on the order.
+
+A delivered order can name the location its stock leaves from with
+`fulfillment_location_id` in `/checkout/complete`; it must be an active location, else
+the request is a `400`. Without it, stock is reserved at the first active location, as
+before.
+
 ### Payment Integration
 
 Payments are processed through the PaymentService:

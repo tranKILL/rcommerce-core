@@ -35,7 +35,7 @@ use rcommerce_core::repository::{
 };
 use rcommerce_core::services::{
     AuthService, BundleService, CartService, CheckoutConfig, CheckoutService, CouponService,
-    CustomerService, OrderService, ProductService,
+    CustomerService, OrderService, PickupLocations, ProductService,
 };
 use rcommerce_core::shipping::ShippingProviderFactory;
 use rcommerce_core::tax::DefaultTaxService;
@@ -826,15 +826,18 @@ async fn create_app_state(config: &Config) -> Result<AppState> {
     };
     let checkout_payment_gateway: Arc<dyn rcommerce_core::payment::PaymentGateway> =
         Arc::from(build_legacy_gateway(&legacy_gateway_selection));
-    let checkout_service = Arc::new(CheckoutService::with_coupon_service(
-        cart_service.clone(),
-        tax_service.clone(),
-        order_service.clone(),
-        checkout_payment_gateway.clone(),
-        shipping_factory.clone(),
-        checkout_config,
-        Some(Arc::new(coupon_service.clone())),
-    ));
+    let checkout_service = Arc::new(
+        CheckoutService::with_coupon_service(
+            cart_service.clone(),
+            tax_service.clone(),
+            order_service.clone(),
+            checkout_payment_gateway.clone(),
+            shipping_factory.clone(),
+            checkout_config,
+            Some(Arc::new(coupon_service.clone())),
+        )
+        .with_pickup_locations(PickupLocations::new(db.pool().clone())),
+    );
     info!("Checkout service initialized");
     // Subscription renewals are charged through the same legacy gateway
     // instance as checkout (stored-card consent charges).
