@@ -1771,6 +1771,7 @@ mod tests {
             .dispatch(request(Some("c.example.com"), Some("a.example.com")))
             .await;
         assert_eq!(forged.status(), StatusCode::NOT_FOUND);
+    }
 
     /// The `access-control-allow-origin` and `-headers` answers to a
     /// preflight from `origin` for an authenticated POST
