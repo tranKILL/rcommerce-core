@@ -1215,6 +1215,7 @@ mod tests {
             site_url: "https://example.org".to_string(),
             logo_url: "https://example.org/images/logo.png".to_string(),
             accent_color: "#0b6e4f".to_string(),
+            ..Default::default()
         };
         let html = wrap_email_html("Test", "<p>Hello</p>", &brand);
         assert!(html.contains("https://example.org/images/logo.png"));

@@ -253,6 +253,17 @@ pub struct BrandingConfig {
     pub logo_url: String,
     #[serde(default = "default_brand_accent_color")]
     pub accent_color: String,
+    /// PNG printed at the top of PDFs (invoices, order PDFs); none prints the
+    /// built-in logo on order PDFs and no logo on invoices
+    #[serde(default)]
+    pub logo_file: Option<String>,
+    /// `logo_file`, decoded at start-up
+    #[serde(skip)]
+    pub pdf_logo: Option<crate::invoice::PdfLogo>,
+    /// The store's address on order PDFs, from `[invoicing.seller]` at
+    /// start-up; empty prints the built-in one
+    #[serde(skip)]
+    pub address_lines: Vec<String>,
 }
 
 impl Default for BrandingConfig {
@@ -263,6 +274,9 @@ impl Default for BrandingConfig {
             site_url: default_brand_site_url(),
             logo_url: default_brand_logo_url(),
             accent_color: default_brand_accent_color(),
+            logo_file: None,
+            pdf_logo: None,
+            address_lines: Vec::new(),
         }
     }
 }

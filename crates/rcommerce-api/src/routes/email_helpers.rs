@@ -806,6 +806,7 @@ mod tests {
             site_url: "https://example.com".to_string(),
             logo_url: "https://example.com/images/logo.png".to_string(),
             accent_color: "#ff4d00".to_string(),
+            ..Default::default()
         }
     }
 

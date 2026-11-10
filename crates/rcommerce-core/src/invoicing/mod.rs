@@ -48,6 +48,22 @@ pub struct Party {
     pub bic: Option<String>,
 }
 
+impl Party {
+    /// Street, postcode and city, country: the lines printed under a store's
+    /// name (none for a party without a name)
+    pub fn address_lines(&self) -> Vec<String> {
+        if self.name.trim().is_empty() {
+            return Vec::new();
+        }
+        let town = format!("{} {}", self.postcode, self.city);
+        [self.street.trim(), town.trim(), self.country.trim()]
+            .into_iter()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+}
+
 /// One invoiced line, excluding VAT
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InvoiceLine {

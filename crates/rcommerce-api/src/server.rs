@@ -1131,7 +1131,23 @@ async fn create_app_state(config: &Config) -> Result<AppState> {
         app_state.email_locale.clone(),
         app_state.peppol.is_some(),
     );
+    app_state.branding.pdf_logo = pdf_logo(config);
+    app_state.branding.address_lines = config.invoicing.seller.address_lines();
     Ok(app_state)
+}
+
+/// The store logo for PDFs, when `branding.logo_file` names one. A missing or
+/// unreadable file is logged and PDFs go without, rather than stopping the
+/// server for a picture.
+fn pdf_logo(config: &Config) -> Option<rcommerce_core::invoice::PdfLogo> {
+    let path = config.branding.logo_file.as_deref()?;
+    match rcommerce_core::invoice::PdfLogo::load(path) {
+        Ok(logo) => Some(logo),
+        Err(e) => {
+            warn!("PDFs will have no logo: {}", e);
+            None
+        }
+    }
 }
 
 /// Read the extra e-mail catalogues, if a directory is configured, and return
@@ -1339,12 +1355,13 @@ fn spawn_peppol_loop(config: &Config, app_state: &AppState) {
     let minutes = config.peppol.poll_minutes.max(1);
     info!("Peppol delivery loop enabled (every {} min)", minutes);
     let invoices = app_state.invoices.clone();
+    let logo = app_state.branding.pdf_logo.clone();
     let db = app_state.db.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(minutes * 60)).await;
             let run = peppol.run_once(&invoices, |invoice| {
-                rcommerce_core::invoice::legal::invoice_pdf(invoice).ok()
+                rcommerce_core::invoice::legal::invoice_pdf(invoice, logo.as_ref()).ok()
             });
             if let Err(e) = run_exclusive(db.pool(), job_names::PEPPOL_DELIVERY, run).await {
                 warn!("Peppol delivery round failed: {}", e);

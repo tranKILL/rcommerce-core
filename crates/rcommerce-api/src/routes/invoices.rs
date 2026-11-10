@@ -35,8 +35,10 @@ pub async fn issue_after_handover(state: &AppState, order_id: Uuid) {
             send_invoice_email(state, &invoice);
             if let Some(peppol) = state.peppol.clone() {
                 let invoices = state.invoices.clone();
+                let logo = state.branding.pdf_logo.clone();
                 tokio::spawn(async move {
-                    let pdf = rcommerce_core::invoice::legal::invoice_pdf(&invoice).ok();
+                    let pdf =
+                        rcommerce_core::invoice::legal::invoice_pdf(&invoice, logo.as_ref()).ok();
                     if invoice.peppol_status.as_deref() == Some("pending") {
                         if let Err(e) = peppol.deliver(&invoices, &invoice, pdf.as_deref()).await {
                             warn!("Peppol: invoice {} queued for retry: {}", invoice.number, e);
@@ -114,7 +116,7 @@ fn send_invoice_email(state: &AppState, invoice: &Invoice) {
     if state.notification_service.is_none() || invoice.buyer.email.is_none() {
         return;
     }
-    match rcommerce_core::invoice::legal::invoice_pdf(invoice) {
+    match rcommerce_core::invoice::legal::invoice_pdf(invoice, state.branding.pdf_logo.as_ref()) {
         Ok(pdf) => {
             let notification = invoice_notification(invoice, &state.branding, pdf);
             super::email_helpers::spawn_send(state, notification, "invoice email");
@@ -182,7 +184,8 @@ pub async fn invoice_pdf(
     Path(id): Path<Uuid>,
 ) -> Result<Response, Error> {
     let invoice = readable(&state, &auth, id).await?;
-    let pdf = rcommerce_core::invoice::legal::invoice_pdf(&invoice)?;
+    let pdf =
+        rcommerce_core::invoice::legal::invoice_pdf(&invoice, state.branding.pdf_logo.as_ref())?;
     let disposition = format!("inline; filename=\"{}.pdf\"", invoice.number);
     Ok((
         [
@@ -281,7 +284,9 @@ pub async fn send_peppol(
             "Only invoices to companies go through Peppol",
         ));
     }
-    let pdf = rcommerce_core::invoice::legal::invoice_pdf(&invoice).ok();
+    let pdf =
+        rcommerce_core::invoice::legal::invoice_pdf(&invoice, state.branding.pdf_logo.as_ref())
+            .ok();
     peppol
         .deliver(&state.invoices, &invoice, pdf.as_deref())
         .await?;

@@ -2,6 +2,8 @@
 
 pub mod legal;
 
+use std::sync::Arc;
+
 use crate::{Error, Result};
 use printpdf::{
     Color, Line, LinePoint, Mm, Op, ParsedFont, PdfDocument, PdfFontHandle, PdfPage,
@@ -37,6 +39,10 @@ pub struct InvoiceData {
     pub brand_name: String,
     /// Store support email (invoice footer); empty falls back to the default
     pub brand_email: String,
+    /// Store logo (top left); None prints the built-in one
+    pub logo: Option<PdfLogo>,
+    /// Store address under its name (top right); empty prints the built-in one
+    pub company_lines: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -224,44 +230,118 @@ fn draw_line(ops: &mut Vec<Op>, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f
     ops.push(Op::RestoreGraphicsState);
 }
 
-/// Decode the embedded 88 logo PNG into a printpdf raster image (RGBA8).
-fn load_logo_image() -> Result<RawImage> {
-    let mut decoder = png::Decoder::new(LOGO_PNG);
-    decoder.set_transformations(png::Transformations::EXPAND);
-    let mut reader = decoder
-        .read_info()
-        .map_err(|e| Error::internal(format!("Failed to read logo PNG: {}", e)))?;
-    let mut buf = vec![0u8; reader.output_buffer_size()];
-    let info = reader
-        .next_frame(&mut buf)
-        .map_err(|e| Error::internal(format!("Failed to decode logo PNG: {}", e)))?;
-    buf.truncate(info.buffer_size());
+/// A logo printed at the top of PDFs, decoded once from a PNG and shared
+#[derive(Clone)]
+pub struct PdfLogo(Arc<RawImage>);
 
-    let rgba = match info.color_type {
-        png::ColorType::Rgba => buf,
-        png::ColorType::Rgb => {
-            let mut out = Vec::with_capacity(buf.len() / 3 * 4);
-            for px in buf.chunks_exact(3) {
-                out.extend_from_slice(px);
-                out.push(255);
-            }
-            out
+impl std::fmt::Debug for PdfLogo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PdfLogo({}x{})", self.0.width, self.0.height)
+    }
+}
+
+impl PartialEq for PdfLogo {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for PdfLogo {}
+
+/// 8-bit pixels of a decoded PNG as RGBA, whatever its colour type
+fn rgba_pixels(buf: Vec<u8>, color: png::ColorType) -> Result<Vec<u8>> {
+    let pixel = |px: &[u8]| -> [u8; 4] {
+        match px.len() {
+            1 => [px[0], px[0], px[0], 255],
+            2 => [px[0], px[0], px[0], px[1]],
+            3 => [px[0], px[1], px[2], 255],
+            _ => [px[0], px[1], px[2], px[3]],
         }
+    };
+    let size = match color {
+        png::ColorType::Grayscale => 1,
+        png::ColorType::GrayscaleAlpha => 2,
+        png::ColorType::Rgb => 3,
+        png::ColorType::Rgba => return Ok(buf),
         other => {
             return Err(Error::internal(format!(
-                "Unsupported logo color type: {:?}",
-                other
+                "Unsupported logo color type: {other:?}"
             )))
         }
     };
+    Ok(buf.chunks_exact(size).flat_map(pixel).collect())
+}
 
-    Ok(RawImage {
-        pixels: RawImageData::U8(rgba),
-        width: info.width as usize,
-        height: info.height as usize,
-        data_format: RawImageFormat::RGBA8,
-        tag: b"88-logo".to_vec(),
-    })
+impl PdfLogo {
+    /// Decode a PNG (any colour type and bit depth; palettes are expanded)
+    pub fn from_png(bytes: &[u8]) -> Result<Self> {
+        let mut decoder = png::Decoder::new(bytes);
+        decoder.set_transformations(png::Transformations::normalize_to_color8());
+        let mut reader = decoder
+            .read_info()
+            .map_err(|e| Error::internal(format!("Failed to read logo PNG: {e}")))?;
+        let mut buf = vec![0u8; reader.output_buffer_size()];
+        let info = reader
+            .next_frame(&mut buf)
+            .map_err(|e| Error::internal(format!("Failed to decode logo PNG: {e}")))?;
+        buf.truncate(info.buffer_size());
+        Ok(Self(Arc::new(RawImage {
+            pixels: RawImageData::U8(rgba_pixels(buf, info.color_type)?),
+            width: info.width as usize,
+            height: info.height as usize,
+            data_format: RawImageFormat::RGBA8,
+            tag: b"store-logo".to_vec(),
+        })))
+    }
+
+    /// Read and decode a PNG file
+    pub fn load(path: &str) -> Result<Self> {
+        let bytes = std::fs::read(path)
+            .map_err(|e| Error::internal(format!("Cannot read the logo {path}: {e}")))?;
+        Self::from_png(&bytes)
+    }
+
+    /// rCommerce's own logo, printed when a store has none
+    fn built_in() -> Result<Self> {
+        Self::from_png(LOGO_PNG)
+    }
+
+    /// Width and height in points once fitted inside `max_width` x
+    /// `max_height` (proportions kept), and the DPI that gives that size
+    fn fit(&self, max_width: f32, max_height: f32) -> (f32, f32, f32) {
+        let (width, height) = (self.0.width as f32, self.0.height as f32);
+        let points_per_pixel = (max_width / width).min(max_height / height);
+        (
+            width * points_per_pixel,
+            height * points_per_pixel,
+            72.0 / points_per_pixel,
+        )
+    }
+
+    /// Place the logo with its top left corner at (`x`, `top`), fitted inside
+    /// the box; returns its height in points
+    pub(crate) fn draw(
+        &self,
+        doc: &mut PdfDocument,
+        ops: &mut Vec<Op>,
+        (x, top): (f32, f32),
+        (max_width, max_height): (f32, f32),
+    ) -> f32 {
+        let (_, height, dpi) = self.fit(max_width, max_height);
+        let id = doc.add_image(&self.0);
+        ops.push(Op::UseXobject {
+            id,
+            transform: XObjectTransform {
+                translate_x: Some(Pt(x)),
+                translate_y: Some(Pt(top - height)),
+                rotate: None,
+                scale_x: None,
+                scale_y: None,
+                dpi: Some(dpi),
+            },
+        });
+        height
+    }
 }
 
 /// Generate a single-page A4 PDF invoice (mimics the WooCommerce reference).
@@ -278,27 +358,14 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
     let regular = PdfFontHandle::External(regular_id);
     let bold = PdfFontHandle::External(bold_id);
 
-    let logo = load_logo_image()?;
-    let logo_id = doc.add_image(&logo);
-    let logo_width_pt = 46.0f32;
-    let logo_dpi = logo.width as f32 * 72.0 / logo_width_pt;
-    let logo_height_pt = logo.height as f32 * 72.0 / logo_dpi;
-
     let mut ops: Vec<Op> = Vec::new();
     let mut y = PAGE_HEIGHT_PT - 55.0;
 
     // Row 1: logo (top left, sole brand element) | company block (top right)
-    ops.push(Op::UseXobject {
-        id: logo_id,
-        transform: XObjectTransform {
-            translate_x: Some(Pt(MARGIN)),
-            translate_y: Some(Pt(y - logo_height_pt)),
-            rotate: None,
-            scale_x: None,
-            scale_y: None,
-            dpi: Some(logo_dpi),
-        },
-    });
+    let logo_height_pt = match &data.logo {
+        Some(logo) => logo.draw(&mut doc, &mut ops, (MARGIN, y), (180.0, 60.0)),
+        None => PdfLogo::built_in()?.draw(&mut doc, &mut ops, (MARGIN, y), (46.0, 46.0)),
+    };
     let brand_name = if data.brand_name.is_empty() {
         "rCommerce"
     } else {
@@ -312,11 +379,16 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
         y - 11.0,
         brand_name,
     );
-    let company_lines = [
+    let built_in_lines = [
         "2301 Bayfield Building,",
         "99 Hennessy Road,",
         "Wanchai, Hong Kong",
     ];
+    let company_lines: Vec<&str> = if data.company_lines.is_empty() {
+        built_in_lines.to_vec()
+    } else {
+        data.company_lines.iter().map(String::as_str).collect()
+    };
     for (i, line) in company_lines.iter().enumerate() {
         write_text(
             &mut ops,
@@ -706,6 +778,8 @@ mod tests {
             shipping_method: Some("Standard US Shipping".to_string()),
             brand_name: String::new(),
             brand_email: String::new(),
+            logo: None,
+            company_lines: Vec::new(),
         }
     }
 

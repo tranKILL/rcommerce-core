@@ -134,6 +134,8 @@ pub fn invoice_data_from_order(
         .collect();
 
     InvoiceData {
+        logo: branding.pdf_logo.clone(),
+        company_lines: branding.address_lines.clone(),
         order_number: order.order_number.clone(),
         order_date: order.created_at.format("%B %d, %Y").to_string(),
         status: format!("{:?}", order.status).to_lowercase(),

@@ -214,6 +214,9 @@ crop = false
 #site_url = "https://store.example.com"
 #logo_url = "https://store.example.com/images/logo.png"
 #accent_color = "#ff4d00"
+# PNG printed at the top of PDFs (invoices, order PDFs), fitted in a 64 pt high
+# box. A missing or unreadable file is logged and PDFs go without.
+#logo_file = "/etc/rcommerce/logo.png"
 
 # Legal invoices, issued when orders are collected or delivered, and their
 # Peppol delivery to companies (see docs/architecture/peppol.md)
