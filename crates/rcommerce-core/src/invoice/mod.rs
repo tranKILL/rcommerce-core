@@ -272,8 +272,44 @@ fn rgba_pixels(buf: Vec<u8>, color: png::ColorType) -> Result<Vec<u8>> {
     Ok(buf.chunks_exact(size).flat_map(pixel).collect())
 }
 
+/// Largest logo kept, in pixels: the logo box (180 x 64 pt) at about 300 dpi.
+/// Bigger pictures are shrunk so every PDF stays small.
+const MAX_LOGO_PIXELS: (usize, usize) = (750, 270);
+
+/// Shrink RGBA pixels by the smallest whole factor that fits `max`, each new
+/// pixel the average of a block; returns the pixels and their size
+fn shrink(
+    pixels: Vec<u8>,
+    (width, height): (usize, usize),
+    max: (usize, usize),
+) -> (Vec<u8>, usize, usize) {
+    let factor = width.div_ceil(max.0).max(height.div_ceil(max.1)).max(1);
+    if factor == 1 {
+        return (pixels, width, height);
+    }
+    let (new_width, new_height) = (width / factor, height / factor);
+    let mut out = Vec::with_capacity(new_width * new_height * 4);
+    for y in 0..new_height {
+        for x in 0..new_width {
+            let mut sum = [0u32; 4];
+            for dy in 0..factor {
+                let row = ((y * factor + dy) * width + x * factor) * 4;
+                for px in pixels[row..row + factor * 4].chunks_exact(4) {
+                    for (total, value) in sum.iter_mut().zip(px) {
+                        *total += u32::from(*value);
+                    }
+                }
+            }
+            let count = (factor * factor) as u32;
+            out.extend(sum.iter().map(|total| (total / count) as u8));
+        }
+    }
+    (out, new_width, new_height)
+}
+
 impl PdfLogo {
-    /// Decode a PNG (any colour type and bit depth; palettes are expanded)
+    /// Decode a PNG (any colour type and bit depth; palettes are expanded),
+    /// shrunk to at most 750 x 270 pixels
     pub fn from_png(bytes: &[u8]) -> Result<Self> {
         let mut decoder = png::Decoder::new(bytes);
         decoder.set_transformations(png::Transformations::normalize_to_color8());
@@ -285,10 +321,13 @@ impl PdfLogo {
             .next_frame(&mut buf)
             .map_err(|e| Error::internal(format!("Failed to decode logo PNG: {e}")))?;
         buf.truncate(info.buffer_size());
+        let size = (info.width as usize, info.height as usize);
+        let (pixels, width, height) =
+            shrink(rgba_pixels(buf, info.color_type)?, size, MAX_LOGO_PIXELS);
         Ok(Self(Arc::new(RawImage {
-            pixels: RawImageData::U8(rgba_pixels(buf, info.color_type)?),
-            width: info.width as usize,
-            height: info.height as usize,
+            pixels: RawImageData::U8(pixels),
+            width,
+            height,
             data_format: RawImageFormat::RGBA8,
             tag: b"store-logo".to_vec(),
         })))
@@ -830,6 +869,22 @@ mod tests {
         let pdf = generate_invoice_pdf(&data).expect("pdf generation failed");
         assert!(pdf.len() > 2000);
         assert_eq!(&pdf[..4], b"%PDF");
+    }
+
+    #[test]
+    fn big_logos_are_shrunk_by_averaging_blocks() {
+        // 4 x 2 pixels: grey levels 0, 100, 200, 50 in the top row, 0s below
+        let mut pixels = Vec::new();
+        for level in [0u8, 100, 200, 50, 0, 0, 0, 0] {
+            pixels.extend([level, level, level, 255]);
+        }
+        let (small, width, height) = shrink(pixels.clone(), (4, 2), (2, 1));
+        assert_eq!((width, height), (2, 1));
+        assert_eq!(small, vec![25, 25, 25, 255, 62, 62, 62, 255]);
+        let (same, width, height) = shrink(pixels.clone(), (4, 2), (4, 2));
+        assert_eq!((same, width, height), (pixels, 4, 2));
+        let logo = PdfLogo::built_in().unwrap();
+        assert!(logo.0.width <= MAX_LOGO_PIXELS.0 && logo.0.height <= MAX_LOGO_PIXELS.1);
     }
 
     #[test]
