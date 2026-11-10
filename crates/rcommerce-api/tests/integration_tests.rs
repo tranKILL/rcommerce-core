@@ -4066,3 +4066,133 @@ async fn z_generate_report_index() {
     );
     println!("📊 View index: open {}/index.html", output_dir);
 }
+
+/// A guest cart holding `quantity` of `product`, past checkout's first step;
+/// returns the cart and the pickup rate of `location`
+async fn cart_ready_for_pickup(
+    app: &TestApp,
+    location: Uuid,
+    product: Uuid,
+    quantity: i32,
+) -> (Uuid, serde_json::Value) {
+    let (cart_id, _) = app.create_guest_cart().await.unwrap();
+    let response = app
+        .http_client
+        .post(format!("{}/api/v1/carts/{}/items", app.base_url(), cart_id))
+        .json(&serde_json::json!({"product_id": product, "quantity": quantity}))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "{}",
+        response.text().await.unwrap()
+    );
+    let initiate = serde_json::json!({"cart_id": cart_id, "shipping_address": ownership_test_address(), "currency": "USD"});
+    let (_, summary) = checkout_step(app, "initiate", initiate).await;
+    let rate = summary["available_shipping_rates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["service_code"] == location.to_string())
+        .unwrap()
+        .clone();
+    (cart_id, rate)
+}
+
+/// Two customers each hold a branch's last 3 units and confirm their pickup
+/// orders at the same moment: one order goes through, the other is refused
+/// with a client error naming the stock, and the branch never sells more than
+/// it has. A third customer who tries afterwards is refused the same way.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_two_customers_race_for_the_last_units_of_a_branch() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    let product = app
+        .create_test_product("Last units", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 3, None)
+        .await
+        .unwrap();
+    let (cart_a, rate_a) = cart_ready_for_pickup(&app, location, product, 3).await;
+    let (cart_b, rate_b) = cart_ready_for_pickup(&app, location, product, 3).await;
+    let complete = |cart: Uuid, rate: serde_json::Value, email: &'static str| {
+        let body = serde_json::json!({
+            "cart_id": cart, "shipping_address": ownership_test_address(),
+            "payment_method": {"type": "stripe_elements"}, "customer_email": email,
+            "selected_shipping_rate": rate, "test": true
+        });
+        checkout_step(&app, "complete", body)
+    };
+    let (a, b) = tokio::join!(
+        complete(cart_a, rate_a, "first@example.com"),
+        complete(cart_b, rate_b, "second@example.com")
+    );
+    let outcomes = [a, b];
+    let placed = outcomes.iter().filter(|(s, _)| s.is_success()).count();
+    assert_eq!(placed, 1, "exactly one order: {outcomes:?}");
+    let (status, refused) = outcomes.iter().find(|(s, _)| !s.is_success()).unwrap();
+    assert!(
+        status.is_client_error(),
+        "a client error, not a failure: {status} {refused}"
+    );
+    let message = refused.to_string().to_lowercase();
+    assert!(
+        message.contains("stock") || message.contains("available"),
+        "{refused}"
+    );
+
+    let (available, reserved): (i32, i32) = sqlx::query_as(
+        "SELECT available_quantity, reserved_quantity FROM inventory_levels \
+         WHERE product_id = $1 AND location_id = $2",
+    )
+    .bind(product)
+    .bind(location)
+    .fetch_one(&app.db_pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (available, reserved),
+        (0, 3),
+        "the 3 units are held for one order"
+    );
+    let orders: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT order_id) FROM order_items WHERE product_id = $1",
+    )
+    .bind(product)
+    .fetch_one(&app.db_pool)
+    .await
+    .unwrap();
+    assert_eq!(orders, 1, "one order holds the units");
+
+    // Later on, nothing is left for a third customer: refused when adding to
+    // the cart, or at the latest when confirming
+    let (cart_c, _) = app.create_guest_cart().await.unwrap();
+    let response = app
+        .http_client
+        .post(format!("{}/api/v1/carts/{}/items", app.base_url(), cart_c))
+        .json(&serde_json::json!({"product_id": product, "quantity": 1}))
+        .send()
+        .await
+        .unwrap();
+    if response.status().is_success() {
+        let initiate = serde_json::json!({"cart_id": cart_c, "shipping_address": ownership_test_address(), "currency": "USD"});
+        let (_, summary) = checkout_step(&app, "initiate", initiate).await;
+        let rate = summary["available_shipping_rates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["service_code"] == location.to_string())
+            .unwrap()
+            .clone();
+        let (status, body) = complete(cart_c, rate, "third@example.com").await;
+        assert!(status.is_client_error(), "{status} {body}");
+    } else {
+        assert!(response.status().is_client_error());
+    }
+}

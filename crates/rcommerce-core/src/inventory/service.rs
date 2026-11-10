@@ -79,15 +79,30 @@ impl InventoryService {
     }
 
     /// Reserve stock for an order
+    ///
+    /// The stock row of the item at the location is locked while the check and
+    /// the reservation are made, and stock held by other active reservations is
+    /// not available: two checkouts for the last units cannot both reserve them.
     pub async fn reserve_stock(&self, reservation: StockReservation) -> Result<StockReservation> {
-        // Check if enough stock is available
-        let available = self
-            .get_available_stock(
-                reservation.product_id,
-                reservation.location_id,
-                reservation.variant_id,
-            )
-            .await?;
+        let mut tx = self.db.pool().begin().await?;
+        let on_hand: Vec<i32> = sqlx::query_scalar(
+            "SELECT available_quantity FROM inventory_levels              WHERE product_id = $1 AND location_id = $2 AND variant_id IS NOT DISTINCT FROM $3              FOR UPDATE",
+        )
+        .bind(reservation.product_id)
+        .bind(reservation.location_id)
+        .bind(reservation.variant_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let held: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(quantity), 0) FROM stock_reservations              WHERE product_id = $1 AND location_id = $2 AND variant_id IS NOT DISTINCT FROM $3              AND status = 'active' AND expires_at > NOW()",
+        )
+        .bind(reservation.product_id)
+        .bind(reservation.location_id)
+        .bind(reservation.variant_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let on_hand: i64 = on_hand.iter().map(|q| i64::from(*q)).sum();
+        let available = i32::try_from((on_hand - held).max(0)).unwrap_or(i32::MAX);
 
         if available < reservation.quantity {
             return Err(Error::validation(format!(
@@ -116,8 +131,9 @@ impl InventoryService {
         .bind(reservation.order_id)
         .bind(reservation.quantity)
         .bind(expires_at)
-        .fetch_one(self.db.pool())
+        .fetch_one(&mut *tx)
         .await?;
+        tx.commit().await?;
 
         Ok(reservation)
     }
@@ -302,31 +318,6 @@ impl InventoryService {
         }
 
         Ok(released_count)
-    }
-
-    /// Helper: Get available stock for a product/variant at a location.
-    ///
-    /// Sums across matching rows (legacy databases may hold duplicate rows per
-    /// key) and filters by variant so a variant purchase is never validated
-    /// against another variant's stock.
-    async fn get_available_stock(
-        &self,
-        product_id: uuid::Uuid,
-        location_id: uuid::Uuid,
-        variant_id: Option<uuid::Uuid>,
-    ) -> Result<i32> {
-        let available: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(available_quantity), 0) FROM inventory_levels \
-             WHERE product_id = $1 AND location_id = $2 \
-             AND variant_id IS NOT DISTINCT FROM $3",
-        )
-        .bind(product_id)
-        .bind(location_id)
-        .bind(variant_id)
-        .fetch_one(self.db.pool())
-        .await?;
-
-        Ok(i32::try_from(available).unwrap_or(i32::MAX))
     }
 
     /// Get available stock for a product (optionally a specific variant) across all locations.
