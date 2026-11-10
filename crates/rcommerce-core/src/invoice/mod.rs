@@ -1,5 +1,7 @@
 //! Invoice data types and PDF generation for order invoices.
 
+pub mod legal;
+
 use crate::{Error, Result};
 use printpdf::{
     Color, Line, LinePoint, Mm, Op, ParsedFont, PdfDocument, PdfFontHandle, PdfPage,

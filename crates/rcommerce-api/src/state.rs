@@ -172,6 +172,10 @@ pub struct AppState {
     pub companies: rcommerce_core::services::company_service::CompanyService,
     /// Negotiated prices of customer groups and companies
     pub price_lists: rcommerce_core::services::price_list_service::PriceListService,
+    /// Legal invoices issued when orders are handed over
+    pub invoices: rcommerce_core::invoicing::InvoiceService,
+    /// Peppol delivery of invoices to companies, when enabled
+    pub peppol: Option<Arc<rcommerce_core::peppol::PeppolService>>,
     /// Accounting export configuration (store code/name, site URL)
     pub accounting: rcommerce_core::config::AccountingConfig,
     /// Store base currency for new carts (ISO code, e.g. "USD", "AUD")
@@ -347,6 +351,13 @@ impl AppState {
                 Default::default(),
                 None,
             ),
+            invoices: rcommerce_core::invoicing::InvoiceService::new(
+                pool.clone(),
+                Default::default(),
+                rcommerce_core::notification::i18n::BASE_LOCALE.to_string(),
+                false,
+            ),
+            peppol: None,
             price_lists: rcommerce_core::services::price_list_service::PriceListService::new(pool),
             accounting: params.accounting,
             default_currency: params.default_currency,

@@ -230,6 +230,19 @@ base_url = "https://erp.dianxiaomi.com"
 ## Notification Configuration
 
 ```toml
+[invoicing]                    # legal invoices (docs/architecture/peppol.md)
+enabled = false
+number_prefix = "F"            # F2026-00001
+payment_terms_days = 30
+[invoicing.seller]             # name, vat_number, company_number, street, city, postcode, country, iban, bic, email
+
+[peppol]                       # Peppol e-invoicing of invoices to companies
+enabled = false
+provider = "peppyrus"          # scrada, einvoicebe, falco, acube, b2brouter, iopole, superpdp, simulated
+production = false
+api_key = "env:PEPPOL_API_KEY"
+poll_minutes = 15
+
 [notifications]
 # Email sender
 from_name = "Your Store"

@@ -98,6 +98,7 @@ pub async fn build_app(config: &Config) -> Result<Router> {
         spawn_abandoned_order_sweeper(config, &app_state);
         spawn_catalogue_sync_loop(config, &app_state);
         spawn_subscription_billing_loop(config, &app_state);
+        spawn_peppol_loop(config, &app_state);
         spawn_state_cleanup(&app_state);
         Ok(build_router(
             app_state,
@@ -133,6 +134,7 @@ async fn build_multi_store_router(
         spawn_abandoned_order_sweeper(&store.config, &app_state);
         spawn_catalogue_sync_loop(&store.config, &app_state);
         spawn_subscription_billing_loop(&store.config, &app_state);
+        spawn_peppol_loop(&store.config, &app_state);
         spawn_state_cleanup(&app_state);
         let router = build_router(
             app_state,
@@ -1120,6 +1122,15 @@ async fn create_app_state(config: &Config) -> Result<AppState> {
         config.companies.vat_check,
         config.companies.vies_url.clone(),
     );
+    app_state.peppol =
+        rcommerce_core::peppol::PeppolService::new(&config.peppol, &config.invoicing.seller)?
+            .map(Arc::new);
+    app_state.invoices = rcommerce_core::invoicing::InvoiceService::new(
+        app_state.db.pool().clone(),
+        config.invoicing.clone(),
+        app_state.email_locale.clone(),
+        app_state.peppol.is_some(),
+    );
     Ok(app_state)
 }
 
@@ -1319,6 +1330,29 @@ fn spawn_abandoned_order_sweeper(config: &Config, app_state: &AppState) {
 /// logged and swallowed so one bad subscription never stops the loop. A run is
 /// skipped while another one (another instance, or the admin trigger) is in
 /// progress, so a subscription is never charged twice for a cycle.
+/// Send invoices waiting for Peppol and follow those on their way, every
+/// `peppol.poll_minutes`, one store instance at a time
+fn spawn_peppol_loop(config: &Config, app_state: &AppState) {
+    let Some(peppol) = app_state.peppol.clone() else {
+        return;
+    };
+    let minutes = config.peppol.poll_minutes.max(1);
+    info!("Peppol delivery loop enabled (every {} min)", minutes);
+    let invoices = app_state.invoices.clone();
+    let db = app_state.db.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(minutes * 60)).await;
+            let run = peppol.run_once(&invoices, |invoice| {
+                rcommerce_core::invoice::legal::invoice_pdf(invoice).ok()
+            });
+            if let Err(e) = run_exclusive(db.pool(), job_names::PEPPOL_DELIVERY, run).await {
+                warn!("Peppol delivery round failed: {}", e);
+            }
+        }
+    });
+}
+
 fn spawn_subscription_billing_loop(config: &Config, app_state: &AppState) {
     if !config.subscriptions.enabled {
         return;
@@ -1659,6 +1693,7 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         .merge(crate::routes::downloads_protected_router())
         // Company accounts and the customer's negotiated prices
         .merge(crate::routes::company::protected_router())
+        .merge(crate::routes::invoices::protected_router())
         .merge(crate::routes::price_lists::protected_router())
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),

@@ -215,6 +215,27 @@ crop = false
 #logo_url = "https://store.example.com/images/logo.png"
 #accent_color = "#ff4d00"
 
+# Legal invoices, issued when orders are collected or delivered, and their
+# Peppol delivery to companies (see docs/architecture/peppol.md)
+# [invoicing]
+# enabled = true
+# number_prefix = "F"
+# payment_terms_days = 30
+# [invoicing.seller]
+# name = "Store SA"
+# vat_number = "BE0123456749"
+# company_number = "0123456749"
+# street = "Rue du Commerce 1"
+# city = "Namur"
+# postcode = "5000"
+# country = "BE"
+# iban = "BE68539007547034"
+# [peppol]
+# enabled = true
+# provider = "peppyrus"        # scrada, einvoicebe, falco, acube, b2brouter, iopole, superpdp, simulated
+# production = false
+# api_key = "env:PEPPOL_API_KEY"
+
 [notifications]
 # Enable notifications (default: true)
 enabled = true

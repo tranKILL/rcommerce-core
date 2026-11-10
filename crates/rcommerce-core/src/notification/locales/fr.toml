@@ -192,3 +192,54 @@ Délai : {{ processing_time }}
 
 {{ company_name }}
 '''
+
+[invoice_document]
+title = "Facture"
+credit_note = "Note de crédit"
+number = "Numéro de facture"
+issue_date = "Date de facture"
+due_date = "Échéance"
+order = "Commande"
+seller = "Vendeur"
+buyer = "Client"
+vat_number = "TVA"
+company_number = "N° d'entreprise"
+description = "Description"
+quantity = "Qté"
+unit_price = "Prix unit. HTVA"
+vat_rate = "TVA"
+amount = "Montant HTVA"
+taxable = "Base imposable"
+vat_amount = "TVA"
+subtotal = "Total HTVA"
+total = "Total TVAC"
+paid = "Payé"
+amount_due = "Montant dû"
+pay_to = "À payer sur le compte"
+reference = "Communication structurée"
+reverse_charge = "Autoliquidation de la TVA (livraison intracommunautaire)"
+delivery = "Livraison"
+discount = "Remise"
+
+[invoice_issued]
+subject = "Votre facture {{ invoice_number }}"
+heading = "Votre facture"
+intro = "Bonjour {{ customer_name }}, voici la facture {{ invoice_number }} de votre commande {{ order_number }}."
+amount = "Total TVAC"
+status = "Statut"
+paid = "Payée, merci."
+due = "À payer avant le {{ due_date }} avec la communication structurée {{ payment_reference }}."
+peppol = "Votre entreprise recevant les factures électroniques, cette facture vous a aussi été envoyée via Peppol."
+attached = "La facture est jointe en PDF."
+text = '''
+Bonjour {{ customer_name }},
+
+Voici la facture {{ invoice_number }} de votre commande {{ order_number }}.
+
+Total TVAC : {{ invoice_total }}
+{{ payment_line }}
+
+La facture est jointe en PDF.
+
+{{ company_name }}
+'''

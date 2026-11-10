@@ -193,3 +193,54 @@ Processing Time: {{ processing_time }}
 
 {{ company_name }}
 '''
+
+[invoice_document]
+title = "Invoice"
+credit_note = "Credit note"
+number = "Invoice number"
+issue_date = "Issue date"
+due_date = "Due date"
+order = "Order"
+seller = "Seller"
+buyer = "Customer"
+vat_number = "VAT"
+company_number = "Company number"
+description = "Description"
+quantity = "Qty"
+unit_price = "Unit price excl. VAT"
+vat_rate = "VAT"
+amount = "Amount excl. VAT"
+taxable = "Taxable amount"
+vat_amount = "VAT"
+subtotal = "Total excl. VAT"
+total = "Total incl. VAT"
+paid = "Paid"
+amount_due = "Amount due"
+pay_to = "Please pay to"
+reference = "Structured communication"
+reverse_charge = "VAT reverse charge (intra-EU supply)"
+delivery = "Delivery"
+discount = "Discount"
+
+[invoice_issued]
+subject = "Your invoice {{ invoice_number }}"
+heading = "Your invoice"
+intro = "Hi {{ customer_name }}, here is the invoice {{ invoice_number }} for your order {{ order_number }}."
+amount = "Total incl. VAT"
+status = "Status"
+paid = "Paid, thank you."
+due = "To pay before {{ due_date }} with the structured communication {{ payment_reference }}."
+peppol = "As your company receives e-invoices, this invoice was also sent through Peppol."
+attached = "The invoice is attached as a PDF."
+text = '''
+Hi {{ customer_name }},
+
+Here is the invoice {{ invoice_number }} for your order {{ order_number }}.
+
+Total incl. VAT: {{ invoice_total }}
+{{ payment_line }}
+
+The invoice is attached as a PDF.
+
+{{ company_name }}
+'''

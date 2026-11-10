@@ -16,6 +16,8 @@ pub mod job_names {
     pub const SUBSCRIPTION_BILLING: &str = "subscription_billing";
     /// Dunning payment retries (admin trigger)
     pub const DUNNING_RETRIES: &str = "dunning_retries";
+    /// Peppol delivery of invoices (background loop)
+    pub const PEPPOL_DELIVERY: &str = "peppol_delivery";
 }
 
 /// Run `job` unless another database session is running the job of the same

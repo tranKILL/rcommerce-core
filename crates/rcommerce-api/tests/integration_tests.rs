@@ -103,6 +103,11 @@ pub struct TestApp {
 impl TestApp {
     /// Create a new test application with all services initialized
     pub async fn new() -> anyhow::Result<Self> {
+        Self::new_with(|_| {}).await
+    }
+
+    /// A test application whose state `customize` adjusts before its server starts
+    pub async fn new_with(customize: impl FnOnce(&mut AppState)) -> anyhow::Result<Self> {
         let config = TestConfig::default();
 
         // Initialize tracing
@@ -270,6 +275,7 @@ impl TestApp {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let server_addr = listener.local_addr()?;
 
+        customize(&mut app_state);
         // Build router
         let app = Self::build_router(app_state.clone());
 
@@ -4493,4 +4499,314 @@ async fn test_two_customers_race_for_the_last_units_of_a_branch() {
     } else {
         assert!(response.status().is_client_error());
     }
+}
+
+/// What a fake Peppyrus received: the API key and the JSON body of each message
+#[derive(Clone, Default)]
+struct FakePeppyrus {
+    sent: Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>,
+}
+
+/// A local stand-in for the Peppyrus API: Belgian participants (`0208:`) are
+/// registered, messages are accepted and then reported delivered
+async fn fake_peppyrus() -> (String, FakePeppyrus) {
+    use axum::extract::{Path as UrlPath, Query, State as AxumState};
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::Json;
+    let fake = FakePeppyrus::default();
+    let lookup = |Query(q): Query<std::collections::HashMap<String, String>>| async move {
+        match q.get("participantId") {
+            Some(p) if p.starts_with("0208:") => (
+                StatusCode::OK,
+                Json(serde_json::json!({ "participantId": p })),
+            ),
+            _ => (StatusCode::NOT_FOUND, Json(serde_json::json!({}))),
+        }
+    };
+    let message = |AxumState(fake): AxumState<FakePeppyrus>,
+                   headers: HeaderMap,
+                   Json(body): Json<serde_json::Value>| async move {
+        let key = headers
+            .get("X-Api-Key")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        fake.sent.lock().unwrap().push((key, body));
+        Json(serde_json::json!({ "id": "msg-1" }))
+    };
+    let status = |UrlPath(id): UrlPath<String>| async move {
+        Json(
+            serde_json::json!({ "id": id, "direction": "OUT", "folder": "sent", "confirmed": true }),
+        )
+    };
+    let app = Router::new()
+        .route("/v1/peppol/lookup", get(lookup))
+        .route("/v1/message", axum::routing::post(message))
+        .route("/v1/message/:id", get(status))
+        .with_state(fake.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, fake)
+}
+
+/// The test store's legal identity
+fn test_seller() -> rcommerce_core::invoicing::Party {
+    rcommerce_core::invoicing::Party {
+        name: "Test Store SA".into(),
+        vat_number: Some("BE0123456749".into()),
+        company_number: Some("0123456749".into()),
+        street: "Rue du Commerce 1".into(),
+        city: "Namur".into(),
+        postcode: "5000".into(),
+        country: "BE".into(),
+        iban: Some("BE68539007547034".into()),
+        ..Default::default()
+    }
+}
+
+/// A checkout step for a signed-in customer
+async fn checkout_as(
+    app: &TestApp,
+    token: &str,
+    step: &str,
+    body: serde_json::Value,
+) -> serde_json::Value {
+    let response = app
+        .http_client
+        .post(format!("{}/api/v1/checkout/{step}", app.base_url()))
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap_or_default();
+    assert!(status.is_success(), "{step}: {status} {body}");
+    body
+}
+
+/// A signed-in customer's paid pickup order at `location`; its id
+async fn customer_pickup_order(
+    app: &TestApp,
+    token: &str,
+    email: &str,
+    location: Uuid,
+    product: Uuid,
+) -> String {
+    let (_, cart) = call_json(app, token, "/carts/me", None).await;
+    let cart_id: Uuid = cart["cart"]["id"].as_str().unwrap().parse().unwrap();
+    app.add_item_to_cart(cart_id, product, 2, token)
+        .await
+        .unwrap();
+    let address = ownership_test_address();
+    let summary = checkout_as(
+        app,
+        token,
+        "initiate",
+        serde_json::json!({"cart_id": cart_id, "shipping_address": address, "currency": "USD"}),
+    )
+    .await;
+    let rate = summary["available_shipping_rates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["service_code"] == location.to_string())
+        .unwrap()
+        .clone();
+    let done = checkout_as(app, token, "complete", serde_json::json!({
+        "cart_id": cart_id, "shipping_address": address, "payment_method": {"type": "stripe_elements"},
+        "customer_email": email, "selected_shipping_rate": rate, "test": true, "locale": "fr"
+    }))
+    .await;
+    done["order"]["id"].as_str().unwrap().to_string()
+}
+
+/// A company's pickup order is collected: its invoice is issued (numbered,
+/// VAT per rate, buyer's company details), readable as PDF and UBL by the
+/// customer, and sent through Peppyrus to the company's Peppol id; the next
+/// round of the delivery job records it delivered. A second issue returns the
+/// same invoice; another customer cannot read it.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_invoice_issued_at_collection_and_sent_through_peppol() {
+    use rcommerce_core::peppol::{PeppolConfig, PeppolService, Provider};
+    let (peppyrus_url, peppyrus) = fake_peppyrus().await;
+    let app = TestApp::new_with(|state| {
+        let invoicing = rcommerce_core::config::InvoicingConfig {
+            enabled: true,
+            seller: test_seller(),
+            ..Default::default()
+        };
+        let peppol = PeppolConfig {
+            enabled: true,
+            provider: Provider::Peppyrus,
+            api_key: Some("test-key".into()),
+            base_url: Some(peppyrus_url),
+            ..Default::default()
+        };
+        state.peppol = PeppolService::new(&peppol, &invoicing.seller)
+            .unwrap()
+            .map(Arc::new);
+        state.invoices = rcommerce_core::invoicing::InvoiceService::new(
+            state.db.pool().clone(),
+            invoicing,
+            "en".into(),
+            true,
+        );
+    })
+    .await
+    .expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    let product = app
+        .create_test_product("Invoiced bricks", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 5, None)
+        .await
+        .unwrap();
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let vat = fresh_belgian_vat();
+    let (status, body) = call_json(
+        &app,
+        &token,
+        "/companies",
+        Some(serde_json::json!({"vat_number": vat, "name": "Invoiced Builders"})),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+
+    let order = customer_pickup_order(&app, &token, &customer.email, location, product).await;
+    let (status, body) = call_json(
+        &app,
+        &admin,
+        &format!("/orders/{order}/pickup/ready"),
+        Some(serde_json::json!({})),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = call_json(
+        &app,
+        &admin,
+        &format!("/orders/{order}/pickup/collected"),
+        Some(serde_json::json!({"collected_by": "J. Mason"})),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+
+    let (status, mine) =
+        call_json(&app, &token, &format!("/invoices?order_id={order}"), None).await;
+    assert_eq!(status, 200, "{mine}");
+    let invoice = mine["invoices"][0].clone();
+    let id = invoice["id"].as_str().unwrap().to_string();
+    assert!(
+        invoice["number"].as_str().unwrap().starts_with('F'),
+        "{invoice}"
+    );
+    assert_eq!(invoice["buyer"]["vat_number"], vat);
+    assert_eq!(invoice["buyer"]["name"], "Invoiced Builders");
+    assert_eq!(invoice["seller"]["vat_number"], "BE0123456749");
+    assert_eq!(invoice["locale"], "fr");
+    assert_eq!(invoice["subtotal"], "20.00", "{invoice}");
+    assert!(invoice["payment_reference"]
+        .as_str()
+        .unwrap()
+        .starts_with("+++"));
+
+    // The Peppol send runs in the background
+    let mut peppol_status = String::new();
+    for _ in 0..40 {
+        let (_, body) = call_json(&app, &token, &format!("/invoices/{id}"), None).await;
+        peppol_status = body["invoice"]["peppol_status"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if peppol_status != "pending" {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(peppol_status, "sent");
+    let sent = peppyrus.sent.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    let (key, message) = &sent[0];
+    assert_eq!(key, "test-key");
+    assert_eq!(message["sender"], "0208:0123456749");
+    assert_eq!(message["recipient"], format!("0208:{}", &vat[2..]));
+    assert!(message["documentType"]
+        .as_str()
+        .unwrap()
+        .contains("Invoice-2::Invoice"));
+    use base64::Engine;
+    let xml = String::from_utf8(
+        base64::engine::general_purpose::STANDARD
+            .decode(message["fileContent"].as_str().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(xml.contains(&format!(
+        "<cbc:ID>{}</cbc:ID>",
+        invoice["number"].as_str().unwrap()
+    )));
+    assert!(xml.contains("application/pdf"), "the PDF is embedded");
+
+    let peppol = app.app_state.peppol.clone().unwrap();
+    peppol
+        .run_once(&app.app_state.invoices, |_| None)
+        .await
+        .unwrap();
+    let (_, body) = call_json(&app, &token, &format!("/invoices/{id}"), None).await;
+    assert_eq!(body["invoice"]["peppol_status"], "delivered");
+
+    let pdf = app
+        .http_client
+        .get(format!("{}/api/v1/invoices/{id}/pdf", app.base_url()))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pdf.status(), 200);
+    assert!(pdf.bytes().await.unwrap().starts_with(b"%PDF"));
+    let ubl = app
+        .http_client
+        .get(format!("{}/api/v1/invoices/{id}/ubl", app.base_url()))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert!(ubl.text().await.unwrap().contains("<cbc:CustomizationID>"));
+
+    let (status, again) = call_json(
+        &app,
+        &admin,
+        &format!("/admin/orders/{order}/invoice"),
+        Some(serde_json::json!({})),
+    )
+    .await;
+    assert_eq!(status, 201, "{again}");
+    assert_eq!(again["invoice"]["number"], invoice["number"], "issued once");
+    let (status, list) = call_json(
+        &app,
+        &admin,
+        &format!("/admin/invoices?q={}", invoice["number"].as_str().unwrap()),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status.as_u16(), list["meta"]["total"].as_i64()),
+        (200, Some(1)),
+        "{list}"
+    );
+    let (other, password) = app.create_test_customer().await.unwrap();
+    let other_token = app.login(&other.email, &password).await.unwrap();
+    assert_eq!(
+        call_json(&app, &other_token, &format!("/invoices/{id}"), None)
+            .await
+            .0,
+        404
+    );
 }

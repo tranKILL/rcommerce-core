@@ -29,6 +29,14 @@ pub struct Config {
     #[serde(default)]
     pub companies: CompaniesConfig,
 
+    /// Legal invoices issued when orders are collected or delivered
+    #[serde(default)]
+    pub invoicing: InvoicingConfig,
+
+    /// Peppol e-invoicing of invoices to companies
+    #[serde(default)]
+    pub peppol: crate::peppol::PeppolConfig,
+
     #[serde(default)]
     pub rate_limiting: RateLimitConfig,
 
@@ -837,6 +845,50 @@ pub struct ImageSize {
     pub width: u32,
     pub height: u32,
     pub crop: bool,
+}
+
+/// `[invoicing]`: legal invoices, issued when an order's goods are handed
+/// over (collected or delivered); off by default
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvoicingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Numbers are `{prefix}{year}-{sequence:05}` (`F2026-00001`)
+    #[serde(default = "default_invoice_prefix")]
+    pub number_prefix: String,
+    /// Days to pay an invoice not paid online
+    #[serde(default = "default_payment_terms")]
+    pub payment_terms_days: i64,
+    /// Time zone of the issue date
+    #[serde(default = "default_invoice_timezone")]
+    pub timezone: String,
+    /// The store's legal identity, printed on every invoice
+    #[serde(default)]
+    pub seller: crate::invoicing::Party,
+}
+
+fn default_invoice_prefix() -> String {
+    "F".to_string()
+}
+
+fn default_payment_terms() -> i64 {
+    30
+}
+
+fn default_invoice_timezone() -> String {
+    "Europe/Brussels".to_string()
+}
+
+impl Default for InvoicingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            number_prefix: default_invoice_prefix(),
+            payment_terms_days: default_payment_terms(),
+            timezone: default_invoice_timezone(),
+            seller: crate::invoicing::Party::default(),
+        }
+    }
 }
 
 /// Company accounts: how a VAT number is checked when a company signs up

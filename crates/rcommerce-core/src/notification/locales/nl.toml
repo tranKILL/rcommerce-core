@@ -192,3 +192,54 @@ Verwerkingstijd: {{ processing_time }}
 
 {{ company_name }}
 '''
+
+[invoice_document]
+title = "Factuur"
+credit_note = "Creditnota"
+number = "Factuurnummer"
+issue_date = "Factuurdatum"
+due_date = "Vervaldatum"
+order = "Bestelling"
+seller = "Verkoper"
+buyer = "Klant"
+vat_number = "Btw"
+company_number = "Ondernemingsnummer"
+description = "Omschrijving"
+quantity = "Aantal"
+unit_price = "Prijs/st. excl. btw"
+vat_rate = "Btw"
+amount = "Bedrag excl. btw"
+taxable = "Maatstaf van heffing"
+vat_amount = "Btw"
+subtotal = "Totaal excl. btw"
+total = "Totaal incl. btw"
+paid = "Betaald"
+amount_due = "Te betalen"
+pay_to = "Te betalen op rekening"
+reference = "Gestructureerde mededeling"
+reverse_charge = "Btw verlegd (intracommunautaire levering)"
+delivery = "Levering"
+discount = "Korting"
+
+[invoice_issued]
+subject = "Uw factuur {{ invoice_number }}"
+heading = "Uw factuur"
+intro = "Beste {{ customer_name }}, hier is factuur {{ invoice_number }} voor uw bestelling {{ order_number }}."
+amount = "Totaal incl. btw"
+status = "Status"
+paid = "Betaald, bedankt."
+due = "Te betalen vóór {{ due_date }} met de gestructureerde mededeling {{ payment_reference }}."
+peppol = "Omdat uw bedrijf e-facturen ontvangt, werd deze factuur ook via Peppol verstuurd."
+attached = "De factuur zit als pdf bij deze e-mail."
+text = '''
+Beste {{ customer_name }},
+
+Hier is factuur {{ invoice_number }} voor uw bestelling {{ order_number }}.
+
+Totaal incl. btw: {{ invoice_total }}
+{{ payment_line }}
+
+De factuur zit als pdf bij deze e-mail.
+
+{{ company_name }}
+'''

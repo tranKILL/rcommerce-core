@@ -176,6 +176,7 @@ pub async fn mark_delivered(
         .await?;
     release_committed_stock(&mut tx, id).await?;
     tx.commit().await?;
+    super::invoices::issue_after_handover(&state, id).await;
     let order = fetch_order(&state, id).await?;
     Ok(Json(build_order_response(&state, order).await?))
 }
