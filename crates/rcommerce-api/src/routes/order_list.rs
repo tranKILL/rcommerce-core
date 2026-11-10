@@ -7,6 +7,7 @@ use axum::{
     extract::{Query, State},
     Extension, Json,
 };
+use rcommerce_core::list_sort::{order_by, SortColumns};
 use rcommerce_core::{Action, Error, Resource};
 use serde::Deserialize;
 use sqlx::{Postgres, QueryBuilder};
@@ -41,7 +42,38 @@ pub struct OrderListQuery {
     pub location_id: Option<Uuid>,
     /// Only pickup orders (`true`), or only the others (`false`)
     pub pickup: Option<bool>,
+    /// `date` (default `-date`), `number`, `customer`, `items`, `total`,
+    /// `mode` or `stage`; `-` in front for descending order
+    pub sort: Option<String>,
 }
+
+/// Columns the order list can be sorted on. `stage` follows an order's life:
+/// awaiting payment, received, preparing, ready, shipped, completed, then
+/// cancelled or refunded.
+const ORDER_SORTS: SortColumns = &[
+    ("date", "created_at"),
+    ("number", "order_number"),
+    (
+        "customer",
+        "lower(COALESCE(NULLIF(TRIM(CONCAT(shipping_address->>'first_name', ' ', \
+         shipping_address->>'last_name')), ''), customer_email))",
+    ),
+    (
+        "items",
+        "(SELECT SUM(i.quantity) FROM order_items i WHERE i.order_id = orders.id)",
+    ),
+    ("total", "total"),
+    ("mode", "(metadata->'pickup') IS NULL"),
+    (
+        "stage",
+        "CASE WHEN status::text = 'pending' THEN 0 \
+         WHEN status::text IN ('cancelled', 'refunded') THEN 7 \
+         WHEN status::text = 'completed' THEN 6 \
+         WHEN metadata->'pickup'->>'ready_marked_at' IS NOT NULL THEN 4 \
+         WHEN fulfillment_status::text = 'shipped' THEN 5 \
+         WHEN status::text = 'processing' THEN 3 ELSE 2 END",
+    ),
+];
 
 /// The status filter in its database spelling; unknown statuses are a 400
 fn status_filter(status: Option<&str>) -> Result<Option<&'static str>, Error> {
@@ -116,8 +148,27 @@ async fn item_counts(state: &AppState, ids: &[Uuid]) -> Result<HashMap<Uuid, i64
     Ok(rows.into_iter().collect())
 }
 
-/// GET /orders - the customer's orders, or all orders for staff, newest first.
-/// Lines are not included (see `GET /orders/:id`); `item_count` gives their size.
+/// Order summaries with their number of articles
+pub(crate) async fn summaries(
+    state: &AppState,
+    orders: Vec<rcommerce_core::models::Order>,
+) -> Result<Vec<super::order::OrderResponse>, Error> {
+    let ids: Vec<Uuid> = orders.iter().map(|o| o.id).collect();
+    let counts = item_counts(state, &ids).await?;
+    Ok(orders
+        .into_iter()
+        .map(|o| {
+            let count = counts.get(&o.id).copied().unwrap_or(0);
+            let mut summary = order_summary(o);
+            summary.item_count = Some(count);
+            summary
+        })
+        .collect())
+}
+
+/// GET /orders - the customer's orders, or all orders for staff, newest first
+/// unless sorted otherwise. Lines are not included (see `GET /orders/:id`);
+/// `item_count` gives their size.
 pub async fn list_orders(
     State(state): State<AppState>,
     Extension(auth): Extension<JwtAuth>,
@@ -126,6 +177,7 @@ pub async fn list_orders(
     let all = staff_can(&state, &auth, Resource::Orders, Action::Read).await;
     let customer = (!all).then_some(auth.customer_id);
     let status = status_filter(query.status.as_deref())?;
+    let order = order_by(query.sort.as_deref(), ORDER_SORTS, "-date", "id")?;
     let per_page = query
         .per_page
         .unwrap_or(DEFAULT_PER_PAGE)
@@ -142,24 +194,15 @@ pub async fn list_orders(
     let mut select = QueryBuilder::new(format!("SELECT {ORDER_COLUMNS} FROM orders"));
     push_filters(&mut select, customer, status, &query);
     select
-        .push(" ORDER BY created_at DESC, id LIMIT ")
+        .push(format!(" ORDER BY {order} LIMIT "))
         .push_bind(per_page)
         .push(" OFFSET ")
         .push_bind((page - 1) * per_page);
-    let orders: Vec<rcommerce_core::models::Order> =
-        select.build_query_as().fetch_all(state.db.pool()).await?;
-
-    let ids: Vec<Uuid> = orders.iter().map(|o| o.id).collect();
-    let counts = item_counts(&state, &ids).await?;
-    let orders: Vec<_> = orders
-        .into_iter()
-        .map(|o| {
-            let count = counts.get(&o.id).copied().unwrap_or(0);
-            let mut summary = order_summary(o);
-            summary.item_count = Some(count);
-            summary
-        })
-        .collect();
+    let orders = summaries(
+        &state,
+        select.build_query_as().fetch_all(state.db.pool()).await?,
+    )
+    .await?;
     Ok(Json(serde_json::json!({
         "orders": orders,
         "meta": {

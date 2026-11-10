@@ -10,6 +10,7 @@ pub mod inventory;
 pub mod invoice;
 pub mod invoicing;
 pub mod jobs;
+pub mod list_sort;
 pub mod media;
 pub mod middleware;
 pub mod models;

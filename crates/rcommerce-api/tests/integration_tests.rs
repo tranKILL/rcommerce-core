@@ -4810,3 +4810,72 @@ async fn test_invoice_issued_at_collection_and_sent_through_peppol() {
         404
     );
 }
+
+/// The last word of each product title in a staff product list
+fn title_ends(body: &serde_json::Value) -> String {
+    body["products"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            p["title"]
+                .as_str()
+                .unwrap()
+                .rsplit(' ')
+                .next()
+                .unwrap()
+                .to_string()
+        })
+        .collect()
+}
+
+/// Staff lists sort on the column asked for, up or down (`-`), with their
+/// usual order by default; an unknown column is a 400
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_staff_lists_sort_by_column() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let marker = Uuid::new_v4().simple().to_string()[..8].to_string();
+    for (name, cents, stock) in [("B", 500, 1), ("A", 1500, 9), ("C", 1000, 4)] {
+        app.create_test_product(
+            &format!("Sorted {marker} {name}"),
+            Decimal::new(cents, 2),
+            stock,
+        )
+        .await
+        .unwrap();
+    }
+    let products = format!("/admin/products?q=sorted%20{marker}");
+    for (sort, expected) in [
+        ("", "ABC"),
+        ("-title", "CBA"),
+        ("price", "BCA"),
+        ("-available", "ACB"),
+    ] {
+        let (status, body) =
+            call_json(&app, &admin, &format!("{products}&sort={sort}"), None).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(title_ends(&body), expected, "sort={sort}");
+    }
+    let (status, body) =
+        call_json(&app, &admin, &format!("{products}&sort=cost_price"), None).await;
+    assert_eq!(status, 400, "{body}");
+
+    let levels = format!("/admin/inventory/levels?q=sorted%20{marker}&sort=-available");
+    let (status, body) = call_json(&app, &admin, &levels, None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["levels"][0]["available"], 9);
+    for path in [
+        "/orders?sort=-total",
+        "/orders?sort=stage",
+        "/customers?sort=email",
+        "/admin/invoices?sort=due",
+        "/admin/companies?sort=name",
+        "/admin/inventory/movements?sort=quantity&q=sorted",
+    ] {
+        let (status, body) = call_json(&app, &admin, path, None).await;
+        assert_eq!(status, 200, "{path}: {body}");
+    }
+    app.cleanup().await.ok();
+}

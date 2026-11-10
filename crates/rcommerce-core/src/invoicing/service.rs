@@ -10,6 +10,7 @@ use super::{
     invoice_number, rate_of, structured_reference, vat_breakdown, Invoice, InvoiceLine, Party,
 };
 use crate::config::InvoicingConfig;
+use crate::list_sort::{order_by, SortColumns};
 use crate::notification::i18n;
 use crate::{Error, Result};
 
@@ -62,6 +63,17 @@ struct Draft<'a> {
 }
 
 /// Staff search of invoices
+/// Columns the invoice list can be sorted on
+const INVOICE_SORTS: SortColumns = &[
+    ("date", "issue_date"),
+    ("number", "number"),
+    ("customer", "lower(buyer->>'name')"),
+    ("total", "total"),
+    ("due", "total - paid_amount"),
+    ("due_date", "due_date"),
+    ("peppol", "peppol_status"),
+];
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct InvoiceQuery {
     /// Part of the number, the order number or the buyer's name
@@ -69,6 +81,9 @@ pub struct InvoiceQuery {
     /// Peppol status (`pending`, `sent`, `delivered`, `failed`, `not_on_peppol`)
     pub peppol_status: Option<String>,
     pub company_id: Option<Uuid>,
+    /// `date` (default `-date`), `number`, `customer`, `total`, `due`,
+    /// `due_date` or `peppol`; `-` in front for descending order
+    pub sort: Option<String>,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
 }
@@ -497,8 +512,9 @@ impl InvoiceService {
             .map(|q| format!("%{}%", q.trim().replace(['%', '_'], "")));
         let filter = "WHERE ($1::text IS NULL OR number ILIKE $1 OR order_number ILIKE $1 OR buyer->>'name' ILIKE $1) \
                       AND ($2::text IS NULL OR peppol_status = $2) AND ($3::uuid IS NULL OR company_id = $3)";
+        let order = order_by(query.sort.as_deref(), INVOICE_SORTS, "-date", "number DESC")?;
         let invoices = sqlx::query_as::<_, Invoice>(&format!(
-            "SELECT * FROM invoices {filter} ORDER BY issue_date DESC, number DESC LIMIT $4 OFFSET $5"
+            "SELECT * FROM invoices {filter} ORDER BY {order} LIMIT $4 OFFSET $5"
         ))
         .bind(&q)
         .bind(&query.peppol_status)

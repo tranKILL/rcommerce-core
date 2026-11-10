@@ -13,6 +13,7 @@ use sqlx::{Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::state::AppState;
+use rcommerce_core::list_sort::{order_by, SortColumns};
 use rcommerce_core::Error;
 
 const DEFAULT_PER_PAGE: i64 = 50;
@@ -52,6 +53,9 @@ pub struct StaffProductQuery {
     pub q: Option<String>,
     /// Only active (`true`) or inactive (`false`) products
     pub active: Option<bool>,
+    /// `title` (default), `sku`, `price`, `available`, `active`, `featured` or
+    /// `updated`; `-` in front for descending order
+    pub sort: Option<String>,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
 }
@@ -87,13 +91,26 @@ fn product_filters(qb: &mut QueryBuilder<'_, Postgres>, query: &StaffProductQuer
     }
 }
 
-/// GET /admin/products - every product, active or not, by title, with its free
-/// stock summed over locations (staff with `products:read`)
+/// Columns the staff product list can be sorted on
+const PRODUCT_SORTS: SortColumns = &[
+    ("title", "lower(p.title)"),
+    ("sku", "p.sku"),
+    ("price", "p.price"),
+    ("available", "available"),
+    ("active", "p.is_active"),
+    ("featured", "p.is_featured"),
+    ("updated", "p.updated_at"),
+];
+
+/// GET /admin/products - every product, active or not, by title unless sorted
+/// otherwise, with its free stock summed over locations (staff with
+/// `products:read`)
 pub async fn list_products(
     State(state): State<AppState>,
     Query(query): Query<StaffProductQuery>,
 ) -> Result<Json<serde_json::Value>, Error> {
     let (page, per_page) = paging(query.page, query.per_page);
+    let order = order_by(query.sort.as_deref(), PRODUCT_SORTS, "title", "p.id")?;
     let mut count = QueryBuilder::new("SELECT COUNT(*) FROM products p");
     product_filters(&mut count, &query);
     let total: i64 = count
@@ -110,7 +127,7 @@ pub async fn list_products(
     );
     product_filters(&mut select, &query);
     select
-        .push(" ORDER BY p.title, p.id LIMIT ")
+        .push(format!(" ORDER BY {order} LIMIT "))
         .push_bind(per_page)
         .push(" OFFSET ")
         .push_bind((page - 1) * per_page);
@@ -126,9 +143,20 @@ pub async fn list_products(
 pub struct CustomerQuery {
     /// Part of the e-mail, first name or last name
     pub q: Option<String>,
+    /// `since` (default `-since`), `name`, `email` or `phone`; `-` in front for
+    /// descending order
+    pub sort: Option<String>,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
 }
+
+/// Columns the staff customer list can be sorted on
+const CUSTOMER_SORTS: SortColumns = &[
+    ("since", "created_at"),
+    ("name", "lower(first_name || ' ' || last_name)"),
+    ("email", "lower(email)"),
+    ("phone", "phone"),
+];
 
 /// A customer row of the staff list
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -156,18 +184,21 @@ fn customer_filters(qb: &mut QueryBuilder<'_, Postgres>, query: &CustomerQuery) 
             .push(" OR first_name ILIKE ")
             .push_bind(pattern.clone())
             .push(" OR last_name ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR phone ILIKE ")
             .push_bind(pattern)
             .push(")");
     }
 }
 
-/// Customers, newest first, found by part of their e-mail or name. The caller
-/// checks the staff permission.
+/// Customers, newest first unless sorted otherwise, found by part of their
+/// e-mail, name or phone. The caller checks the staff permission.
 pub async fn customer_page(
     state: &AppState,
     query: &CustomerQuery,
 ) -> Result<serde_json::Value, Error> {
     let (page, per_page) = paging(query.page, query.per_page);
+    let order = order_by(query.sort.as_deref(), CUSTOMER_SORTS, "-since", "id")?;
     let mut count = QueryBuilder::new("SELECT COUNT(*) FROM customers");
     customer_filters(&mut count, query);
     let total: i64 = count
@@ -181,7 +212,7 @@ pub async fn customer_page(
     );
     customer_filters(&mut select, query);
     select
-        .push(" ORDER BY created_at DESC, id LIMIT ")
+        .push(format!(" ORDER BY {order} LIMIT "))
         .push_bind(per_page)
         .push(" OFFSET ")
         .push_bind((page - 1) * per_page);

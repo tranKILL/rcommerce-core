@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::list_sort::{order_by, SortColumns};
 use crate::tax::{VatId, ViesValidator};
 use crate::{Error, Result};
 
@@ -103,12 +104,23 @@ pub struct CompanyUpdate {
     pub customer_group_id: Option<Uuid>,
 }
 
+/// Columns the company list can be sorted on
+const COMPANY_SORTS: SortColumns = &[
+    ("since", "created_at"),
+    ("name", "lower(name)"),
+    ("vat_number", "vat_number"),
+    ("status", "status"),
+];
+
 /// Search of the staff company list
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CompanyQuery {
     /// Part of the name or VAT number
     pub q: Option<String>,
     pub status: Option<String>,
+    /// `since` (default `-since`), `name`, `vat_number` or `status`; `-` in
+    /// front for descending order
+    pub sort: Option<String>,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
 }
@@ -389,8 +401,9 @@ impl CompanyService {
             .map(|q| format!("%{}%", q.trim().replace(['%', '_'], "")));
         let filter = "WHERE ($1::text IS NULL OR name ILIKE $1 OR vat_number ILIKE $1) \
                       AND ($2::text IS NULL OR status = $2)";
+        let order = order_by(query.sort.as_deref(), COMPANY_SORTS, "-since", "id")?;
         let companies = sqlx::query_as::<_, Company>(&format!(
-            "SELECT * FROM companies {filter} ORDER BY created_at DESC LIMIT $3 OFFSET $4"
+            "SELECT * FROM companies {filter} ORDER BY {order} LIMIT $3 OFFSET $4"
         ))
         .bind(&q)
         .bind(&query.status)

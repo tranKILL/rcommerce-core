@@ -18,6 +18,7 @@ use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::inventory::tracking::StockMovementType;
+use crate::list_sort::{order_by, SortColumns};
 use crate::{Error, Result};
 
 /// Why stock was changed by hand
@@ -104,9 +105,22 @@ pub struct LevelFilter {
     /// Only rows at or below their reorder point
     #[serde(default)]
     pub low_only: bool,
+    /// `product` (default), `sku`, `branch`, `available`, `reserved` or
+    /// `reorder_point`; `-` in front for descending order
+    pub sort: Option<String>,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
 }
+
+/// Columns the stock level list can be sorted on
+const LEVEL_SORTS: SortColumns = &[
+    ("product", "lower(p.title)"),
+    ("sku", "COALESCE(v.sku, p.sku)"),
+    ("branch", "lower(l.name)"),
+    ("available", "lv.available_quantity"),
+    ("reserved", "lv.reserved_quantity"),
+    ("reorder_point", "lv.reorder_point"),
+];
 
 impl LevelFilter {
     /// (limit, offset), 50 per page by default, at most 200
@@ -134,14 +148,19 @@ const LEVEL_FROM: &str = "FROM inventory_levels lv \
             OR v.sku ILIKE '%' || $3 || '%') \
        AND (NOT $4 OR lv.available_quantity <= lv.reorder_point)";
 
-/// A page of stock levels (by product title, then location) and the total
-/// number of matching rows
+/// A page of stock levels (by product title, then location, unless sorted
+/// otherwise) and the total number of matching rows
 pub async fn list_levels(pool: &PgPool, filter: &LevelFilter) -> Result<(Vec<StockLevelRow>, i64)> {
     let (limit, offset) = filter.window();
     let q = filter.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
+    let order = order_by(
+        filter.sort.as_deref(),
+        LEVEL_SORTS,
+        "product",
+        "v.title NULLS FIRST, l.name, lv.id",
+    )?;
     let rows = sqlx::query_as::<_, StockLevelRow>(&format!(
-        "SELECT {LEVEL_COLUMNS} {LEVEL_FROM} ORDER BY p.title, v.title NULLS FIRST, l.name \
-         LIMIT $5 OFFSET $6"
+        "SELECT {LEVEL_COLUMNS} {LEVEL_FROM} ORDER BY {order} LIMIT $5 OFFSET $6"
     ))
     .bind(filter.location_id)
     .bind(filter.product_id)
@@ -554,35 +573,56 @@ pub struct MovementFilter {
     pub product_id: Option<Uuid>,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
+    /// Case-insensitive match on product title, SKU or the movement's reference
+    pub q: Option<String>,
+    /// `date` (default `-date`), `product`, `branch`, `quantity`, `reason` or
+    /// `reference`; `-` in front for descending order
+    pub sort: Option<String>,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
 }
+
+/// Columns the movement history can be sorted on
+const MOVEMENT_SORTS: SortColumns = &[
+    ("date", "m.created_at"),
+    ("product", "lower(p.title)"),
+    ("branch", "l.code"),
+    ("quantity", "m.quantity"),
+    ("reason", "COALESCE(m.reason, m.movement_type::text)"),
+    ("reference", "lower(m.reference)"),
+];
 
 const MOVEMENT_FROM: &str = "FROM stock_movements m \
      JOIN products p ON p.id = m.product_id \
      JOIN inventory_locations l ON l.id = m.location_id \
      LEFT JOIN product_variants v ON v.id = m.variant_id \
      WHERE ($1::uuid IS NULL OR m.location_id = $1) AND ($2::uuid IS NULL OR m.product_id = $2) \
-       AND ($3::timestamptz IS NULL OR m.created_at >= $3) AND ($4::timestamptz IS NULL OR m.created_at < $4)";
+       AND ($3::timestamptz IS NULL OR m.created_at >= $3) AND ($4::timestamptz IS NULL OR m.created_at < $4) \
+       AND ($5::text IS NULL OR p.title ILIKE '%' || $5 || '%' OR p.sku ILIKE '%' || $5 || '%' \
+            OR v.sku ILIKE '%' || $5 || '%' OR m.reference ILIKE '%' || $5 || '%')";
 
-/// A page of stock movements, newest first, and the total number of matches
+/// A page of stock movements, newest first unless sorted otherwise, and the
+/// total number of matches
 pub async fn list_movements(
     pool: &PgPool,
     filter: &MovementFilter,
 ) -> Result<(Vec<MovementRow>, i64)> {
     let per_page = filter.per_page.unwrap_or(50).clamp(1, 200);
     let offset = (filter.page.unwrap_or(1).max(1) - 1) * per_page;
+    let q = filter.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
+    let order = order_by(filter.sort.as_deref(), MOVEMENT_SORTS, "-date", "m.id")?;
     let rows = sqlx::query_as::<_, MovementRow>(&format!(
         "SELECT m.id, m.product_id, m.variant_id, COALESCE(v.sku, p.sku) AS sku, \
          CASE WHEN v.id IS NULL THEN p.title ELSE p.title || ' – ' || v.title END AS title, \
          m.location_id, l.code AS location_code, m.quantity, m.movement_type::text AS movement_type, \
          m.reason, m.reference, m.notes, m.cost_per_unit, m.created_by, m.created_at \
-         {MOVEMENT_FROM} ORDER BY m.created_at DESC, m.id LIMIT $5 OFFSET $6"
+         {MOVEMENT_FROM} ORDER BY {order} LIMIT $6 OFFSET $7"
     ))
     .bind(filter.location_id)
     .bind(filter.product_id)
     .bind(filter.from)
     .bind(filter.to)
+    .bind(q)
     .bind(per_page)
     .bind(offset)
     .fetch_all(pool)
@@ -592,6 +632,7 @@ pub async fn list_movements(
         .bind(filter.product_id)
         .bind(filter.from)
         .bind(filter.to)
+        .bind(q)
         .fetch_one(pool)
         .await?;
     Ok((rows, total))
