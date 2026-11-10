@@ -445,15 +445,19 @@ pub async fn admin_middleware(
 }
 
 /// The staff permissions of a caller that is not a global admin, if one of its
-/// roles grants this admin route; 403 otherwise
+/// roles grants this admin route (any role, for the routes open to all staff);
+/// 403 otherwise
 async fn staff_permissions(
     state: &AppState,
     customer_id: uuid::Uuid,
     method: &Method,
     path: &str,
 ) -> Result<Vec<String>, StatusCode> {
-    let (resource, action) =
-        staff_access::staff_permission(method, path).ok_or(StatusCode::FORBIDDEN)?;
+    let needed = staff_access::staff_permission(method, path);
+    let any_staff = staff_access::open_to_any_staff(method, path);
+    if needed.is_none() && !any_staff {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let granted = StaffService::new(state.db.clone())
         .permissions_for(customer_id)
         .await
@@ -461,7 +465,12 @@ async fn staff_permissions(
             tracing::error!("Failed to load staff permissions: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-    let allowed = ScopeChecker::new(&granted).is_ok_and(|checker| checker.can(resource, action));
+    let allowed = match needed {
+        Some((resource, action)) => {
+            ScopeChecker::new(&granted).is_ok_and(|checker| checker.can(resource, action))
+        }
+        None => !granted.is_empty(),
+    };
     if !allowed {
         return Err(StatusCode::FORBIDDEN);
     }

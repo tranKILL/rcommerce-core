@@ -176,6 +176,8 @@ pub struct AppState {
     pub invoices: rcommerce_core::invoicing::InvoiceService,
     /// Peppol delivery of invoices to companies, when enabled
     pub peppol: Option<Arc<rcommerce_core::peppol::PeppolService>>,
+    /// Figures of the back-office home
+    pub dashboard: rcommerce_core::services::dashboard_service::DashboardService,
     /// Accounting export configuration (store code/name, site URL)
     pub accounting: rcommerce_core::config::AccountingConfig,
     /// Store base currency for new carts (ISO code, e.g. "USD", "AUD")
@@ -358,6 +360,10 @@ impl AppState {
                 false,
             ),
             peppol: None,
+            dashboard: rcommerce_core::services::dashboard_service::DashboardService::new(
+                pool.clone(),
+                "Europe/Brussels",
+            ),
             price_lists: rcommerce_core::services::price_list_service::PriceListService::new(pool),
             accounting: params.accounting,
             default_currency: params.default_currency,

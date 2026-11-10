@@ -4879,3 +4879,87 @@ async fn test_staff_lists_sort_by_column() {
     }
     app.cleanup().await.ok();
 }
+
+/// Give `staff` one role with `permissions`
+async fn assign_role(app: &TestApp, admin: &str, staff: Uuid, permissions: serde_json::Value) {
+    use reqwest::Method;
+    let role =
+        serde_json::json!({"name": format!("Role {}", Uuid::new_v4()), "permissions": permissions});
+    let (status, body) =
+        admin_api_call(app, admin, Method::POST, "/admin/staff/roles", Some(role)).await;
+    assert_eq!(status, 201, "{body}");
+    let assign = serde_json::json!({"role_ids": [body["role"]["id"]]});
+    let roles_path = format!("/admin/staff/members/{staff}/roles");
+    let (status, body) = admin_api_call(app, admin, Method::PUT, &roles_path, Some(assign)).await;
+    assert_eq!(status, 200, "{body}");
+}
+
+/// A new pickup branch with 5 units of a product, and a customer's order of
+/// 2 of them to collect there; the branch and the order
+async fn branch_with_a_pickup_order(app: &TestApp, admin: &str) -> (Uuid, String) {
+    let location = create_pickup_location(app, admin).await;
+    let product = app
+        .create_test_product("Dashboard bricks", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 5, None)
+        .await
+        .unwrap();
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let order = customer_pickup_order(app, &token, &customer.email, location, product).await;
+    (location, order)
+}
+
+/// Any staff member reads their own rights and the dashboard, which shows
+/// only the parts their roles cover; customers reach neither. A branch's new
+/// pickup order is counted and listed as work to do.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_dashboard_follows_staff_roles() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (staff, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&staff.email, &password).await.unwrap();
+    for path in ["/admin/dashboard", "/admin/staff/me"] {
+        let (status, _) = call_json(&app, &token, path, None).await;
+        assert_eq!(status, 403, "{path}");
+    }
+    let (status, board) = call_json(&app, &admin, "/admin/dashboard", None).await;
+    assert_eq!(status, 200, "{board}");
+    for part in [
+        "orders",
+        "sales",
+        "stock",
+        "invoices",
+        "customers",
+        "catalogue",
+    ] {
+        assert!(board[part].is_object(), "{part}: {board}");
+    }
+    assert_eq!(board["sales"]["days"].as_array().unwrap().len(), 14);
+    let (_, me) = call_json(&app, &admin, "/admin/staff/me", None).await;
+    assert_eq!(me["is_admin"], true);
+
+    let counter = serde_json::json!(["orders:write", "inventory:read"]);
+    assign_role(&app, &admin, staff.id, counter).await;
+    let (_, me) = call_json(&app, &token, "/admin/staff/me", None).await;
+    assert_eq!(me["is_admin"], false);
+    let expected = serde_json::json!(["inventory:read", "orders:write"]);
+    assert_eq!(me["permissions"], expected);
+
+    let (location, order) = branch_with_a_pickup_order(&app, &admin).await;
+    let path = format!("/admin/dashboard?location_id={location}");
+    let (status, board) = call_json(&app, &token, &path, None).await;
+    assert_eq!(status, 200, "{board}");
+    for hidden in ["sales", "customers", "catalogue"] {
+        assert!(board[hidden].is_null(), "{hidden}: {board}");
+    }
+    assert!(board["invoices"].is_object(), "{board}");
+    assert_eq!(board["orders"]["pickups_to_prepare"], 1, "{board}");
+    assert_eq!(board["orders"]["next"][0]["id"], order.as_str());
+    assert_eq!(board["stock"]["out_of_stock"], 0, "3 of 5 left: {board}");
+    app.cleanup().await.ok();
+}

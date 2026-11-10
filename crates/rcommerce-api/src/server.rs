@@ -1131,6 +1131,10 @@ async fn create_app_state(config: &Config) -> Result<AppState> {
         app_state.email_locale.clone(),
         app_state.peppol.is_some(),
     );
+    app_state.dashboard = rcommerce_core::services::dashboard_service::DashboardService::new(
+        app_state.db.pool().clone(),
+        &config.invoicing.timezone,
+    );
     app_state.branding.pdf_logo = pdf_logo(config);
     app_state.branding.address_lines = config.invoicing.seller.address_lines();
     Ok(app_state)

@@ -27,8 +27,15 @@ A role lists permissions in the API key scope format, `<resource>:<action>`:
 | `/admin/statistics/...`, `/admin/stats` | `reports` |
 | `/admin/subscriptions/...`, `/admin/dunning/...` | `payments` |
 | `/admin/inventory/...` | `inventory` |
+| `/admin/companies/...`, `/admin/customer-groups/...` | `customers` |
+| `/admin/price-lists/...` | `products` |
+| `/admin/invoices/...` | `orders` |
 
-Routes outside this table stay reserved to global admins: `/admin/api-keys` and
+`GET /admin/dashboard` and `GET /admin/staff/me` are open to any staff member,
+whatever their roles; the dashboard shows each part only to roles that can
+read it (see [10-staff-dashboard.md](10-staff-dashboard.md)).
+
+Other routes stay reserved to global admins: `/admin/api-keys` and
 the staff management routes below. A new admin route is closed to staff until
 it is added to the table in `crates/rcommerce-api/src/middleware/staff_access.rs`.
 

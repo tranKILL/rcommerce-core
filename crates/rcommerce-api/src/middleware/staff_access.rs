@@ -33,6 +33,16 @@ const ADMIN_AREAS: &[(&str, Resource)] = &[
 /// POST routes that only read, so `read` is enough
 const READ_ONLY_POSTS: &[&str] = &["/coupons/validate"];
 
+/// Admin GET routes open to any staff member (one role is enough): the
+/// back-office home, which shows each part only to those it concerns, and
+/// the caller's own rights
+const ANY_STAFF: &[&str] = &["/admin/dashboard", "/admin/staff/me"];
+
+/// Whether any staff member may call this route, whatever their roles
+pub fn open_to_any_staff(method: &Method, path: &str) -> bool {
+    *method == Method::GET && ANY_STAFF.contains(&path)
+}
+
 /// The resource and action a staff role needs for an admin route, or `None`
 /// when the route is reserved to global admins
 pub fn staff_permission(method: &Method, path: &str) -> Option<(Resource, Action)> {
@@ -127,6 +137,14 @@ mod tests {
             staff_permission(&Method::POST, "/coupons"),
             Some((Resource::Coupons, Action::Write))
         );
+    }
+
+    #[test]
+    fn the_dashboard_and_own_rights_are_open_to_any_staff() {
+        assert!(open_to_any_staff(&Method::GET, "/admin/dashboard"));
+        assert!(open_to_any_staff(&Method::GET, "/admin/staff/me"));
+        assert!(!open_to_any_staff(&Method::POST, "/admin/staff/me"));
+        assert!(!open_to_any_staff(&Method::GET, "/admin/staff/roles"));
     }
 
     #[test]

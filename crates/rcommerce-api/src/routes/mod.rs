@@ -13,6 +13,7 @@ pub mod dunning;
 pub mod email_helpers;
 pub mod inventory;
 pub mod invoice;
+pub mod dashboard;
 pub mod invoices;
 pub mod location;
 pub mod newsletter;

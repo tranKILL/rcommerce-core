@@ -9,6 +9,7 @@ pub mod checkout_service;
 pub mod company_service;
 pub mod coupon_service;
 pub mod customer_service;
+pub mod dashboard_service;
 pub mod digital_product_service;
 pub mod dunning_service;
 pub mod location_service;
