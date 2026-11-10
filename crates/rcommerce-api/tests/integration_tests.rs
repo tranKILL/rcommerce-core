@@ -3831,6 +3831,134 @@ async fn test_simultaneous_registrations_of_one_email() {
     app.cleanup().await.ok();
 }
 
+/// A paid guest order delivered by carrier rate from `location`; returns its id
+async fn place_delivery_order(app: &TestApp, location: Uuid, product: Uuid) -> String {
+    let (cart_id, _) = app.create_guest_cart().await.unwrap();
+    add_guest_item(app, cart_id, product).await;
+    let (_, summary) = checkout_step(
+        app,
+        "initiate",
+        serde_json::json!({"cart_id": cart_id, "shipping_address": ownership_test_address(), "currency": "USD"}),
+    )
+    .await;
+    let rate = summary["available_shipping_rates"][0].clone();
+    assert_ne!(rate["provider_id"], "pickup");
+    let (status, done) = checkout_step(
+        app,
+        "complete",
+        serde_json::json!({
+            "cart_id": cart_id, "shipping_address": ownership_test_address(),
+            "payment_method": {"type": "stripe_elements"}, "customer_email": "site@example.com",
+            "selected_shipping_rate": rate, "fulfillment_location_id": location, "test": true
+        }),
+    )
+    .await;
+    assert!(status.is_success(), "{done}");
+    done["order"]["id"].as_str().unwrap().to_string()
+}
+
+/// Staff send a delivery order out with the store's driver and mark it delivered,
+/// which completes it and frees its reserved stock; pickup orders and steps out
+/// of order are refused
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_store_delivery_steps() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let customer_token = app.login(&customer.email, &password).await.unwrap();
+    let location = create_pickup_location(&app, &admin).await;
+    let product = app
+        .create_test_product("Site delivery", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 5, None)
+        .await
+        .unwrap();
+    let order = place_delivery_order(&app, location, product).await;
+    let pickup = place_pickup_order(&app, location, product, "counter@example.com").await;
+
+    let step = |id: &str, name: &str| format!("/orders/{id}/delivery/{name}");
+    let driver = serde_json::json!({"driver": "Sam Driver"});
+    let receiver = serde_json::json!({"received_by": "Site foreman"});
+    let (status, _) = call_json(
+        &app,
+        &customer_token,
+        &step(&order, "dispatched"),
+        Some(driver.clone()),
+    )
+    .await;
+    assert_eq!(status, 403);
+    let (status, _) = call_json(
+        &app,
+        &admin,
+        &step(&pickup, "dispatched"),
+        Some(driver.clone()),
+    )
+    .await;
+    assert_eq!(status, 400, "pickup orders are handed over at the counter");
+    let (status, _) = call_json(
+        &app,
+        &admin,
+        &step(&order, "delivered"),
+        Some(receiver.clone()),
+    )
+    .await;
+    assert_eq!(status, 400, "not dispatched yet");
+    let (status, _) = call_json(
+        &app,
+        &admin,
+        &step(&order, "dispatched"),
+        Some(serde_json::json!({"driver": ""})),
+    )
+    .await;
+    assert_eq!(status, 400, "a driver is required");
+
+    let (status, out) = call_json(
+        &app,
+        &admin,
+        &step(&order, "dispatched"),
+        Some(driver.clone()),
+    )
+    .await;
+    assert_eq!(status, 200, "{out}");
+    assert_eq!(out["fulfillment_status"], "shipped");
+    assert_eq!(out["delivery"]["driver"], "Sam Driver");
+    let (status, _) = call_json(&app, &admin, &step(&order, "dispatched"), Some(driver)).await;
+    assert_eq!(status, 400, "already out");
+
+    let (status, done) = call_json(&app, &admin, &step(&order, "delivered"), Some(receiver)).await;
+    assert_eq!(status, 200, "{done}");
+    assert_eq!(done["status"], "completed");
+    assert_eq!(done["fulfillment_status"], "delivered");
+    assert_eq!(done["delivery"]["received_by"], "Site foreman");
+    assert_eq!(done["fulfillments"][0]["status"], "delivered");
+
+    let (available, reserved): (i32, i32) = sqlx::query_as(
+        "SELECT available_quantity, reserved_quantity FROM inventory_levels
+          WHERE product_id = $1 AND location_id = $2",
+    )
+    .bind(product)
+    .bind(location)
+    .fetch_one(&app.db_pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (available, reserved),
+        (3, 1),
+        "the delivered article left; the pickup one waits"
+    );
+
+    sqlx::query("UPDATE inventory_locations SET is_public = false WHERE id = $1")
+        .bind(location)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    app.cleanup().await.ok();
+}
+
 /// Helper macro for running tests with reporting
 #[macro_export]
 macro_rules! test_with_report {

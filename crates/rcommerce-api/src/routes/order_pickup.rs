@@ -77,7 +77,19 @@ async fn lock_pickup_order(
     Ok((status, pickup))
 }
 
-async fn require_order_writer(state: &AppState, auth: &JwtAuth) -> Result<(), Error> {
+/// A person's name typed at the counter or on delivery: required, at most 100 characters
+pub(crate) fn checked_name<'a>(value: &'a str, field: &str) -> Result<&'a str, Error> {
+    let name = value.trim();
+    if name.is_empty() || name.chars().count() > MAX_COLLECTOR_NAME {
+        return Err(Error::validation(format!(
+            "{field} must name a person (at most {MAX_COLLECTOR_NAME} characters)"
+        )));
+    }
+    Ok(name)
+}
+
+/// Staff with `orders:write`
+pub(crate) async fn require_order_writer(state: &AppState, auth: &JwtAuth) -> Result<(), Error> {
     if staff_can(state, auth, Resource::Orders, Action::Write).await {
         Ok(())
     } else {
@@ -127,12 +139,7 @@ pub async fn mark_collected(
     Json(request): Json<CollectedRequest>,
 ) -> Result<Json<OrderResponse>, Error> {
     require_order_writer(&state, &auth).await?;
-    let collector = request.collected_by.trim();
-    if collector.is_empty() || collector.chars().count() > MAX_COLLECTOR_NAME {
-        return Err(Error::validation(
-            "collected_by must name who collected the order (at most 100 characters)",
-        ));
-    }
+    let collector = checked_name(&request.collected_by, "collected_by")?;
     let mut tx = state.db.pool().begin().await?;
     let (status, pickup) = lock_pickup_order(&mut tx, id).await?;
     if status != "processing" || pickup.ready_marked_at.is_none() {
@@ -141,7 +148,7 @@ pub async fn mark_collected(
         ));
     }
     record_collection(&mut tx, id, collector, pickup.location_name.as_deref()).await?;
-    release_collected_stock(&mut tx, id).await?;
+    release_committed_stock(&mut tx, id).await?;
     tx.commit().await?;
     let order = fetch_order(&state, id).await?;
     Ok(Json(build_order_response(&state, order).await?))
@@ -196,7 +203,8 @@ async fn record_collection(
 }
 
 /// The order's committed stock leaves the reserved quantity of its location
-async fn release_collected_stock(
+/// (handed over or delivered)
+pub(crate) async fn release_committed_stock(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
 ) -> Result<(), Error> {

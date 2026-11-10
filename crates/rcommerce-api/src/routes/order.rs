@@ -13,6 +13,7 @@ use rcommerce_core::Error;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::order_delivery::{delivery_of, OrderDelivery};
 use super::order_pickup::{fulfillment_location_of, pickup_of, OrderPickup};
 use crate::middleware::{staff_access::staff_can, JwtAuth};
 use crate::state::AppState;
@@ -74,6 +75,9 @@ pub struct OrderResponse {
     /// Number of articles (order lists, which leave `items` empty)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item_count: Option<i64>,
+    /// Delivery by the store's own vehicles, once dispatched
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<OrderDelivery>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -178,6 +182,7 @@ pub(crate) fn order_summary(o: rcommerce_core::models::Order) -> OrderResponse {
         pickup: pickup_of(&o.metadata),
         fulfillment_location_id: fulfillment_location_of(&o.metadata),
         item_count: None,
+        delivery: delivery_of(&o.metadata),
     }
 }
 
@@ -322,6 +327,7 @@ pub async fn get_order(
         pickup: pickup_of(&order.metadata),
         fulfillment_location_id: fulfillment_location_of(&order.metadata),
         item_count: None,
+        delivery: delivery_of(&order.metadata),
     }))
 }
 
@@ -707,6 +713,7 @@ pub async fn create_order(
         pickup: pickup_of(&order.metadata),
         fulfillment_location_id: fulfillment_location_of(&order.metadata),
         item_count: None,
+        delivery: delivery_of(&order.metadata),
     };
 
     Ok((StatusCode::CREATED, Json(response)))
@@ -1254,6 +1261,7 @@ pub(crate) async fn build_order_response(
         pickup: pickup_of(&order.metadata),
         fulfillment_location_id: fulfillment_location_of(&order.metadata),
         item_count: None,
+        delivery: delivery_of(&order.metadata),
     })
 }
 
@@ -1307,6 +1315,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/orders/:id/pickup/collected",
             post(super::order_pickup::mark_collected),
+        )
+        .route(
+            "/orders/:id/delivery/dispatched",
+            post(super::order_delivery::mark_dispatched),
+        )
+        .route(
+            "/orders/:id/delivery/delivered",
+            post(super::order_delivery::mark_delivered),
         )
 }
 

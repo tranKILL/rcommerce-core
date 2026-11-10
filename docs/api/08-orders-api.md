@@ -50,3 +50,17 @@ Every order response carries `pickup` (pickup orders only) and `fulfillment_loca
 - Collecting takes the order's committed stock out of the location's reserved quantity:
   the goods have left the counter.
 - Other orders, or a step out of order, give `400`; customers get `403`.
+
+## Delivery by the store's own vehicles
+
+For orders that are not collected (site deliveries with the store's trucks):
+
+| Step | Request | Allowed when | Effect |
+|---|---|---|---|
+| Out for delivery | `POST /api/v1/orders/:id/delivery/dispatched` with `{"driver": "Sam"}` | paid (`confirmed` or `processing`), not yet dispatched | status `processing`, fulfillment `shipped`, a fulfillment of the store (`tracking_company` = `store`), `delivery.dispatched_at` and `driver` |
+| Delivered | `POST /api/v1/orders/:id/delivery/delivered` with `{"received_by": "Site foreman"}` | out for delivery | status `completed`, fulfillment `delivered`, `delivery.delivered_at` and `received_by` |
+
+- Both names are required (at most 100 characters); each step adds a note to the order.
+- Delivering takes the order's committed stock out of the location's reserved quantity.
+- Pickup orders are refused (`400`); they go through the counter steps above.
+- Every order response carries `delivery` once the order is dispatched.
