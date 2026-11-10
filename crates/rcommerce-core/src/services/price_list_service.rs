@@ -374,6 +374,30 @@ struct CartLine {
     price_list_id: Option<Uuid>,
 }
 
+/// The lines that still have a catalogue price, with what to price for each
+fn price_items<'a>(
+    lines: &'a [CartLine],
+    products: &HashMap<Uuid, Decimal>,
+    variants: &HashMap<Uuid, (Uuid, Decimal)>,
+) -> (Vec<&'a CartLine>, Vec<PriceItem>) {
+    lines
+        .iter()
+        .filter_map(|line| {
+            let base = match line.variant_id {
+                Some(v) => variants.get(&v).map(|(_, price)| *price),
+                None => products.get(&line.product_id).copied(),
+            }?;
+            let item = PriceItem {
+                product_id: line.product_id,
+                variant_id: line.variant_id,
+                base_price: base,
+                quantity: line.quantity,
+            };
+            Some((line, item))
+        })
+        .unzip()
+}
+
 /// Give a cart's lines the prices of its customer's price lists. Lines priced
 /// by a list follow it (and go back to the catalogue price when no list applies
 /// any more); lines no list ever priced are left as they are. Bundle lines are
@@ -401,23 +425,7 @@ pub async fn reprice_cart_lines(
     let variants: Vec<Uuid> = lines.iter().filter_map(|l| l.variant_id).collect();
     let (product_prices, variant_prices) =
         catalogue_prices(&mut *conn, &products, &variants).await?;
-    let mut priced = Vec::new();
-    let items: Vec<PriceItem> = lines
-        .iter()
-        .filter_map(|line| {
-            let base = match line.variant_id {
-                Some(v) => variant_prices.get(&v).map(|(_, price)| *price),
-                None => product_prices.get(&line.product_id).copied(),
-            }?;
-            priced.push(line);
-            Some(PriceItem {
-                product_id: line.product_id,
-                variant_id: line.variant_id,
-                base_price: base,
-                quantity: line.quantity,
-            })
-        })
-        .collect();
+    let (priced, items) = price_items(&lines, &product_prices, &variant_prices);
     let resolved = resolve_prices(&mut *conn, context, &items).await?;
     for (line, price) in priced.into_iter().zip(resolved) {
         if price.price_list_id.is_none() && line.price_list_id.is_none() {
