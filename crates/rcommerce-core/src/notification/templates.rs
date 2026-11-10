@@ -47,6 +47,7 @@ impl NotificationTemplate {
             "order_confirmation_html" => Ok(Self::order_confirmation_html()),
             "admin_new_order_html" => Ok(Self::admin_new_order_html()),
             "order_shipped_html" => Ok(Self::order_shipped_html()),
+            "order_ready_for_pickup_html" => Ok(Self::order_ready_for_pickup_html()),
             "order_cancelled_html" => Ok(Self::order_cancelled_html()),
             "payment_successful_html" => Ok(Self::payment_successful_html()),
             "payment_failed_html" => Ok(Self::payment_failed_html()),
@@ -139,6 +140,9 @@ impl NotificationTemplate {
                 Ok(include_str!("templates/order_confirmation.html").to_string())
             }
             "order_shipped.html" => Ok(include_str!("templates/order_shipped.html").to_string()),
+            "order_ready_for_pickup.html" => {
+                Ok(include_str!("templates/order_ready_for_pickup.html").to_string())
+            }
             "admin_new_order.html" => {
                 Ok(include_str!("templates/admin_new_order.html").to_string())
             }
@@ -324,6 +328,37 @@ Recommended Reorder Quantity: {{ reorder_quantity }}
     }
 
     // HTML Templates
+
+    /// A pickup order waits at the store location's counter
+    fn order_ready_for_pickup_html() -> Self {
+        Self {
+            id: "order_ready_for_pickup_html".to_string(),
+            name: "Order Ready For Pickup HTML".to_string(),
+            subject: "Your order {{ order_number }} is ready for pickup".to_string(),
+            body: r#"
+Hi {{ customer_name }},
+
+Your order {{ order_number }} is ready for pickup at {{ location_name }}.
+
+Bring your order number. Whoever collects the order gives their name at the counter.
+
+{{ company_name }}
+        "#
+            .to_string(),
+            html_body: Some(
+                Self::load_html_template("order_ready_for_pickup.html")
+                    .unwrap_or_else(|_| Self::get_default_html_template()),
+            ),
+            channel: crate::notification::NotificationChannel::Email,
+            variables: vec![
+                "order_number".to_string(),
+                "customer_name".to_string(),
+                "location_name".to_string(),
+                "company_name".to_string(),
+                "support_email".to_string(),
+            ],
+        }
+    }
 
     fn order_shipped_html() -> Self {
         Self {
@@ -1118,6 +1153,30 @@ mod tests {
         assert!(rendered.contains("John Doe"));
         assert!(rendered.contains("ORD-12345"));
         assert!(rendered.contains("$99.99"));
+    }
+
+    #[test]
+    fn test_ready_for_pickup_template_renders() {
+        let template = NotificationTemplate::load("order_ready_for_pickup_html").unwrap();
+        let mut vars = TemplateVariables::new();
+        vars.insert("customer_name", "Ann");
+        vars.insert("order_number", "ORD-1");
+        vars.insert("location_name", "North branch");
+        vars.insert("company_name", "Store");
+        vars.insert("support_email", "help@example.com");
+        assert_eq!(
+            template.render_subject(&vars).unwrap(),
+            "Your order ORD-1 is ready for pickup"
+        );
+        assert!(template
+            .render(&vars)
+            .unwrap()
+            .contains("ready for pickup at North branch"));
+        let html = template.html_body.clone().unwrap();
+        assert!(
+            html.contains("{{ location_name }}"),
+            "the HTML body is the pickup template"
+        );
     }
 
     #[test]

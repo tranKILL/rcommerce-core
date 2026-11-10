@@ -249,6 +249,79 @@ pub async fn send_order_shipped_email(
     spawn_send(state, notification, "order shipped email");
 }
 
+/// The ready e-mail's recipient, order number, customer name and pickup location
+async fn ready_email_details(
+    state: &AppState,
+    order_id: Uuid,
+) -> Option<(String, String, String, String)> {
+    type Row = (
+        String,
+        String,
+        Option<serde_json::Value>,
+        Option<serde_json::Value>,
+    );
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT customer_email, order_number, shipping_address, metadata FROM orders WHERE id = $1",
+    )
+    .bind(order_id)
+    .fetch_optional(state.db.pool())
+    .await
+    .map_err(|e| warn!("Failed to load order {} for ready email: {}", order_id, e))
+    .ok()?;
+    let (email, number, address, metadata) = row?;
+    if email.is_empty() {
+        return None;
+    }
+    let text = |value: &Option<serde_json::Value>, path: &[&str]| {
+        let mut node = value.as_ref()?;
+        for key in path {
+            node = node.get(*key)?;
+        }
+        node.as_str().map(str::to_string)
+    };
+    let name = format!(
+        "{} {}",
+        text(&address, &["first_name"]).unwrap_or_default(),
+        text(&address, &["last_name"]).unwrap_or_default()
+    );
+    let location =
+        text(&metadata, &["pickup", "location_name"]).unwrap_or_else(|| "the store".into());
+    Some((email, number, name.trim().to_string(), location))
+}
+
+/// Tell the customer a pickup order waits at the counter. Fire-and-forget: a
+/// failure is logged and never fails the request.
+pub async fn send_order_ready_email(state: &AppState, order_id: Uuid) {
+    use rcommerce_core::notification::templates::{NotificationTemplate, TemplateVariables};
+
+    if state.notification_service.is_none() {
+        return;
+    }
+    let Some((email, number, name, location)) = ready_email_details(state, order_id).await else {
+        return;
+    };
+    let template = match NotificationTemplate::load("order_ready_for_pickup_html") {
+        Ok(t) => t,
+        Err(e) => {
+            warn!("Failed to load order_ready_for_pickup template: {}", e);
+            return;
+        }
+    };
+    let mut vars = TemplateVariables::new();
+    vars.insert("customer_name", name);
+    vars.insert("order_number", number);
+    vars.insert("location_name", location);
+    vars.insert("company_name", &state.branding.name);
+    vars.insert("support_email", shop_email(state));
+    match build_from_template(&email, &template, vars, &state.branding) {
+        Ok(notification) => spawn_send(state, notification, "order ready email"),
+        Err(e) => warn!(
+            "Failed to render order_ready_for_pickup notification: {}",
+            e
+        ),
+    }
+}
+
 /// Render a template into a Notification (subject/text/html)
 fn build_from_template(
     recipient: &str,

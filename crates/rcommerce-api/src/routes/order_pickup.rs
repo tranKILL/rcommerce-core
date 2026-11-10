@@ -126,6 +126,7 @@ pub async fn mark_ready(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    super::email_helpers::send_order_ready_email(&state, id).await;
     let order = fetch_order(&state, id).await?;
     Ok(Json(build_order_response(&state, order).await?))
 }
