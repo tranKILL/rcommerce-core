@@ -3959,6 +3959,75 @@ async fn test_store_delivery_steps() {
     app.cleanup().await.ok();
 }
 
+/// Staff list every product, inactive ones included, with search, an active
+/// filter, paging and stock; customers are found by e-mail or name. Customers
+/// can use neither list.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_staff_product_and_customer_lists() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let customer_token = app.login(&customer.email, &password).await.unwrap();
+    let marker = Uuid::new_v4().simple().to_string()[..8].to_string();
+    let shown = app
+        .create_test_product(&format!("Listed {marker} A"), Decimal::new(1000, 2), 3)
+        .await
+        .unwrap();
+    let hidden = app
+        .create_test_product(&format!("Listed {marker} B"), Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE products SET is_active = false WHERE id = $1")
+        .bind(hidden)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+
+    let path = format!("/admin/products?q=listed%20{marker}");
+    let (status, all) = call_json(&app, &admin, &path, None).await;
+    assert_eq!(status, 200, "{all}");
+    assert_eq!(all["meta"]["total"], 2, "inactive products too: {all}");
+    let row = |id: Uuid| {
+        all["products"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id.to_string())
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(row(shown)["available"], 3);
+    assert_eq!(row(hidden)["is_active"], false);
+    let (_, inactive) = call_json(&app, &admin, &format!("{path}&active=false"), None).await;
+    assert_eq!(inactive["meta"]["total"], 1);
+    assert_eq!(inactive["products"][0]["id"], hidden.to_string());
+    let (_, paged) = call_json(&app, &admin, &format!("{path}&per_page=1&page=2"), None).await;
+    assert_eq!(paged["products"].as_array().unwrap().len(), 1);
+    assert_eq!(paged["meta"]["total_pages"], 2);
+    let (status, _) = call_json(&app, &customer_token, &path, None).await;
+    assert!(status == 401 || status == 403, "{status}");
+
+    let local = customer.email.split('@').next().unwrap().to_uppercase();
+    let (status, found) = call_json(
+        &app,
+        &admin,
+        &format!("/customers?q={local}&per_page=5"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{found}");
+    assert!(found["customers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["email"] == customer.email));
+    assert_eq!(found["meta"]["per_page"], 5);
+    let (status, _) = call_json(&app, &customer_token, "/customers?q=a", None).await;
+    assert!(status == 401 || status == 403, "{status}");
+    app.cleanup().await.ok();
+}
+
 /// Helper macro for running tests with reporting
 #[macro_export]
 macro_rules! test_with_report {

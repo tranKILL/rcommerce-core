@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, put},
     Extension, Json, Router,
@@ -12,55 +12,24 @@ use crate::middleware::{staff_access::staff_can, JwtAuth};
 use crate::state::AppState;
 use rcommerce_core::{
     models::{CreateAddressRequest, Customer, UpdateCustomerRequest},
-    services::{customer_service::CustomerDetail, PaginationParams},
+    services::customer_service::CustomerDetail,
     Error,
 };
 use rcommerce_core::{Action, Resource};
 
-/// List customers (admin only)
+/// List customers, newest first, by part of the e-mail or name (`?q=`), paged
+/// (`?page=`, `?per_page=` up to 100): admins and staff with `customers:read`
 pub async fn list_customers(
     State(state): State<AppState>,
     Extension(auth): Extension<JwtAuth>,
+    Query(query): Query<super::staff_lists::CustomerQuery>,
 ) -> Result<Json<serde_json::Value>, Error> {
-    // Admins and staff with customers:read
     if !staff_can(&state, &auth, Resource::Customers, Action::Read).await {
         return Err(Error::unauthorized("Admin access required"));
     }
-
-    let customer_list = state
-        .customer_service
-        .list_customers(PaginationParams::default())
-        .await?;
-
-    let customers: Vec<serde_json::Value> = customer_list
-        .customers
-        .into_iter()
-        .map(|c| {
-            serde_json::json!({
-                "id": c.id,
-                "email": c.email,
-                "first_name": c.first_name,
-                "last_name": c.last_name,
-                "phone": c.phone,
-                "accepts_marketing": c.accepts_marketing,
-                "tax_exempt": c.tax_exempt,
-                "currency": c.currency.to_string(),
-                "created_at": c.created_at,
-                "updated_at": c.updated_at,
-                "confirmed_at": c.confirmed_at,
-            })
-        })
-        .collect();
-
-    Ok(Json(serde_json::json!({
-        "customers": customers,
-        "meta": {
-            "total": customer_list.pagination.total,
-            "page": customer_list.pagination.page,
-            "per_page": customer_list.pagination.per_page,
-            "total_pages": customer_list.pagination.total_pages,
-        }
-    })))
+    Ok(Json(
+        super::staff_lists::customer_page(&state, &query).await?,
+    ))
 }
 
 /// Profile fields of a customer, as returned by the customer endpoints

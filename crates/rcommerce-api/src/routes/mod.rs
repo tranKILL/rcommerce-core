@@ -21,6 +21,7 @@ pub mod order_pickup;
 pub mod payment;
 pub mod product;
 pub mod review;
+pub mod staff_lists;
 pub mod statistics;
 pub mod subscription;
 pub mod webhook;

@@ -118,5 +118,6 @@ pub fn router() -> Router<AppState> {
         .route("/admin/api-keys", get(list_api_keys))
         .route("/admin/orders/:id", patch(set_order_test_flag))
         .merge(products::router())
+        .merge(super::staff_lists::router())
         .merge(staff::router())
 }

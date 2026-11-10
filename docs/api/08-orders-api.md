@@ -64,3 +64,10 @@ For orders that are not collected (site deliveries with the store's trucks):
 - Delivering takes the order's committed stock out of the location's reserved quantity.
 - Pickup orders are refused (`400`); they go through the counter steps above.
 - Every order response carries `delivery` once the order is dispatched.
+
+## Staff lists
+
+- `GET /api/v1/admin/products` (staff with `products:read`): every product, **inactive ones included**, by title, with `available` (free stock summed over every location). Parameters: `q` (part of the title or SKU), `active` (`true`/`false`), `page`, `per_page` (default 50, at most 100).
+- `GET /api/v1/customers` (staff with `customers:read`): customers, newest first. Parameters: `q` (part of the e-mail, first name or last name), `page`, `per_page` (default 50, at most 100). Each row adds `email_verified`.
+
+Both answer `{ "<items>": [...], "meta": { "total", "page", "per_page", "total_pages" } }`.
