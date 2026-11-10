@@ -96,6 +96,10 @@ pub struct RegisterRequest {
     pub first_name: String,
     pub last_name: String,
     pub phone: Option<String>,
+    /// Preferred language (`fr`, `nl-BE`) of the customer's e-mails; default:
+    /// the request's `Accept-Language`
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 impl RegisterRequest {
@@ -160,6 +164,9 @@ pub struct ChangePasswordRequest {
 #[derive(Debug, Deserialize)]
 pub struct PasswordResetRequest {
     pub email: String,
+    /// Language of the e-mail; default: `Accept-Language`, then the customer's
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 /// Password reset confirm request
@@ -180,6 +187,9 @@ pub struct PasswordResetResponse {
 #[derive(Debug, Deserialize)]
 pub struct ResendVerificationRequest {
     pub email: String,
+    /// Language of the e-mail; default: `Accept-Language`, then the customer's
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 /// Resend verification response
@@ -366,9 +376,11 @@ pub async fn login(
 /// Register endpoint
 pub async fn register(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), Error> {
     payload.validate()?;
+    let locale = super::email_helpers::requested_locale(payload.locale.as_deref(), &headers);
 
     let password_hash = state.auth_service.hash_password(&payload.password)?;
 
@@ -386,9 +398,10 @@ pub async fn register(
             password_hash,
         )
         .await?;
+    let customer = remember_locale(&state, customer, locale).await;
 
     // Send welcome email with verification link
-    if let Err(e) = send_verification_email(&state, &customer).await {
+    if let Err(e) = send_verification_email(&state, &customer, None).await {
         tracing::error!("Failed to send welcome email to {}: {}", customer.email, e);
     }
 
@@ -407,11 +420,60 @@ pub async fn register(
     ))
 }
 
-/// Send a verification email to a customer.
+/// Save the language a new customer signed up in (best effort: the account
+/// exists either way)
+async fn remember_locale(
+    state: &AppState,
+    customer: rcommerce_core::models::Customer,
+    locale: Option<String>,
+) -> rcommerce_core::models::Customer {
+    let Some(locale) = locale else {
+        return customer;
+    };
+    let update = rcommerce_core::models::UpdateCustomerRequest {
+        email: None,
+        first_name: None,
+        last_name: None,
+        phone: None,
+        accepts_marketing: None,
+        tax_exempt: None,
+        locale: Some(locale),
+    };
+    match state
+        .customer_service
+        .update_customer(customer.id, update)
+        .await
+    {
+        Ok(updated) => updated,
+        Err(e) => {
+            tracing::warn!("Failed to save the language of {}: {}", customer.email, e);
+            customer
+        }
+    }
+}
+
+/// The language of a customer's e-mail: the one the request asks for, else
+/// the customer's preferred one, else the store's default
+fn customer_email_locale(
+    state: &AppState,
+    requested: Option<&str>,
+    customer: &rcommerce_core::models::Customer,
+) -> String {
+    rcommerce_core::notification::i18n::pick_locale([
+        requested,
+        customer.locale.as_deref(),
+        Some(state.email_locale.as_str()),
+    ])
+}
+
+/// Send a verification email to a customer, in the requested language or
+/// else theirs.
 async fn send_verification_email(
     state: &AppState,
     customer: &rcommerce_core::models::Customer,
+    requested_locale: Option<&str>,
 ) -> Result<(), Error> {
+    let locale = customer_email_locale(state, requested_locale, customer);
     let Some(ref notification_service) = state.notification_service else {
         tracing::warn!("Notification service not configured; skipping verification email");
         return Ok(());
@@ -430,8 +492,9 @@ async fn send_verification_email(
         &customer.email,
         &format!("{} {}", customer.first_name, customer.last_name),
         &verification_link,
-        "24 hours",
+        &rcommerce_core::notification::i18n::hours(&locale, 24),
         &state.branding,
+        &locale,
     )?;
 
     notification_service.send(&notification).await?;
@@ -619,8 +682,10 @@ async fn replace_password(
 /// Security note: the token is never returned in the response in production.
 pub async fn request_password_reset(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<PasswordResetRequest>,
 ) -> Result<Json<PasswordResetResponse>, Error> {
+    let requested = super::email_helpers::requested_locale(payload.locale.as_deref(), &headers);
     // Find customer by email
     let customer = state.customer_service.find_by_email(&payload.email).await?;
 
@@ -648,13 +713,15 @@ pub async fn request_password_reset(
     let reset_link = format!("{}/account/reset-password?token={}", store_url, reset_token);
 
     if let Some(ref notification_service) = state.notification_service {
+        let locale = customer_email_locale(&state, requested.as_deref(), &customer);
         let notification = rcommerce_core::notification::EmailNotificationFactory::password_reset(
             &customer.email,
             &format!("{} {}", customer.first_name, customer.last_name),
             &reset_token,
             &reset_link,
-            "1 hour",
+            &rcommerce_core::notification::i18n::hours(&locale, 1),
             &state.branding,
+            &locale,
         )?;
 
         if let Err(e) = notification_service.send(&notification).await {
@@ -762,8 +829,10 @@ pub async fn verify_email(
 /// Resend verification email endpoint
 pub async fn resend_verification_email(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<ResendVerificationRequest>,
 ) -> Result<Json<ResendVerificationResponse>, Error> {
+    let requested = super::email_helpers::requested_locale(payload.locale.as_deref(), &headers);
     let customer = match state.customer_service.find_by_email(&payload.email).await? {
         Some(c) => c,
         None => {
@@ -781,7 +850,7 @@ pub async fn resend_verification_email(
         }));
     }
 
-    send_verification_email(&state, &customer).await?;
+    send_verification_email(&state, &customer, requested.as_deref()).await?;
 
     Ok(Json(ResendVerificationResponse {
         message: "If an account with that email exists, a verification email has been sent."
@@ -819,6 +888,7 @@ mod tests {
             first_name: "Jane".to_string(),
             last_name: "Doe".to_string(),
             phone: Some("+32 2 000 00 00".to_string()),
+            locale: None,
         }
     }
 

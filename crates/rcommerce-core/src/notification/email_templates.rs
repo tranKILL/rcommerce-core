@@ -4,10 +4,12 @@
 //! It uses the existing template system with the invoice.html as the base design.
 
 use crate::notification::{
+    i18n,
     templates::{NotificationTemplate, TemplateVariables},
     Notification, NotificationChannel,
 };
 use crate::Result;
+use rust_decimal::Decimal;
 use uuid::Uuid;
 
 /// Email template types
@@ -59,22 +61,26 @@ pub struct OrderConfirmationParams<'a> {
     pub customer_name: &'a str,
     /// Order number
     pub order_number: &'a str,
+    /// Language of the e-mail (see [`i18n::pick_locale`])
+    pub locale: &'a str,
+    /// Currency code of every amount (`EUR`)
+    pub currency: &'a str,
     /// Order date
-    pub order_date: &'a str,
+    pub order_date: chrono::NaiveDate,
     /// Order total
-    pub order_total: &'a str,
+    pub order_total: Decimal,
     /// Subtotal before shipping/tax
-    pub subtotal: &'a str,
-    /// Discount total (formatted like "$12.75"); "0.00"/"$0.00" = no discount
-    pub discount_total: &'a str,
+    pub subtotal: Decimal,
+    /// Discount total; zero = no discount row
+    pub discount_total: Decimal,
     /// Coupon code that produced the discount, if any
     pub discount_code: Option<&'a str>,
     /// Shipping cost
-    pub shipping_total: &'a str,
+    pub shipping_total: Decimal,
     /// Shipping method label (may be empty)
     pub shipping_method: &'a str,
-    /// Tax total
-    pub tax_total: &'a str,
+    /// Tax total; zero = no tax row
+    pub tax_total: Decimal,
     /// Order items
     pub items: &'a [OrderItem],
     /// Shipping address
@@ -91,56 +97,37 @@ pub struct EmailNotificationFactory;
 impl EmailNotificationFactory {
     /// Create an order confirmation email
     pub fn order_confirmation(params: OrderConfirmationParams<'_>) -> Result<Notification> {
-        let template = NotificationTemplate::load("order_confirmation_html")?;
+        let template =
+            NotificationTemplate::load_localized("order_confirmation_html", params.locale)?;
+        let locale = template.locale.clone();
+        let money = |amount: Decimal| i18n::money(&locale, amount, params.currency);
 
         let mut vars = TemplateVariables::new();
         vars.insert("customer_name", params.customer_name);
         vars.insert("order_number", params.order_number);
-        vars.insert("order_date", params.order_date);
-        vars.insert("order_total", params.order_total);
-        vars.insert("subtotal", params.subtotal);
-        vars.insert("shipping_cost", params.shipping_total);
+        vars.insert("order_date", i18n::date(&locale, params.order_date));
+        vars.insert("order_total", money(params.order_total));
+        vars.insert("subtotal", money(params.subtotal));
+        vars.insert("shipping_cost", money(params.shipping_total));
         vars.insert("shipping_method", params.shipping_method);
-        vars.insert("tax", params.tax_total);
-        vars.insert("company_name", "rCommerce");
-        vars.insert("support_email", "support@example.com");
+        vars.insert("tax", money(params.tax_total));
+        vars.insert("company_name", &params.branding.name);
+        vars.insert("support_email", &params.branding.support_email);
 
         // Tax row is omitted entirely when no tax was charged
-        if params.tax_total != "$0.00" && params.tax_total != "0.00" {
+        if !params.tax_total.is_zero() {
             let tax_row = format!(
-                "<tr><td style=\"padding:4px 0;font-size:13px;color:#666666;\">Tax</td><td align=\"right\" style=\"padding:4px 0;font-size:13px;color:#1a1a1a;\">{}</td></tr>",
-                params.tax_total
+                "<tr><td style=\"padding:4px 0;font-size:13px;color:#666666;\">{}</td><td align=\"right\" style=\"padding:4px 0;font-size:13px;color:#1a1a1a;\">{}</td></tr>",
+                i18n::text(&locale, "common", "tax"),
+                money(params.tax_total)
             );
             vars.insert("tax_row", tax_row);
         } else {
             vars.insert("tax_row", "");
         }
+        Self::insert_discount(&mut vars, &params, &locale);
 
-        // Discount row follows the same conditional pattern: shown as a
-        // negative amount, labelled with the coupon code when known.
-        let discount_amount = params
-            .discount_total
-            .trim_start_matches('$')
-            .parse::<rust_decimal::Decimal>()
-            .unwrap_or_default();
-        if discount_amount > rust_decimal::Decimal::ZERO {
-            let label = match params.discount_code {
-                Some(code) if !code.is_empty() => format!("Discount ({code})"),
-                _ => "Discount".to_string(),
-            };
-            let discount_row = format!(
-                "<tr><td style=\"padding:4px 0;font-size:13px;color:#666666;\">{label}</td><td align=\"right\" style=\"padding:4px 0;font-size:13px;color:#059669;\">-${}</td></tr>",
-                discount_amount
-            );
-            vars.insert("discount_row", discount_row);
-            vars.insert("discount_line", format!("{label}: -${}\n", discount_amount));
-        } else {
-            vars.insert("discount_row", "");
-            vars.insert("discount_line", "");
-        }
-
-        // Format items as HTML
-        let items_html = Self::format_order_items(params.items);
+        let items_html = Self::format_order_items_in(params.items, &locale, params.currency);
         vars.insert("items", &items_html);
 
         // Format addresses
@@ -154,6 +141,32 @@ impl EmailNotificationFactory {
         );
 
         Self::create_notification(params.recipient_email, &template, vars, params.branding)
+    }
+
+    /// The discount row and text line: shown as a negative amount, labelled
+    /// with the coupon code when known; empty without a discount
+    fn insert_discount(
+        vars: &mut TemplateVariables,
+        params: &OrderConfirmationParams<'_>,
+        locale: &str,
+    ) {
+        if params.discount_total <= Decimal::ZERO {
+            vars.insert("discount_row", "");
+            vars.insert("discount_line", "");
+            return;
+        }
+        let label = match params.discount_code {
+            Some(code) if !code.is_empty() => {
+                i18n::text(locale, "common", "discount_code").replace("{code}", code)
+            }
+            _ => i18n::text(locale, "common", "discount"),
+        };
+        let amount = i18n::money(locale, params.discount_total, params.currency);
+        let discount_row = format!(
+            "<tr><td style=\"padding:4px 0;font-size:13px;color:#666666;\">{label}</td><td align=\"right\" style=\"padding:4px 0;font-size:13px;color:#059669;\">-{amount}</td></tr>"
+        );
+        vars.insert("discount_row", discount_row);
+        vars.insert("discount_line", format!("{label}: -{amount}\n"));
     }
 
     /// Create a payment failed email (dunning)
@@ -228,8 +241,9 @@ impl EmailNotificationFactory {
         recipient_email: &str,
         customer_name: &str,
         branding: &crate::config::BrandingConfig,
+        locale: &str,
     ) -> Result<Notification> {
-        let template = NotificationTemplate::load("welcome_html")?;
+        let template = NotificationTemplate::load_localized("welcome_html", locale)?;
 
         let mut vars = TemplateVariables::new();
         vars.insert("customer_name", customer_name);
@@ -242,23 +256,25 @@ impl EmailNotificationFactory {
         Self::create_notification(recipient_email, &template, vars, branding)
     }
 
-    /// Create a verification email (welcome + email verification)
+    /// Create the e-mail asking a new customer to confirm their address;
+    /// `expires_in` is written in the e-mail's language (see [`i18n::hours`])
     pub fn verification(
         recipient_email: &str,
         customer_name: &str,
         verification_url: &str,
         expires_in: &str,
         branding: &crate::config::BrandingConfig,
+        locale: &str,
     ) -> Result<Notification> {
-        let template = NotificationTemplate::load("welcome_html")?;
+        let template = NotificationTemplate::load_localized("verify_email_html", locale)?;
 
         let mut vars = TemplateVariables::new();
         vars.insert("customer_name", customer_name);
         vars.insert("company_name", &branding.name);
         vars.insert("support_email", &branding.support_email);
-        vars.insert("login_url", verification_url);
         vars.insert("verification_url", verification_url);
         vars.insert("expires_in", expires_in);
+        vars.insert("accent_color", &branding.accent_color);
 
         Self::create_notification(recipient_email, &template, vars, branding)
     }
@@ -271,8 +287,9 @@ impl EmailNotificationFactory {
         reset_url: &str,
         expires_in: &str,
         branding: &crate::config::BrandingConfig,
+        locale: &str,
     ) -> Result<Notification> {
-        let template = NotificationTemplate::load("password_reset_html")?;
+        let template = NotificationTemplate::load_localized("password_reset_html", locale)?;
 
         let mut vars = TemplateVariables::new();
         vars.insert("customer_name", customer_name);
@@ -317,9 +334,16 @@ impl EmailNotificationFactory {
         })
     }
 
-    /// Format order items as HTML table rows
+    /// Format order items as HTML table rows (English, prices in US dollars)
     pub fn format_order_items(items: &[OrderItem]) -> String {
+        Self::format_order_items_in(items, i18n::BASE_LOCALE, "USD")
+    }
+
+    /// Format order items as HTML table rows, labels and prices as written in
+    /// `locale` (`price` holds the amount, e.g. "29.99")
+    pub fn format_order_items_in(items: &[OrderItem], locale: &str, currency: &str) -> String {
         let mut html = String::new();
+        let sku_label = i18n::text(locale, "common", "sku");
 
         for item in items {
             // Bundle component lines are $0 stock-reservation rows; only the
@@ -342,13 +366,20 @@ impl EmailNotificationFactory {
                 String::new()
             } else {
                 format!(
-                    "<span style=\"display:block;font-size:12px;color:#999999;padding-top:2px;\">SKU: {}</span>",
+                    "<span style=\"display:block;font-size:12px;color:#999999;padding-top:2px;\">{sku_label}: {}</span>",
                     item.sku
                 )
             };
             html.push_str(&format!(
-                "<tr><td style=\"padding:12px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#1a1a1a;\"><span style=\"display:block;font-weight:bold;\">{}</span>{}{}</td><td align=\"center\" width=\"60\" style=\"padding:12px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#555555;\">{}</td><td align=\"right\" width=\"100\" style=\"padding:12px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#1a1a1a;\">${}</td></tr>",
-                item.name, variant_line, sku_line, item.quantity, item.price
+                "<tr><td style=\"padding:12px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#1a1a1a;\"><span style=\"display:block;font-weight:bold;\">{}</span>{}{}</td><td align=\"center\" width=\"60\" style=\"padding:12px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#555555;\">{}</td><td align=\"right\" width=\"100\" style=\"padding:12px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#1a1a1a;\">{}</td></tr>",
+                item.name,
+                variant_line,
+                sku_line,
+                item.quantity,
+                item.price
+                    .parse::<Decimal>()
+                    .map(|amount| i18n::money(locale, amount, currency))
+                    .unwrap_or_else(|_| item.price.clone())
             ));
         }
 
@@ -495,14 +526,16 @@ mod tests {
             recipient_email: "customer@example.com",
             customer_name: "John",
             order_number: "ORD-1",
-            order_date: "Oct 17, 2026",
-            order_total: "USD 64.75",
-            subtotal: "$75.00",
-            discount_total: "$12.75",
+            locale: "en",
+            currency: "USD",
+            order_date: chrono::NaiveDate::from_ymd_opt(2026, 10, 17).unwrap(),
+            order_total: rust_decimal_macros::dec!(64.75),
+            subtotal: rust_decimal_macros::dec!(75.00),
+            discount_total: rust_decimal_macros::dec!(12.75),
             discount_code: Some("1V97NIBP40"),
-            shipping_total: "$2.50",
+            shipping_total: rust_decimal_macros::dec!(2.50),
             shipping_method: "",
-            tax_total: "$0.00",
+            tax_total: rust_decimal_macros::dec!(0),
             items: &items,
             shipping_address: &addr,
             billing_address: &addr,
@@ -546,14 +579,16 @@ mod tests {
             recipient_email: "customer@example.com",
             customer_name: "John",
             order_number: "ORD-2",
-            order_date: "Oct 17, 2026",
-            order_total: "USD 77.50",
-            subtotal: "$75.00",
-            discount_total: "$0.00",
+            locale: "en",
+            currency: "USD",
+            order_date: chrono::NaiveDate::from_ymd_opt(2026, 10, 17).unwrap(),
+            order_total: rust_decimal_macros::dec!(77.50),
+            subtotal: rust_decimal_macros::dec!(75.00),
+            discount_total: rust_decimal_macros::dec!(0.00),
             discount_code: None,
-            shipping_total: "$2.50",
+            shipping_total: rust_decimal_macros::dec!(2.50),
             shipping_method: "",
-            tax_total: "$0.00",
+            tax_total: rust_decimal_macros::dec!(0),
             items: &items,
             shipping_address: &addr,
             billing_address: &addr,

@@ -219,6 +219,15 @@ crop = false
 # Enable notifications (default: true)
 enabled = true
 
+# Language of e-mails when neither the request, the customer nor the order
+# names one, and of shop-operator e-mails (built in: en, fr, nl)
+# default_locale = "en"
+
+# Directory of extra e-mail catalogues, one `<locale>.toml` per language: adds a
+# language, or replaces some texts of a built-in one (see
+# docs/architecture/10-notifications.md, "E-mail languages")
+# locales_dir = "/etc/rcommerce/email-locales"
+
 # Email configuration
 [notifications.email]
 # SMTP server host

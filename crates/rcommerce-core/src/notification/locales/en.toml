@@ -1,0 +1,195 @@
+# E-mail texts in English: the base catalogue every other language falls back to.
+# A section per e-mail, `[common]` for texts they share. `{{ name }}` placeholders
+# are filled from the e-mail's variables; keep them (and any <strong> tags) as is.
+
+[common]
+questions = "Questions?"
+footer_note = "Payments are in USD. All sales are final."
+customer_fallback = "rider"
+order_number = "Order Number"
+order_date = "Order Date"
+total = "Total"
+status = "Status"
+subtotal = "Subtotal"
+shipping = "Shipping"
+tax = "Tax"
+discount = "Discount"
+discount_code = "Discount ({code})"
+item = "Item"
+qty = "Qty"
+price = "Price"
+sku = "SKU"
+shipping_address = "Shipping Address"
+billing_address = "Billing Address"
+refund_amount = "Refund Amount"
+copy_link = "Or copy this link into your browser:"
+date_format = "{month} {day}, {year}"
+months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+money_format = "{symbol}{amount}"
+decimal_separator = "."
+thousands_separator = ","
+hours = "{n} hours"
+one_hour = "{n} hour"
+
+[welcome]
+subject = "Welcome to {{ company_name }}!"
+heading = "Welcome to {{ company_name }}!"
+intro = "Hi {{ customer_name }}, your account has been created successfully and is ready to use. Start shopping, track your orders, and manage your account settings from your dashboard."
+account_name = "Account Name"
+active = "Active"
+start_shopping = "Start Shopping"
+sign_in = "Sign in to your account:"
+text = '''
+Hi {{ customer_name }},
+
+Welcome to {{ company_name }}! Your account is ready.
+
+Shop: {{ shop_url }}
+Sign in: {{ login_url }}
+
+{{ company_name }}
+'''
+
+[verify_email]
+subject = "Confirm your email address"
+heading = "Confirm your email address"
+intro = "Hi {{ customer_name }}, thank you for creating an account with {{ company_name }}. Confirm your email address to sign in."
+button = "Confirm my email address"
+expires = "This link expires in {{ expires_in }}. If you didn't create this account, you can ignore this email."
+text = '''
+Hi {{ customer_name }},
+
+Thank you for creating an account with {{ company_name }}. Confirm your email address to sign in:
+
+{{ verification_url }}
+
+This link expires in {{ expires_in }}. If you didn't create this account, you can ignore this email.
+
+{{ company_name }}
+'''
+
+[password_reset]
+subject = "Password Reset Request"
+heading = "Password reset request"
+intro = "Hi {{ customer_name }}, we received a request to reset your password."
+security_notice = "Security Notice"
+security_text = "If you didn't request this password reset, please ignore this email. Your password won't change until you use the link below."
+expires = "This link expires in {{ expires_in }}."
+button = "Reset Password"
+text = '''
+Hi {{ customer_name }},
+
+We received a request to reset your password.
+
+Reset your password: {{ reset_url }}
+
+This link expires in {{ expires_in }}. If you didn't request this, you can ignore this email.
+
+{{ company_name }}
+'''
+
+[order_confirmation]
+subject = "Order Confirmed: {{ order_number }}"
+order_label = "Order {{ order_number }}"
+heading = "Thank you for your order, {{ customer_name }}!"
+intro = "We've received your order and are getting it ready for shipment. Your invoice is attached to this email as a PDF."
+text = '''
+Hello {{ customer_name }},
+
+Thank you for your order! Your order {{ order_number }} has been confirmed.
+
+Order Details:
+----------------
+Subtotal: {{ subtotal }}
+{{ discount_line }}Shipping: {{ shipping_cost }}
+Tax: {{ tax }}
+Total: {{ order_total }}
+
+Your invoice is attached to this email as a PDF.
+
+We'll send you another email when your order ships.
+
+Best regards,
+The {{ company_name }} Team
+'''
+
+[admin_new_order]
+subject = "New order: {{ order_number }}"
+new_order = "New order"
+customer = "Customer:"
+text = '''
+New order {{ order_number }}
+
+Customer: {{ customer_name }} ({{ customer_email }})
+
+Order total: {{ order_total }}
+
+Shipping address:
+{{ shipping_address_text }}
+'''
+
+[order_shipped]
+subject = "Your Order Has Shipped: {{ order_number }}"
+heading = "Your order has shipped!"
+intro = "Hi {{ customer_name }}, good news — order <strong>{{ order_number }}</strong> is on its way to you."
+carrier = "Carrier"
+in_transit = "In transit"
+tracking_number = "Tracking number:"
+track_button = "Track Your Package"
+text = '''
+Hi {{ customer_name }},
+
+Great news! Your order {{ order_number }} has shipped.
+
+Tracking Number: {{ tracking_number }}
+Carrier: {{ shipping_carrier }}
+
+Track your package: {{ tracking_url }}
+
+{{ company_name }}
+'''
+
+[order_ready_for_pickup]
+subject = "Your order {{ order_number }} is ready for pickup"
+heading = "Your order is ready for pickup"
+intro = "Hi {{ customer_name }}, order <strong>{{ order_number }}</strong> is waiting for you at the counter."
+pickup_at = "Pickup At"
+bring = "Bring your order number. Whoever collects the order gives their name at the counter."
+location_fallback = "the store"
+text = '''
+Hi {{ customer_name }},
+
+Your order {{ order_number }} is ready for pickup at {{ location_name }}.
+
+Bring your order number. Whoever collects the order gives their name at the counter.
+
+{{ company_name }}
+'''
+
+[order_cancelled]
+subject = "Your order {{ order_number }} has been cancelled"
+greeting = "Hi,"
+cancelled = "Your order {{ order_number }} has been cancelled."
+sorry = "We're sorry for the inconvenience. If you have any questions, just reply to this email."
+refunded = "Any payment that was captured has been refunded to your original payment method."
+
+[refund_processed]
+subject = "Refund Processed: {{ order_number }}"
+heading = "Your refund has been processed"
+intro = "Hi {{ customer_name }}, the refund for your order <strong>{{ order_number }}</strong> is on its way."
+refund_method = "Refund Method"
+processing_time = "Processing Time"
+bank_delay = "Depending on your bank, it may take a few business days for the funds to appear in your account."
+original_method = "Original payment method"
+business_days = "5-10 business days"
+text = '''
+Hi {{ customer_name }},
+
+Your refund for order {{ order_number }} has been processed.
+
+Refund Amount: {{ refund_amount }}
+Refund Method: {{ refund_method }}
+Processing Time: {{ processing_time }}
+
+{{ company_name }}
+'''

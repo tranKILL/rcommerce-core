@@ -1514,7 +1514,7 @@ async fn handle_payment_succeeded(
                 let order_service = state.order_service.clone();
                 let customer_service = state.customer_service.clone();
                 let db = state.db.clone();
-                let branding = state.branding.clone();
+                let mail = super::email_helpers::MailBrand::of(&state);
                 let svc = svc.clone();
                 tokio::spawn(async move {
                     if let Err(e) = send_order_confirmation_email(
@@ -1522,7 +1522,7 @@ async fn handle_payment_succeeded(
                         &order_service,
                         &customer_service,
                         &db,
-                        &branding,
+                        &mail,
                         order_id,
                         &customer_email,
                     )
@@ -1744,10 +1744,13 @@ async fn send_order_confirmation_email(
     order_service: &rcommerce_core::services::OrderService,
     customer_service: &rcommerce_core::services::CustomerService,
     db: &rcommerce_core::repository::Database,
-    branding: &rcommerce_core::BrandingConfig,
+    mail: &super::email_helpers::MailBrand,
     order_id: Uuid,
     customer_email: &str,
 ) -> rcommerce_core::Result<()> {
+    let branding = &mail.branding;
+    let locale =
+        super::email_helpers::order_email_locale(db.pool(), order_id, &mail.default_locale).await;
     use rcommerce_core::notification::{
         Address as EmailAddress, EmailNotificationFactory, OrderConfirmationParams, OrderItem,
     };
@@ -1888,21 +1891,16 @@ async fn send_order_confirmation_email(
         recipient_email: customer_email,
         customer_name: &customer_name,
         order_number: &order_detail.order.order_number,
-        order_date: &order_detail
-            .order
-            .created_at
-            .format("%B %d, %Y")
-            .to_string(),
-        order_total: &format!(
-            "{} {:.2}",
-            order_detail.order.currency, order_detail.order.total
-        ),
-        subtotal: &format!("${:.2}", order_detail.order.subtotal),
-        discount_total: &format!("${:.2}", order_detail.order.discount_total),
+        locale: &locale,
+        currency: &order_detail.order.currency.to_string(),
+        order_date: order_detail.order.created_at.date_naive(),
+        order_total: order_detail.order.total,
+        subtotal: order_detail.order.subtotal,
+        discount_total: order_detail.order.discount_total,
         discount_code: order_detail.order.coupon_code.as_deref(),
-        shipping_total: &format!("${:.2}", order_detail.order.shipping_total),
+        shipping_total: order_detail.order.shipping_total,
         shipping_method: &shipping_method,
-        tax_total: &format!("${:.2}", order_detail.order.tax_total),
+        tax_total: order_detail.order.tax_total,
         items: &email_items,
         shipping_address: &shipping_addr,
         billing_address: &billing_addr,

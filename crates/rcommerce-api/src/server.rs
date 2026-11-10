@@ -1114,7 +1114,21 @@ async fn create_app_state(config: &Config) -> Result<AppState> {
         app_state.storefront_url = url.trim_end_matches('/').to_string();
     }
     app_state.catalogue_sync = init_catalogue(config, &app_state.db).await?;
+    app_state.email_locale = init_email_locales(config)?;
     Ok(app_state)
+}
+
+/// Read the extra e-mail catalogues, if a directory is configured, and return
+/// the store's default e-mail language
+fn init_email_locales(config: &Config) -> Result<String> {
+    use rcommerce_core::notification::i18n;
+    if let Some(dir) = &config.notifications.locales_dir {
+        let loaded = i18n::load_locales_dir(std::path::Path::new(dir))?;
+        info!("E-mail catalogues read from {}: {}", dir, loaded.join(", "));
+    }
+    Ok(i18n::pick_locale([Some(
+        config.notifications.default_locale.as_str(),
+    )]))
 }
 
 /// Elasticsearch catalogue search when configured. A missing index is built in
@@ -1318,7 +1332,7 @@ fn spawn_subscription_billing_loop(config: &Config, app_state: &AppState) {
     let notification_service = app_state.notification_service.clone();
     let customer_service = std::sync::Arc::new(app_state.customer_service.clone());
     let db = app_state.db.clone();
-    let branding = app_state.branding.clone();
+    let mail = crate::routes::email_helpers::MailBrand::of(app_state);
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         loop {
@@ -1342,7 +1356,7 @@ fn spawn_subscription_billing_loop(config: &Config, app_state: &AppState) {
                             &order_service,
                             &customer_service,
                             &db,
-                            &branding,
+                            &mail,
                         );
                     }
                 }
@@ -1361,7 +1375,7 @@ fn send_renewal_confirmation_emails(
     order_service: &Arc<OrderService>,
     customer_service: &Arc<CustomerService>,
     db: &Database,
-    branding: &rcommerce_core::config::BrandingConfig,
+    mail: &crate::routes::email_helpers::MailBrand,
 ) {
     let Some(svc) = notification_service.clone() else {
         return;
@@ -1370,7 +1384,7 @@ fn send_renewal_confirmation_emails(
         let order_service = order_service.clone();
         let customer_service = customer_service.clone();
         let db = db.clone();
-        let branding = branding.clone();
+        let mail = mail.clone();
         let svc = svc.clone();
         let order_id = *order_id;
         tokio::spawn(async move {
@@ -1390,7 +1404,7 @@ fn send_renewal_confirmation_emails(
                 &order_service,
                 &customer_service,
                 &db,
-                &branding,
+                &mail,
                 order_id,
                 &customer_email,
             )

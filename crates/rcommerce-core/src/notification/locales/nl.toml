@@ -1,0 +1,194 @@
+# E-mailteksten in het Nederlands. Zie en.toml voor de opbouw; een tekst die
+# hier ontbreekt, wordt in het Engels verstuurd.
+
+[common]
+questions = "Vragen?"
+footer_note = ""
+customer_fallback = "klant"
+order_number = "Bestelnummer"
+order_date = "Besteldatum"
+total = "Totaal"
+status = "Status"
+subtotal = "Subtotaal"
+shipping = "Levering"
+tax = "Btw"
+discount = "Korting"
+discount_code = "Korting ({code})"
+item = "Artikel"
+qty = "Aantal"
+price = "Prijs"
+sku = "Ref."
+shipping_address = "Leveringsadres"
+billing_address = "Factuuradres"
+refund_amount = "Terugbetaald bedrag"
+copy_link = "Of kopieer deze link in uw browser:"
+date_format = "{day} {month} {year}"
+months = ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"]
+money_format = "{symbol} {amount}"
+decimal_separator = ","
+thousands_separator = "."
+hours = "{n} uur"
+one_hour = "{n} uur"
+
+[welcome]
+subject = "Welkom bij {{ company_name }}!"
+heading = "Welkom bij {{ company_name }}!"
+intro = "Beste {{ customer_name }}, uw account is aangemaakt en klaar voor gebruik. Winkel, volg uw bestellingen en beheer uw account in uw klantenzone."
+account_name = "Accountnaam"
+active = "Actief"
+start_shopping = "Begin met winkelen"
+sign_in = "Meld u aan op uw account:"
+text = '''
+Beste {{ customer_name }},
+
+Welkom bij {{ company_name }}! Uw account is klaar.
+
+Winkel: {{ shop_url }}
+Aanmelden: {{ login_url }}
+
+{{ company_name }}
+'''
+
+[verify_email]
+subject = "Bevestig uw e-mailadres"
+heading = "Bevestig uw e-mailadres"
+intro = "Beste {{ customer_name }}, bedankt voor het aanmaken van een account bij {{ company_name }}. Bevestig uw e-mailadres om u aan te melden."
+button = "Mijn e-mailadres bevestigen"
+expires = "Deze link verloopt over {{ expires_in }}. Hebt u dit account niet aangemaakt? Dan mag u deze e-mail negeren."
+text = '''
+Beste {{ customer_name }},
+
+Bedankt voor het aanmaken van een account bij {{ company_name }}. Bevestig uw e-mailadres om u aan te melden:
+
+{{ verification_url }}
+
+Deze link verloopt over {{ expires_in }}. Hebt u dit account niet aangemaakt? Dan mag u deze e-mail negeren.
+
+{{ company_name }}
+'''
+
+[password_reset]
+subject = "Uw wachtwoord opnieuw instellen"
+heading = "Wachtwoord opnieuw instellen"
+intro = "Beste {{ customer_name }}, we hebben een aanvraag ontvangen om uw wachtwoord opnieuw in te stellen."
+security_notice = "Veiligheid"
+security_text = "Hebt u dit niet aangevraagd? Dan mag u deze e-mail negeren. Uw wachtwoord verandert pas als u de link hieronder gebruikt."
+expires = "Deze link verloopt over {{ expires_in }}."
+button = "Nieuw wachtwoord kiezen"
+text = '''
+Beste {{ customer_name }},
+
+We hebben een aanvraag ontvangen om uw wachtwoord opnieuw in te stellen.
+
+Kies een nieuw wachtwoord: {{ reset_url }}
+
+Deze link verloopt over {{ expires_in }}. Hebt u dit niet aangevraagd? Dan mag u deze e-mail negeren.
+
+{{ company_name }}
+'''
+
+[order_confirmation]
+subject = "Bestelling bevestigd: {{ order_number }}"
+order_label = "Bestelling {{ order_number }}"
+heading = "Bedankt voor uw bestelling, {{ customer_name }}!"
+intro = "We hebben uw bestelling goed ontvangen en maken ze klaar. Het overzicht van uw bestelling zit als pdf bij deze e-mail."
+text = '''
+Beste {{ customer_name }},
+
+Bedankt voor uw bestelling! Uw bestelling {{ order_number }} is bevestigd.
+
+Details van de bestelling:
+----------------
+Subtotaal: {{ subtotal }}
+{{ discount_line }}Levering: {{ shipping_cost }}
+Btw: {{ tax }}
+Totaal: {{ order_total }}
+
+Het overzicht van uw bestelling zit als pdf bij deze e-mail.
+
+We sturen u opnieuw een e-mail zodra uw bestelling klaar is.
+
+Met vriendelijke groeten,
+Het team van {{ company_name }}
+'''
+
+[admin_new_order]
+subject = "Nieuwe bestelling: {{ order_number }}"
+new_order = "Nieuwe bestelling"
+customer = "Klant:"
+text = '''
+Nieuwe bestelling {{ order_number }}
+
+Klant: {{ customer_name }} ({{ customer_email }})
+
+Totaal van de bestelling: {{ order_total }}
+
+Leveringsadres:
+{{ shipping_address_text }}
+'''
+
+[order_shipped]
+subject = "Uw bestelling is onderweg: {{ order_number }}"
+heading = "Uw bestelling is onderweg!"
+intro = "Beste {{ customer_name }}, goed nieuws: bestelling <strong>{{ order_number }}</strong> is onderweg naar u."
+carrier = "Vervoerder"
+in_transit = "Onderweg"
+tracking_number = "Trackingnummer:"
+track_button = "Mijn pakket volgen"
+text = '''
+Beste {{ customer_name }},
+
+Goed nieuws! Uw bestelling {{ order_number }} is onderweg.
+
+Trackingnummer: {{ tracking_number }}
+Vervoerder: {{ shipping_carrier }}
+
+Volg uw pakket: {{ tracking_url }}
+
+{{ company_name }}
+'''
+
+[order_ready_for_pickup]
+subject = "Uw bestelling {{ order_number }} ligt klaar om af te halen"
+heading = "Uw bestelling ligt klaar"
+intro = "Beste {{ customer_name }}, bestelling <strong>{{ order_number }}</strong> ligt voor u klaar aan de balie."
+pickup_at = "Afhalen in"
+bring = "Breng uw bestelnummer mee. Wie de bestelling afhaalt, geeft zijn naam op aan de balie."
+location_fallback = "ons depot"
+text = '''
+Beste {{ customer_name }},
+
+Uw bestelling {{ order_number }} ligt klaar om af te halen in {{ location_name }}.
+
+Breng uw bestelnummer mee. Wie de bestelling afhaalt, geeft zijn naam op aan de balie.
+
+{{ company_name }}
+'''
+
+[order_cancelled]
+subject = "Uw bestelling {{ order_number }} is geannuleerd"
+greeting = "Beste klant,"
+cancelled = "Uw bestelling {{ order_number }} is geannuleerd."
+sorry = "Onze excuses voor het ongemak. Hebt u vragen? Beantwoord dan gewoon deze e-mail."
+refunded = "Een betaling die al was geïnd, is terugbetaald via uw oorspronkelijke betaalmethode."
+
+[refund_processed]
+subject = "Terugbetaling verwerkt: {{ order_number }}"
+heading = "Uw terugbetaling is verwerkt"
+intro = "Beste {{ customer_name }}, de terugbetaling voor uw bestelling <strong>{{ order_number }}</strong> is onderweg."
+refund_method = "Terugbetaald via"
+processing_time = "Verwerkingstijd"
+bank_delay = "Afhankelijk van uw bank kan het enkele werkdagen duren voordat het bedrag op uw rekening staat."
+original_method = "Oorspronkelijke betaalmethode"
+business_days = "5 tot 10 werkdagen"
+text = '''
+Beste {{ customer_name }},
+
+De terugbetaling voor uw bestelling {{ order_number }} is verwerkt.
+
+Terugbetaald bedrag: {{ refund_amount }}
+Terugbetaald via: {{ refund_method }}
+Verwerkingstijd: {{ processing_time }}
+
+{{ company_name }}
+'''

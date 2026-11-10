@@ -46,6 +46,7 @@ fn customer_json(c: &Customer) -> serde_json::Value {
         "created_at": c.created_at,
         "updated_at": c.updated_at,
         "confirmed_at": c.confirmed_at,
+        "locale": c.locale,
     })
 }
 
@@ -90,6 +91,9 @@ pub struct UpdateProfileRequest {
     #[validate(length(max = 50))]
     pub phone: Option<String>,
     pub accepts_marketing: Option<bool>,
+    /// Language of the customer's e-mails (`fr`, `nl-BE`); empty = the
+    /// store's default
+    pub locale: Option<String>,
 }
 
 /// Update the signed-in customer's own profile
@@ -101,6 +105,16 @@ pub async fn update_current_customer(
     request
         .validate()
         .map_err(|e| Error::validation(e.to_string()))?;
+    let locale = request
+        .locale
+        .map(|s| s.trim().replace('_', "-").to_ascii_lowercase());
+    if let Some(tag) = locale.as_deref().filter(|tag| !tag.is_empty()) {
+        if !super::email_helpers::is_locale_tag(tag) {
+            return Err(Error::validation(
+                "locale must be a language tag such as fr or nl-BE",
+            ));
+        }
+    }
     let update = UpdateCustomerRequest {
         email: None,
         first_name: request.first_name.map(|s| s.trim().to_string()),
@@ -108,6 +122,7 @@ pub async fn update_current_customer(
         phone: request.phone.map(|s| s.trim().to_string()),
         accepts_marketing: request.accepts_marketing,
         tax_exempt: None,
+        locale,
     };
     let customer = state
         .customer_service

@@ -165,6 +165,9 @@ pub struct AppState {
     pub xero_client: Option<Arc<rcommerce_core::accounting::XeroClient>>,
     /// Store branding for customer-facing emails and invoices
     pub branding: rcommerce_core::BrandingConfig,
+    /// Language of e-mails when neither the request, the customer nor the
+    /// order names one, and of shop-operator e-mails
+    pub email_locale: String,
     /// Accounting export configuration (store code/name, site URL)
     pub accounting: rcommerce_core::config::AccountingConfig,
     /// Store base currency for new carts (ISO code, e.g. "USD", "AUD")
@@ -333,6 +336,7 @@ impl AppState {
             notification_admin_email: params.notification_admin_email,
             xero_client,
             branding,
+            email_locale: rcommerce_core::notification::i18n::BASE_LOCALE.to_string(),
             accounting: params.accounting,
             default_currency: params.default_currency,
             settlement_sync,

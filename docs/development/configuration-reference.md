@@ -235,6 +235,10 @@ base_url = "https://erp.dianxiaomi.com"
 from_name = "Your Store"
 from_email = "orders@yourstore.com"
 
+# E-mail languages (see docs/architecture/10-notifications.md)
+default_locale = "en"          # when no request, customer or order names one
+locales_dir = "/etc/rcommerce/email-locales"   # optional: <locale>.toml catalogues
+
 # Queue settings
 queue_size = 1000              # Maximum queued notifications
 worker_count = 2               # Number of worker threads

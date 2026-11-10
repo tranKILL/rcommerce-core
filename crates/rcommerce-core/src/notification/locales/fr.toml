@@ -1,0 +1,194 @@
+# Textes des e-mails en français. Voir en.toml pour la structure ; un texte
+# absent ici est envoyé en anglais.
+
+[common]
+questions = "Des questions ?"
+footer_note = ""
+customer_fallback = "Madame, Monsieur"
+order_number = "Numéro de commande"
+order_date = "Date de commande"
+total = "Total"
+status = "Statut"
+subtotal = "Sous-total"
+shipping = "Livraison"
+tax = "TVA"
+discount = "Remise"
+discount_code = "Remise ({code})"
+item = "Article"
+qty = "Qté"
+price = "Prix"
+sku = "Réf."
+shipping_address = "Adresse de livraison"
+billing_address = "Adresse de facturation"
+refund_amount = "Montant remboursé"
+copy_link = "Ou copiez ce lien dans votre navigateur :"
+date_format = "{day} {month} {year}"
+months = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
+money_format = "{amount} {symbol}"
+decimal_separator = ","
+thousands_separator = " "
+hours = "{n} heures"
+one_hour = "{n} heure"
+
+[welcome]
+subject = "Bienvenue chez {{ company_name }} !"
+heading = "Bienvenue chez {{ company_name }} !"
+intro = "Bonjour {{ customer_name }}, votre compte est créé et prêt à l'emploi. Faites vos achats, suivez vos commandes et gérez votre compte depuis votre espace client."
+account_name = "Nom du compte"
+active = "Actif"
+start_shopping = "Commencer mes achats"
+sign_in = "Connectez-vous à votre compte :"
+text = '''
+Bonjour {{ customer_name }},
+
+Bienvenue chez {{ company_name }} ! Votre compte est prêt.
+
+Boutique : {{ shop_url }}
+Connexion : {{ login_url }}
+
+{{ company_name }}
+'''
+
+[verify_email]
+subject = "Confirmez votre adresse e-mail"
+heading = "Confirmez votre adresse e-mail"
+intro = "Bonjour {{ customer_name }}, merci d'avoir créé un compte chez {{ company_name }}. Confirmez votre adresse e-mail pour vous connecter."
+button = "Confirmer mon adresse e-mail"
+expires = "Ce lien expire dans {{ expires_in }}. Si vous n'avez pas créé ce compte, ignorez cet e-mail."
+text = '''
+Bonjour {{ customer_name }},
+
+Merci d'avoir créé un compte chez {{ company_name }}. Confirmez votre adresse e-mail pour vous connecter :
+
+{{ verification_url }}
+
+Ce lien expire dans {{ expires_in }}. Si vous n'avez pas créé ce compte, ignorez cet e-mail.
+
+{{ company_name }}
+'''
+
+[password_reset]
+subject = "Réinitialisation de votre mot de passe"
+heading = "Réinitialisation du mot de passe"
+intro = "Bonjour {{ customer_name }}, nous avons reçu une demande de réinitialisation de votre mot de passe."
+security_notice = "Sécurité"
+security_text = "Si vous n'avez pas fait cette demande, ignorez cet e-mail. Votre mot de passe ne change pas tant que vous n'utilisez pas le lien ci-dessous."
+expires = "Ce lien expire dans {{ expires_in }}."
+button = "Choisir un nouveau mot de passe"
+text = '''
+Bonjour {{ customer_name }},
+
+Nous avons reçu une demande de réinitialisation de votre mot de passe.
+
+Choisissez un nouveau mot de passe : {{ reset_url }}
+
+Ce lien expire dans {{ expires_in }}. Si vous n'avez pas fait cette demande, ignorez cet e-mail.
+
+{{ company_name }}
+'''
+
+[order_confirmation]
+subject = "Commande confirmée : {{ order_number }}"
+order_label = "Commande {{ order_number }}"
+heading = "Merci pour votre commande, {{ customer_name }} !"
+intro = "Nous avons bien reçu votre commande et nous la préparons. Le récapitulatif de votre commande est joint à cet e-mail en PDF."
+text = '''
+Bonjour {{ customer_name }},
+
+Merci pour votre commande ! Votre commande {{ order_number }} est confirmée.
+
+Détail de la commande :
+----------------
+Sous-total : {{ subtotal }}
+{{ discount_line }}Livraison : {{ shipping_cost }}
+TVA : {{ tax }}
+Total : {{ order_total }}
+
+Le récapitulatif de votre commande est joint à cet e-mail en PDF.
+
+Nous vous écrirons à nouveau quand votre commande sera prête.
+
+Cordialement,
+L'équipe {{ company_name }}
+'''
+
+[admin_new_order]
+subject = "Nouvelle commande : {{ order_number }}"
+new_order = "Nouvelle commande"
+customer = "Client :"
+text = '''
+Nouvelle commande {{ order_number }}
+
+Client : {{ customer_name }} ({{ customer_email }})
+
+Total de la commande : {{ order_total }}
+
+Adresse de livraison :
+{{ shipping_address_text }}
+'''
+
+[order_shipped]
+subject = "Votre commande est en route : {{ order_number }}"
+heading = "Votre commande est en route !"
+intro = "Bonjour {{ customer_name }}, bonne nouvelle : la commande <strong>{{ order_number }}</strong> est en route."
+carrier = "Transporteur"
+in_transit = "En route"
+tracking_number = "Numéro de suivi :"
+track_button = "Suivre mon colis"
+text = '''
+Bonjour {{ customer_name }},
+
+Bonne nouvelle ! Votre commande {{ order_number }} est en route.
+
+Numéro de suivi : {{ tracking_number }}
+Transporteur : {{ shipping_carrier }}
+
+Suivre votre colis : {{ tracking_url }}
+
+{{ company_name }}
+'''
+
+[order_ready_for_pickup]
+subject = "Votre commande {{ order_number }} est prête à être retirée"
+heading = "Votre commande est prête"
+intro = "Bonjour {{ customer_name }}, la commande <strong>{{ order_number }}</strong> vous attend au comptoir."
+pickup_at = "À retirer à"
+bring = "Munissez-vous de votre numéro de commande. La personne qui retire la commande donne son nom au comptoir."
+location_fallback = "notre dépôt"
+text = '''
+Bonjour {{ customer_name }},
+
+Votre commande {{ order_number }} est prête à être retirée à {{ location_name }}.
+
+Munissez-vous de votre numéro de commande. La personne qui retire la commande donne son nom au comptoir.
+
+{{ company_name }}
+'''
+
+[order_cancelled]
+subject = "Votre commande {{ order_number }} est annulée"
+greeting = "Bonjour,"
+cancelled = "Votre commande {{ order_number }} est annulée."
+sorry = "Nous sommes désolés pour ce désagrément. Pour toute question, répondez simplement à cet e-mail."
+refunded = "Tout paiement déjà encaissé a été remboursé sur votre moyen de paiement d'origine."
+
+[refund_processed]
+subject = "Remboursement effectué : {{ order_number }}"
+heading = "Votre remboursement est effectué"
+intro = "Bonjour {{ customer_name }}, le remboursement de votre commande <strong>{{ order_number }}</strong> est en cours."
+refund_method = "Mode de remboursement"
+processing_time = "Délai"
+bank_delay = "Selon votre banque, quelques jours ouvrables peuvent être nécessaires avant que le montant apparaisse sur votre compte."
+original_method = "Moyen de paiement d'origine"
+business_days = "5 à 10 jours ouvrables"
+text = '''
+Bonjour {{ customer_name }},
+
+Le remboursement de votre commande {{ order_number }} est effectué.
+
+Montant remboursé : {{ refund_amount }}
+Mode de remboursement : {{ refund_method }}
+Délai : {{ processing_time }}
+
+{{ company_name }}
+'''

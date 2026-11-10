@@ -75,6 +75,10 @@ pub struct CompleteCheckoutApiRequest {
     /// rate always uses its own location). Default: the first active location.
     #[serde(default)]
     pub fulfillment_location_id: Option<Uuid>,
+    /// Language of the order's e-mails (`fr`, `nl-BE`); default: the request's
+    /// `Accept-Language`, then the customer's preferred language
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 /// Request to confirm checkout after client-side payment confirmation
@@ -499,6 +503,7 @@ pub async fn select_shipping(
 pub async fn complete_checkout(
     State(state): State<AppState>,
     Extension(auth): Extension<Option<JwtAuth>>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<CompleteCheckoutApiRequest>,
 ) -> Result<(StatusCode, Json<CheckoutResultResponse>), (StatusCode, Json<serde_json::Value>)> {
     super::cart::get_cart_for_request(&state, request.cart_id, auth.as_ref())
@@ -594,6 +599,7 @@ pub async fn complete_checkout(
         subscription: request.subscription,
         payment_consent_id: request.payment_consent_id,
         fulfillment_location_id: request.fulfillment_location_id,
+        locale: super::email_helpers::requested_locale(request.locale.as_deref(), &headers),
     };
 
     // Call checkout service
@@ -618,7 +624,7 @@ pub async fn complete_checkout(
                     let order_service = state.order_service.clone();
                     let customer_service = state.customer_service.clone();
                     let db = state.db.clone();
-                    let branding = state.branding.clone();
+                    let mail = super::email_helpers::MailBrand::of(&state);
                     let svc = svc.clone();
                     tokio::spawn(async move {
                         if let Err(e) = send_order_confirmation_email(
@@ -626,7 +632,7 @@ pub async fn complete_checkout(
                             &order_service,
                             &customer_service,
                             &db,
-                            &branding,
+                            &mail,
                             order_id,
                             &customer_email,
                         )
@@ -879,7 +885,7 @@ pub async fn confirm_checkout(
                     let order_service = state.order_service.clone();
                     let customer_service = state.customer_service.clone();
                     let db = state.db.clone();
-                    let branding = state.branding.clone();
+                    let mail = super::email_helpers::MailBrand::of(&state);
                     let svc = svc.clone();
                     tokio::spawn(async move {
                         if let Err(e) = send_order_confirmation_email(
@@ -887,7 +893,7 @@ pub async fn confirm_checkout(
                             &order_service,
                             &customer_service,
                             &db,
-                            &branding,
+                            &mail,
                             order_id,
                             &customer_email,
                         )
@@ -924,10 +930,13 @@ pub(crate) async fn send_order_confirmation_email(
     order_service: &OrderService,
     customer_service: &CustomerService,
     db: &rcommerce_core::repository::Database,
-    branding: &rcommerce_core::BrandingConfig,
+    mail: &super::email_helpers::MailBrand,
     order_id: Uuid,
     customer_email: &str,
 ) -> rcommerce_core::Result<()> {
+    let branding = &mail.branding;
+    let locale =
+        super::email_helpers::order_email_locale(db.pool(), order_id, &mail.default_locale).await;
     let order_detail = match order_service.get_order(order_id).await? {
         Some(d) => d,
         None => return Ok(()),
@@ -1059,21 +1068,16 @@ pub(crate) async fn send_order_confirmation_email(
         recipient_email: customer_email,
         customer_name: &customer_name,
         order_number: &order_detail.order.order_number,
-        order_date: &order_detail
-            .order
-            .created_at
-            .format("%B %d, %Y")
-            .to_string(),
-        order_total: &format!(
-            "{} {:.2}",
-            order_detail.order.currency, order_detail.order.total
-        ),
-        subtotal: &format!("${:.2}", order_detail.order.subtotal),
-        discount_total: &format!("${:.2}", order_detail.order.discount_total),
+        locale: &locale,
+        currency: &order_detail.order.currency.to_string(),
+        order_date: order_detail.order.created_at.date_naive(),
+        order_total: order_detail.order.total,
+        subtotal: order_detail.order.subtotal,
+        discount_total: order_detail.order.discount_total,
         discount_code: order_detail.order.coupon_code.as_deref(),
-        shipping_total: &format!("${:.2}", order_detail.order.shipping_total),
+        shipping_total: order_detail.order.shipping_total,
         shipping_method: &shipping_method,
-        tax_total: &format!("${:.2}", order_detail.order.tax_total),
+        tax_total: order_detail.order.tax_total,
         items: &email_items,
         shipping_address: &shipping_addr,
         billing_address: &billing_addr,

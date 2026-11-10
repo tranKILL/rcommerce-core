@@ -146,6 +146,7 @@ mod notification_integration_tests {
             email_verified: true,
             last_login_at: None,
             role: crate::models::CustomerRole::Customer,
+            locale: None,
         };
 
         // Create mock addresses

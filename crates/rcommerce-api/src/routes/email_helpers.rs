@@ -3,7 +3,9 @@
 //! All sends are best-effort: failures are logged with `warn!` and never
 //! propagate back to the API request, mirroring the order-confirmation flow.
 
+use axum::http::{header::ACCEPT_LANGUAGE, HeaderMap};
 use rcommerce_core::models::Order;
+use rcommerce_core::notification::i18n;
 use rcommerce_core::notification::{Notification, NotificationChannel};
 use rcommerce_core::order::service::OrderDetail;
 use rust_decimal::Decimal;
@@ -11,6 +13,69 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::state::AppState;
+
+/// The store's branding and default e-mail language, for e-mails built in
+/// background tasks
+#[derive(Debug, Clone)]
+pub struct MailBrand {
+    pub branding: rcommerce_core::BrandingConfig,
+    /// Language when neither the order nor the customer names one
+    pub default_locale: String,
+}
+
+impl MailBrand {
+    /// The branding and default language of the store serving `state`
+    pub fn of(state: &AppState) -> Self {
+        Self {
+            branding: state.branding.clone(),
+            default_locale: state.email_locale.clone(),
+        }
+    }
+}
+
+/// A language tag a client may send (`fr`, `nl-BE`): starts with a letter,
+/// then letters, digits, `-` or `_`; 2 to 35 characters
+pub fn is_locale_tag(tag: &str) -> bool {
+    (2..=35).contains(&tag.len())
+        && tag.starts_with(|c: char| c.is_ascii_alphabetic())
+        && tag
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// The language a request asks for: a tag the client sent (kept even when no
+/// catalogue has it yet), else the first `Accept-Language` language e-mails
+/// can be written in
+pub fn requested_locale(explicit: Option<&str>, headers: &HeaderMap) -> Option<String> {
+    explicit
+        .map(str::trim)
+        .filter(|tag| is_locale_tag(tag))
+        .map(|tag| tag.replace('_', "-").to_ascii_lowercase())
+        .or_else(|| {
+            headers
+                .get(ACCEPT_LANGUAGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(i18n::from_accept_language)
+        })
+}
+
+/// The language of an order's e-mails: the one it was placed in, else the
+/// customer's preferred one, else `default`
+pub async fn order_email_locale(pool: &sqlx::PgPool, order_id: Uuid, default: &str) -> String {
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT o.metadata->>'locale', c.locale FROM orders o \
+         LEFT JOIN customers c ON c.id = o.customer_id WHERE o.id = $1",
+    )
+    .bind(order_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or_else(|e| {
+        warn!("Failed to read the language of order {}: {}", order_id, e);
+        None
+    });
+    let (placed, preferred) = row.unwrap_or_default();
+    i18n::pick_locale([placed.as_deref(), preferred.as_deref(), Some(default)])
+}
 
 /// Shop operator address (configured notification sender), falling back to
 /// the store's branding support email
@@ -120,6 +185,7 @@ pub async fn send_admin_order_email(state: &AppState, order_id: Uuid) {
         shipping_address.as_ref(),
         billing_address.as_ref(),
         &state.branding,
+        &state.email_locale,
     ) {
         Ok(n) => n,
         Err(e) => {
@@ -215,9 +281,15 @@ pub async fn send_order_shipped_email(
                 Some(name)
             }
         })
-        .unwrap_or_else(|| "rider".to_string());
+        .unwrap_or_default();
+    let locale = order_email_locale(state.db.pool(), order_id, &state.email_locale).await;
+    let customer_name = if customer_name.is_empty() {
+        i18n::text(&locale, "common", "customer_fallback")
+    } else {
+        customer_name
+    };
 
-    let template = match NotificationTemplate::load("order_shipped_html") {
+    let template = match NotificationTemplate::load_localized("order_shipped_html", &locale) {
         Ok(t) => t,
         Err(e) => {
             warn!("Failed to load order_shipped template: {}", e);
@@ -228,13 +300,16 @@ pub async fn send_order_shipped_email(
     let mut vars = TemplateVariables::new();
     vars.insert("customer_name", &customer_name);
     vars.insert("order_number", &order_number);
-    vars.insert("order_date", created_at.format("%b %-d, %Y").to_string());
+    vars.insert("order_date", i18n::date(&locale, created_at.date_naive()));
     vars.insert("tracking_number", tracking_number);
     vars.insert(
         "tracking_url",
         tracking_link.unwrap_or("https://example.com/orders"),
     );
-    vars.insert("shipping_carrier", tracking_provider.unwrap_or("Carrier"));
+    let carrier = tracking_provider
+        .map(str::to_string)
+        .unwrap_or_else(|| i18n::text(&locale, "order_shipped", "carrier"));
+    vars.insert("shipping_carrier", carrier);
     vars.insert("company_name", &state.branding.name);
     vars.insert("support_email", &shop_email(state));
 
@@ -284,8 +359,7 @@ async fn ready_email_details(
         text(&address, &["first_name"]).unwrap_or_default(),
         text(&address, &["last_name"]).unwrap_or_default()
     );
-    let location =
-        text(&metadata, &["pickup", "location_name"]).unwrap_or_else(|| "the store".into());
+    let location = text(&metadata, &["pickup", "location_name"]).unwrap_or_default();
     Some((email, number, name.trim().to_string(), location))
 }
 
@@ -300,13 +374,25 @@ pub async fn send_order_ready_email(state: &AppState, order_id: Uuid) {
     let Some((email, number, name, location)) = ready_email_details(state, order_id).await else {
         return;
     };
-    let template = match NotificationTemplate::load("order_ready_for_pickup_html") {
-        Ok(t) => t,
-        Err(e) => {
-            warn!("Failed to load order_ready_for_pickup template: {}", e);
-            return;
+    let locale = order_email_locale(state.db.pool(), order_id, &state.email_locale).await;
+    let section = "order_ready_for_pickup";
+    let or_text = |value: String, key: &str| {
+        if value.is_empty() {
+            i18n::text(&locale, section, key)
+        } else {
+            value
         }
     };
+    let name = or_text(name, "customer_fallback");
+    let location = or_text(location, "location_fallback");
+    let template =
+        match NotificationTemplate::load_localized("order_ready_for_pickup_html", &locale) {
+            Ok(t) => t,
+            Err(e) => {
+                warn!("Failed to load order_ready_for_pickup template: {}", e);
+                return;
+            }
+        };
     let mut vars = TemplateVariables::new();
     vars.insert("customer_name", name);
     vars.insert("order_number", number);
@@ -362,12 +448,16 @@ pub fn build_admin_order_notification(
     shipping_address: Option<&serde_json::Value>,
     billing_address: Option<&serde_json::Value>,
     branding: &rcommerce_core::BrandingConfig,
+    locale: &str,
 ) -> rcommerce_core::Result<Notification> {
     use rcommerce_core::notification::templates::{NotificationTemplate, TemplateVariables};
     use rcommerce_core::notification::{Address, EmailNotificationFactory, OrderItem};
 
     let order = &detail.order;
-    let template = NotificationTemplate::load("admin_new_order_html")?;
+    let template = NotificationTemplate::load_localized("admin_new_order_html", locale)?;
+    let locale = template.locale.clone();
+    let currency = order.currency.to_string();
+    let money = |amount: Decimal| i18n::money(&locale, amount, &currency);
 
     // Customer identity from the shipping address snapshot, fallback to email
     let customer_name = shipping_address
@@ -397,23 +487,20 @@ pub fn build_admin_order_notification(
     vars.insert("order_number", &order.order_number);
     vars.insert(
         "order_date",
-        order.created_at.format("%B %d, %Y").to_string(),
+        i18n::date(&locale, order.created_at.date_naive()),
     );
-    vars.insert(
-        "order_total",
-        format!("{} {:.2}", order.currency, order.total),
-    );
+    vars.insert("order_total", money(order.total));
     vars.insert("customer_name", &customer_name);
     vars.insert("customer_email", &order.customer_email);
-    vars.insert("subtotal", format!("${:.2}", order.subtotal));
-    vars.insert("shipping_cost", format!("${:.2}", order.shipping_total));
+    vars.insert("subtotal", money(order.subtotal));
+    vars.insert("shipping_cost", money(order.shipping_total));
 
     // Tax row is omitted entirely when no tax was charged
-    let tax_str = format!("${:.2}", order.tax_total);
-    if tax_str != "$0.00" {
+    if !order.tax_total.round_dp(2).is_zero() {
         let tax_row = format!(
-            "<tr><td style=\"padding:4px 0;font-size:13px;color:#666666;\">Tax</td><td align=\"right\" style=\"padding:4px 0;font-size:13px;color:#1a1a1a;\">{}</td></tr>",
-            tax_str
+            "<tr><td style=\"padding:4px 0;font-size:13px;color:#666666;\">{}</td><td align=\"right\" style=\"padding:4px 0;font-size:13px;color:#1a1a1a;\">{}</td></tr>",
+            i18n::text(&locale, "common", "tax"),
+            money(order.tax_total)
         );
         vars.insert("tax_row", tax_row);
     } else {
@@ -427,11 +514,11 @@ pub fn build_admin_order_notification(
             .coupon_code
             .as_deref()
             .filter(|c| !c.is_empty())
-            .map(|c| format!("Discount ({c})"))
-            .unwrap_or_else(|| "Discount".to_string());
+            .map(|c| i18n::text(&locale, "common", "discount_code").replace("{code}", c))
+            .unwrap_or_else(|| i18n::text(&locale, "common", "discount"));
         let discount_row = format!(
-            "<tr><td style=\"padding:4px 0;font-size:13px;color:#666666;\">{label}</td><td align=\"right\" style=\"padding:4px 0;font-size:13px;color:#059669;\">-${:.2}</td></tr>",
-            order.discount_total
+            "<tr><td style=\"padding:4px 0;font-size:13px;color:#666666;\">{label}</td><td align=\"right\" style=\"padding:4px 0;font-size:13px;color:#059669;\">-{}</td></tr>",
+            money(order.discount_total)
         );
         vars.insert("discount_row", discount_row);
     } else {
@@ -454,7 +541,8 @@ pub fn build_admin_order_notification(
             is_bundle_component: item.is_bundle_component == Some(true),
         })
         .collect();
-    let items_html = EmailNotificationFactory::format_order_items(&email_items);
+    let items_html =
+        EmailNotificationFactory::format_order_items_in(&email_items, &locale, &currency);
     vars.insert("items", items_html);
 
     // Address columns via the shared formatter (JSON snapshot -> Address)
@@ -498,37 +586,43 @@ pub fn build_admin_order_notification(
     build_from_template(admin_email, &template, vars, branding)
 }
 
-/// Build the customer-facing order-cancelled notification
-pub fn build_order_cancelled_notification(order: &Order, payment_captured: bool) -> Notification {
+/// Build the customer-facing order-cancelled notification, in `locale`
+pub fn build_order_cancelled_notification(
+    order: &Order,
+    payment_captured: bool,
+    locale: &str,
+) -> Notification {
+    let says = |key: &str, number: &str| {
+        i18n::text(locale, "order_cancelled", key).replace("{{ order_number }}", number)
+    };
+    let number = &order.order_number;
+    let strong_number = format!("<strong>{number}</strong>");
+    let (greeting, sorry) = (says("greeting", number), says("sorry", number));
+    let refunded = says("refunded", number);
     let refund_note = if payment_captured {
-        " Any payment that was captured has been refunded to your original payment method."
+        format!(" {refunded}")
     } else {
-        ""
+        String::new()
     };
     let refund_note_html = if payment_captured {
-        "<p>Any payment that was captured has been refunded to your original payment method.</p>"
+        format!("<p>{refunded}</p>")
     } else {
-        ""
+        String::new()
     };
 
     let body = format!(
-        "Hi,\n\nYour order {order_number} has been cancelled.\n\n\
-         We're sorry for the inconvenience. If you have any questions, just reply to this email.{refund_note}",
-        order_number = order.order_number,
+        "{greeting}\n\n{}\n\n{sorry}{refund_note}",
+        says("cancelled", number)
     );
-
     let html_body = format!(
-        "<p>Hi,</p>\
-         <p>Your order <strong>{order_number}</strong> has been cancelled.</p>\
-         <p>We're sorry for the inconvenience. If you have any questions, just reply to this email.</p>\
-         {refund_note_html}",
-        order_number = order.order_number,
+        "<p>{greeting}</p><p>{}</p><p>{sorry}</p>{refund_note_html}",
+        says("cancelled", &strong_number)
     );
 
     Notification::new(
         NotificationChannel::Email,
         order.customer_email.clone(),
-        format!("Your order {} has been cancelled", order.order_number),
+        says("subject", number),
         body,
     )
     .with_html_body(html_body)
@@ -540,8 +634,6 @@ pub fn build_order_cancelled_notification(order: &Order, payment_captured: bool)
 /// Uses the branded `refund_processed_html` template (same shell and layout as
 /// the order confirmation and shipped emails).
 pub async fn send_order_refunded_email(state: &AppState, order_id: Uuid, refunded_amount: Decimal) {
-    use rcommerce_core::notification::templates::{NotificationTemplate, TemplateVariables};
-
     if state.notification_service.is_none() {
         return;
     }
@@ -581,7 +673,8 @@ pub async fn send_order_refunded_email(state: &AppState, order_id: Uuid, refunde
                 Some(name)
             }
         })
-        .unwrap_or_else(|| "rider".to_string());
+        .unwrap_or_default();
+    let locale = order_email_locale(state.db.pool(), order_id, &state.email_locale).await;
 
     let notification = match build_order_refunded_notification(
         &customer_email,
@@ -590,7 +683,10 @@ pub async fn send_order_refunded_email(state: &AppState, order_id: Uuid, refunde
         refunded_amount,
         &customer_name,
         &shop_email(state),
-        &state.branding,
+        &MailBrand {
+            branding: state.branding.clone(),
+            default_locale: locale,
+        },
     ) {
         Ok(n) => n,
         Err(e) => {
@@ -610,21 +706,36 @@ pub fn build_order_refunded_notification(
     refunded_amount: Decimal,
     customer_name: &str,
     support_email: &str,
-    branding: &rcommerce_core::BrandingConfig,
+    mail: &MailBrand,
 ) -> rcommerce_core::Result<Notification> {
     use rcommerce_core::notification::templates::{NotificationTemplate, TemplateVariables};
 
-    let template = NotificationTemplate::load("refund_processed_html")?;
+    let branding = &mail.branding;
+    let template =
+        NotificationTemplate::load_localized("refund_processed_html", &mail.default_locale)?;
+    let locale = template.locale.clone();
+    let section = "refund_processed";
 
     let mut vars = TemplateVariables::new();
+    let customer_name = if customer_name.is_empty() {
+        i18n::text(&locale, section, "customer_fallback")
+    } else {
+        customer_name.to_string()
+    };
     vars.insert("customer_name", customer_name);
     vars.insert("order_number", order_number);
     vars.insert(
         "refund_amount",
-        format!("{} {:.2}", currency, refunded_amount),
+        i18n::money(&locale, refunded_amount, currency),
     );
-    vars.insert("refund_method", "Original payment method");
-    vars.insert("processing_time", "5-10 business days");
+    vars.insert(
+        "refund_method",
+        i18n::text(&locale, section, "original_method"),
+    );
+    vars.insert(
+        "processing_time",
+        i18n::text(&locale, section, "business_days"),
+    );
     vars.insert("company_name", &branding.name);
     vars.insert("support_email", support_email);
 
@@ -776,6 +887,7 @@ mod tests {
             Some(&addr),
             Some(&addr),
             &brand_fixture(),
+            "en",
         )
         .unwrap();
 
@@ -803,7 +915,7 @@ mod tests {
         assert!(html.contains("$10.00")); // subtotal
         assert!(html.contains("$5.00")); // shipping
         assert!(html.contains("$0.80")); // tax
-        assert!(html.contains("USD 15.80")); // total
+        assert!(html.contains("$15.80")); // total, written like every amount
     }
 
     #[test]
@@ -816,6 +928,7 @@ mod tests {
             Some(&addr),
             None,
             &brand_fixture(),
+            "en",
         )
         .unwrap();
         let html = notification.html_body.as_deref().unwrap();
@@ -827,7 +940,7 @@ mod tests {
     #[test]
     fn test_build_order_cancelled_notification_with_refund_note() {
         let order = sample_order();
-        let notification = build_order_cancelled_notification(&order, true);
+        let notification = build_order_cancelled_notification(&order, true, "en");
 
         assert_eq!(notification.recipient, "customer@example.com");
         assert_eq!(
@@ -846,7 +959,7 @@ mod tests {
     #[test]
     fn test_build_order_cancelled_notification_without_refund_note() {
         let order = sample_order();
-        let notification = build_order_cancelled_notification(&order, false);
+        let notification = build_order_cancelled_notification(&order, false, "en");
 
         assert!(!notification.body.contains("refunded"));
     }
@@ -860,16 +973,19 @@ mod tests {
             Decimal::new(1580, 2),
             "Jane Doe",
             "support@example.com",
-            &brand_fixture(),
+            &MailBrand {
+                branding: brand_fixture(),
+                default_locale: "en".to_string(),
+            },
         )
         .expect("refund notification renders");
 
         assert_eq!(notification.recipient, "customer@example.com");
         assert_eq!(notification.subject, "Refund Processed: ORD-1001");
-        assert!(notification.body.contains("USD 15.80"));
+        assert!(notification.body.contains("$15.80"));
         let html = notification.html_body.as_deref().unwrap();
         assert!(html.contains("ORD-1001"));
-        assert!(html.contains("USD 15.80"));
+        assert!(html.contains("$15.80"));
         // Branded shell: logo, support email, site link
         assert!(html.contains("https://example.com/images/logo.png"));
         assert!(html.contains("support@example.com"));

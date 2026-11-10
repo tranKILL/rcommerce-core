@@ -835,6 +835,10 @@ pub struct ImageSize {
     pub crop: bool,
 }
 
+fn default_email_locale() -> String {
+    "en".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationConfig {
     #[serde(default = "default_true")]
@@ -844,6 +848,16 @@ pub struct NotificationConfig {
     /// Falls back to the configured sender address when unset.
     #[serde(default)]
     pub admin_email: Option<String>,
+
+    /// Language of e-mails when neither the request, the customer nor the
+    /// order names one (and of shop-operator e-mails)
+    #[serde(default = "default_email_locale")]
+    pub default_locale: String,
+
+    /// Directory of extra e-mail catalogues (`<locale>.toml`): new languages,
+    /// or texts that replace built-in ones
+    #[serde(default)]
+    pub locales_dir: Option<String>,
 
     #[serde(default)]
     pub email: EmailConfig,
@@ -857,6 +871,8 @@ impl Default for NotificationConfig {
         Self {
             enabled: true,
             admin_email: None,
+            default_locale: default_email_locale(),
+            locales_dir: None,
             email: EmailConfig::default(),
             sms: SmsConfig::default(),
         }

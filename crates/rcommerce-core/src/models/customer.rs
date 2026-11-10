@@ -57,6 +57,10 @@ pub struct Customer {
     pub last_login_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing)]
     pub role: CustomerRole,
+    /// Preferred language (BCP 47 tag) of the customer's e-mails; `None` = the
+    /// store's default
+    #[sqlx(default)]
+    pub locale: Option<String>,
 }
 
 /// Create customer request
@@ -91,6 +95,8 @@ pub struct UpdateCustomerRequest {
     pub phone: Option<String>,
     pub accepts_marketing: Option<bool>,
     pub tax_exempt: Option<bool>,
+    /// Preferred language; an empty string removes it
+    pub locale: Option<String>,
 }
 
 /// Create address request

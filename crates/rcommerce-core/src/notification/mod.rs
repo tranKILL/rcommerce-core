@@ -1,5 +1,6 @@
 pub mod channels;
 pub mod email_templates;
+pub mod i18n;
 pub mod service;
 pub mod templates;
 pub mod types;

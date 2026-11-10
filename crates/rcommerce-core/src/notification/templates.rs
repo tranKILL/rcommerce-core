@@ -1,3 +1,4 @@
+use crate::notification::i18n;
 use crate::{Error, Result};
 
 /// Represents a notification template with placeholders for dynamic content substitution.
@@ -33,11 +34,33 @@ pub struct NotificationTemplate {
     pub channel: crate::notification::NotificationChannel,
     /// List of required variable names for this template
     pub variables: Vec<String>,
+    /// Language of the texts (`{{ t.key }}` already replaced by `load_localized`)
+    pub locale: String,
 }
 
 impl NotificationTemplate {
-    /// Load from file or database
+    /// Load a template with its texts in English
     pub fn load(id: &str) -> Result<Self> {
+        Self::load_localized(id, i18n::BASE_LOCALE)
+    }
+
+    /// Load a template with its texts in `locale` (see [`i18n`]); texts the
+    /// language lacks are in English
+    pub fn load_localized(id: &str, locale: &str) -> Result<Self> {
+        let mut template = Self::built_in(id)?;
+        let locale = i18n::pick_locale([Some(locale)]);
+        let section = id.trim_end_matches("_html");
+        template.subject = i18n::translate(&template.subject, &locale, section);
+        template.body = i18n::translate(&template.body, &locale, section);
+        template.html_body = template
+            .html_body
+            .map(|html| i18n::translate(&html, &locale, section));
+        template.locale = locale;
+        Ok(template)
+    }
+
+    /// The built-in template `id`, its texts still as `{{ t.key }}`
+    fn built_in(id: &str) -> Result<Self> {
         match id {
             // Plain text templates
             "order_confirmation" => Ok(Self::order_confirmation()),
@@ -60,6 +83,7 @@ impl NotificationTemplate {
             "dunning_final_html" => Ok(Self::dunning_final_html()),
             "welcome_html" => Ok(Self::welcome_html()),
             "password_reset_html" => Ok(Self::password_reset_html()),
+            "verify_email_html" => Ok(Self::verify_email_html()),
             "abandoned_cart_html" => Ok(Self::abandoned_cart_html()),
             _ => Err(Error::not_found("Template not found")),
         }
@@ -88,7 +112,8 @@ impl NotificationTemplate {
             }
 
             let rendered = clean_unset_placeholders(&rendered);
-            Ok(Some(wrap_email_html(
+            Ok(Some(wrap_localized_email_html(
+                &self.locale,
                 &self.name,
                 &rendered,
                 &BrandingConfig::default(),
@@ -114,7 +139,12 @@ impl NotificationTemplate {
             }
 
             let rendered = clean_unset_placeholders(&rendered);
-            Ok(Some(wrap_email_html(&self.name, &rendered, brand)))
+            Ok(Some(wrap_localized_email_html(
+                &self.locale,
+                &self.name,
+                &rendered,
+                brand,
+            )))
         } else {
             Ok(None)
         }
@@ -171,6 +201,7 @@ impl NotificationTemplate {
             "welcome.html" => Ok(include_str!("templates/welcome.html").to_string()),
             "password_reset.html" => Ok(include_str!("templates/password_reset.html").to_string()),
             "abandoned_cart.html" => Ok(include_str!("templates/abandoned_cart.html").to_string()),
+            "verify_email.html" => Ok(include_str!("templates/verify_email.html").to_string()),
             _ => Err(Error::not_found("HTML template not found")),
         }
     }
@@ -198,6 +229,7 @@ The R Commerce Team
         "#
             .to_string(),
             html_body: None,
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "customer_name".to_string(),
@@ -213,31 +245,13 @@ The R Commerce Team
         Self {
             id: "order_confirmation_html".to_string(),
             name: "Order Confirmation HTML".to_string(),
-            subject: "Order Confirmed: {{ order_number }}".to_string(),
-            body: r#"
-Hello {{ customer_name }},
-
-Thank you for your order! Your order {{ order_number }} has been confirmed.
-
-Order Details:
-----------------
-Subtotal: {{ subtotal }}
-{{ discount_line }}Shipping: {{ shipping_cost }}
-Tax: {{ tax }}
-Total: {{ order_total }}
-
-Your invoice is attached to this email as a PDF.
-
-We'll send you another email when your order ships.
-
-Best regards,
-The {{ company_name }} Team
-        "#
-            .to_string(),
+            subject: "{{ t.subject }}".to_string(),
+            body: "{{ t.text }}".to_string(),
             html_body: Some(
                 Self::load_html_template("invoice.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "order_number".to_string(),
@@ -286,6 +300,7 @@ Thank you for your business!
         "#
             .to_string(),
             html_body: None,
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "order_number".to_string(),
@@ -316,6 +331,7 @@ Recommended Reorder Quantity: {{ reorder_quantity }}
         "#
             .to_string(),
             html_body: None,
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "product_name".to_string(),
@@ -334,21 +350,13 @@ Recommended Reorder Quantity: {{ reorder_quantity }}
         Self {
             id: "order_ready_for_pickup_html".to_string(),
             name: "Order Ready For Pickup HTML".to_string(),
-            subject: "Your order {{ order_number }} is ready for pickup".to_string(),
-            body: r#"
-Hi {{ customer_name }},
-
-Your order {{ order_number }} is ready for pickup at {{ location_name }}.
-
-Bring your order number. Whoever collects the order gives their name at the counter.
-
-{{ company_name }}
-        "#
-            .to_string(),
+            subject: "{{ t.subject }}".to_string(),
+            body: "{{ t.text }}".to_string(),
             html_body: Some(
                 Self::load_html_template("order_ready_for_pickup.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "order_number".to_string(),
@@ -364,24 +372,13 @@ Bring your order number. Whoever collects the order gives their name at the coun
         Self {
             id: "order_shipped_html".to_string(),
             name: "Order Shipped HTML".to_string(),
-            subject: "Your Order Has Shipped: {{ order_number }}".to_string(),
-            body: r#"
-Hi {{ customer_name }},
-
-Great news! Your order {{ order_number }} has shipped.
-
-Tracking Number: {{ tracking_number }}
-Carrier: {{ shipping_carrier }}
-
-Track your package: {{ tracking_url }}
-
-{{ company_name }}
-        "#
-            .to_string(),
+            subject: "{{ t.subject }}".to_string(),
+            body: "{{ t.text }}".to_string(),
             html_body: Some(
                 Self::load_html_template("order_shipped.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "order_number".to_string(),
@@ -402,22 +399,13 @@ Track your package: {{ tracking_url }}
         Self {
             id: "admin_new_order_html".to_string(),
             name: "Admin New Order HTML".to_string(),
-            subject: "New order: {{ order_number }}".to_string(),
-            body: r#"
-New order {{ order_number }}
-
-Customer: {{ customer_name }} ({{ customer_email }})
-
-Order total: {{ order_total }}
-
-Shipping address:
-{{ shipping_address_text }}
-        "#
-            .to_string(),
+            subject: "{{ t.subject }}".to_string(),
+            body: "{{ t.text }}".to_string(),
             html_body: Some(
                 Self::load_html_template("admin_new_order.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "order_number".to_string(),
@@ -461,6 +449,7 @@ If you have any questions, just reply to this email.
                 Self::load_html_template("order_cancelled.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "order_number".to_string(),
@@ -495,6 +484,7 @@ Payment Date: {{ payment_date }}
                 Self::load_html_template("payment_successful.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "order_number".to_string(),
@@ -529,6 +519,7 @@ Please try again: {{ retry_url }}
                 Self::load_html_template("payment_failed.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "order_number".to_string(),
@@ -546,23 +537,13 @@ Please try again: {{ retry_url }}
         Self {
             id: "refund_processed_html".to_string(),
             name: "Refund Processed HTML".to_string(),
-            subject: "Refund Processed: {{ order_number }}".to_string(),
-            body: r#"
-Hi {{ customer_name }},
-
-Your refund for order {{ order_number }} has been processed.
-
-Refund Amount: {{ refund_amount }}
-Refund Method: {{ refund_method }}
-Processing Time: {{ processing_time }}
-
-{{ company_name }}
-        "#
-            .to_string(),
+            subject: "{{ t.subject }}".to_string(),
+            body: "{{ t.text }}".to_string(),
             html_body: Some(
                 Self::load_html_template("refund_processed.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "order_number".to_string(),
@@ -596,6 +577,7 @@ Next billing date: {{ next_billing_date }}
                 Self::load_html_template("subscription_created.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "customer_name".to_string(),
@@ -633,6 +615,7 @@ Invoice: {{ invoice_url }}
                 Self::load_html_template("subscription_renewal.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "customer_name".to_string(),
@@ -668,6 +651,7 @@ Reason: {{ reason }}
                 Self::load_html_template("subscription_cancelled.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "customer_name".to_string(),
@@ -701,6 +685,7 @@ Please update your payment method to keep your order on track: {{ retry_url }}
                 Self::load_html_template("dunning_first.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "customer_name".to_string(),
@@ -736,6 +721,7 @@ Please update your payment method: {{ update_payment_url }}
                 Self::load_html_template("dunning_retry.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "customer_name".to_string(),
@@ -772,6 +758,7 @@ Questions? {{ contact_support_url }}
                 Self::load_html_template("dunning_final.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "customer_name".to_string(),
@@ -791,22 +778,13 @@ Questions? {{ contact_support_url }}
         Self {
             id: "welcome_html".to_string(),
             name: "Welcome HTML".to_string(),
-            subject: "Welcome to {{ company_name }}!".to_string(),
-            body: r#"
-Hi {{ customer_name }},
-
-Welcome to {{ company_name }}! Your account is ready.
-
-Shop: {{ shop_url }}
-Sign in: {{ login_url }}
-
-{{ company_name }}
-        "#
-            .to_string(),
+            subject: "{{ t.subject }}".to_string(),
+            body: "{{ t.text }}".to_string(),
             html_body: Some(
                 Self::load_html_template("welcome.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "customer_name".to_string(),
@@ -823,23 +801,13 @@ Sign in: {{ login_url }}
         Self {
             id: "password_reset_html".to_string(),
             name: "Password Reset HTML".to_string(),
-            subject: "Password Reset Request".to_string(),
-            body: r#"
-Hi {{ customer_name }},
-
-We received a request to reset your password.
-
-Reset your password: {{ reset_url }}
-
-This link expires in {{ expires_in }}. If you didn't request this, you can ignore this email.
-
-{{ company_name }}
-        "#
-            .to_string(),
+            subject: "{{ t.subject }}".to_string(),
+            body: "{{ t.text }}".to_string(),
             html_body: Some(
                 Self::load_html_template("password_reset.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "customer_name".to_string(),
@@ -848,6 +816,29 @@ This link expires in {{ expires_in }}. If you didn't request this, you can ignor
                 "expires_in".to_string(),
                 "company_name".to_string(),
                 "support_email".to_string(),
+            ],
+        }
+    }
+
+    /// Confirm the e-mail address of a new account
+    fn verify_email_html() -> Self {
+        Self {
+            id: "verify_email_html".to_string(),
+            name: "Verify Email HTML".to_string(),
+            subject: "{{ t.subject }}".to_string(),
+            body: "{{ t.text }}".to_string(),
+            html_body: Some(
+                Self::load_html_template("verify_email.html")
+                    .unwrap_or_else(|_| Self::get_default_html_template()),
+            ),
+            locale: i18n::BASE_LOCALE.to_string(),
+            channel: crate::notification::NotificationChannel::Email,
+            variables: vec![
+                "customer_name".to_string(),
+                "verification_url".to_string(),
+                "expires_in".to_string(),
+                "company_name".to_string(),
+                "accent_color".to_string(),
             ],
         }
     }
@@ -877,6 +868,7 @@ Complete your order: {{ cart_url }}
                 Self::load_html_template("abandoned_cart.html")
                     .unwrap_or_else(|_| Self::get_default_html_template()),
             ),
+            locale: i18n::BASE_LOCALE.to_string(),
             channel: crate::notification::NotificationChannel::Email,
             variables: vec![
                 "customer_name".to_string(),
@@ -927,9 +919,26 @@ fn clean_unset_placeholders(rendered: &str) -> String {
 /// Branding comes from `brand`; use `BrandingConfig::default()` for the
 /// built-in neutral (unbranded) identity.
 pub fn wrap_email_html(title: &str, body: &str, brand: &BrandingConfig) -> String {
+    wrap_localized_email_html(i18n::BASE_LOCALE, title, body, brand)
+}
+
+/// [`wrap_email_html`] with the shell's own texts (contact line, footer note)
+/// in `locale`
+pub fn wrap_localized_email_html(
+    locale: &str,
+    title: &str,
+    body: &str,
+    brand: &BrandingConfig,
+) -> String {
+    let note = i18n::text(locale, "common", "footer_note");
+    let note = if note.is_empty() {
+        String::new()
+    } else {
+        format!("\n            <p style=\"margin:0;\">{note}</p>")
+    };
     format!(
         r#"<!DOCTYPE html>
-<html lang="en">
+<html lang="{lang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -952,8 +961,7 @@ pub fn wrap_email_html(title: &str, body: &str, brand: &BrandingConfig) -> Strin
         </tr>
         <tr>
           <td style="padding:20px 32px 28px 32px;border-top:1px solid #eeeeee;font-family:Helvetica,Arial,sans-serif;font-size:12px;line-height:1.7;color:#888888;text-align:center;">
-            <p style="margin:0 0 4px 0;">Questions? <a href="mailto:{support}" style="color:{accent};text-decoration:none;">{support}</a> &nbsp;&middot;&nbsp; <a href="{site}" style="color:{accent};text-decoration:none;">{site_host}</a></p>
-            <p style="margin:0;">Payments are in USD. All sales are final.</p>
+            <p style="margin:0 0 4px 0;">{questions} <a href="mailto:{support}" style="color:{accent};text-decoration:none;">{support}</a> &nbsp;&middot;&nbsp; <a href="{site}" style="color:{accent};text-decoration:none;">{site_host}</a></p>{note}
             <p style="margin:4px 0 0 0;">&copy; 2026 {brand}</p>
           </td>
         </tr>
@@ -963,6 +971,9 @@ pub fn wrap_email_html(title: &str, body: &str, brand: &BrandingConfig) -> Strin
 </table>
 </body>
 </html>"#,
+        lang = locale,
+        questions = i18n::text(locale, "common", "questions"),
+        note = note,
         title = title,
         accent = brand.accent_color,
         logo = brand.logo_url,

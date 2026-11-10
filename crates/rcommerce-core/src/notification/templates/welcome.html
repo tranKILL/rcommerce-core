@@ -1,5 +1,5 @@
-<h1 style="margin:0 0 12px 0;font-size:22px;line-height:1.3;color:#1a1a1a;">Welcome to {{ company_name }}!</h1>
-<p style="margin:0 0 24px 0;font-size:14px;line-height:1.6;color:#555555;">Hi {{ customer_name }}, your account has been created successfully and is ready to use. Start shopping, track your orders, and manage your account settings from your dashboard.</p>
+<h1 style="margin:0 0 12px 0;font-size:22px;line-height:1.3;color:#1a1a1a;">{{ t.heading }}</h1>
+<p style="margin:0 0 24px 0;font-size:14px;line-height:1.6;color:#555555;">{{ t.intro }}</p>
 
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 24px 0;background-color:#f7f7f7;border:1px solid #ececec;">
   <tr>
@@ -7,12 +7,12 @@
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
         <tr>
           <td width="50%" valign="top" style="padding-right:8px;">
-            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#999999;padding-bottom:4px;">Account Name</div>
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#999999;padding-bottom:4px;">{{ t.account_name }}</div>
             <div style="font-size:14px;font-weight:bold;color:#1a1a1a;">{{ customer_name }}</div>
           </td>
           <td width="50%" valign="top">
-            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#999999;padding-bottom:4px;">Status</div>
-            <div style="font-size:14px;font-weight:bold;color:#ff4d00;">Active</div>
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#999999;padding-bottom:4px;">{{ t.status }}</div>
+            <div style="font-size:14px;font-weight:bold;color:#ff4d00;">{{ t.active }}</div>
           </td>
         </tr>
       </table>
@@ -23,9 +23,9 @@
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 8px 0;">
   <tr>
     <td align="center" bgcolor="#ff4d00" style="border-radius:4px;">
-      <a href="{{ shop_url }}" target="_blank" style="display:inline-block;padding:12px 28px;font-family:Helvetica,Arial,sans-serif;font-size:14px;font-weight:bold;color:#ffffff;text-decoration:none;">Start Shopping</a>
+      <a href="{{ shop_url }}" target="_blank" style="display:inline-block;padding:12px 28px;font-family:Helvetica,Arial,sans-serif;font-size:14px;font-weight:bold;color:#ffffff;text-decoration:none;">{{ t.start_shopping }}</a>
     </td>
   </tr>
 </table>
 
-<p style="margin:16px 0 0 0;font-size:13px;line-height:1.6;color:#777777;">Sign in to your account: <a href="{{ login_url }}" style="color:#ff4d00;text-decoration:none;">{{ login_url }}</a></p>
+<p style="margin:16px 0 0 0;font-size:13px;line-height:1.6;color:#777777;">{{ t.sign_in }} <a href="{{ login_url }}" style="color:#ff4d00;text-decoration:none;">{{ login_url }}</a></p>

@@ -124,6 +124,13 @@ impl PostgresCustomerRepository {
         if let Some(tax_exempt) = request.tax_exempt {
             query.push(set("tax_exempt")).push_bind(tax_exempt);
         }
+        if let Some(locale) = request.locale {
+            query
+                .push(set("locale"))
+                .push("NULLIF(")
+                .push_bind(locale)
+                .push(", '')");
+        }
         if !changed {
             return Err(crate::Error::Validation("No fields to update".to_string()));
         }

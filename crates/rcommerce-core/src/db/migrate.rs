@@ -249,6 +249,11 @@ impl Migrator {
                 "catalog_search_text",
                 include_str!("../../migrations/030_catalog_search_text.sql"),
             ),
+            (
+                31,
+                "customer_locale",
+                include_str!("../../migrations/031_customer_locale.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

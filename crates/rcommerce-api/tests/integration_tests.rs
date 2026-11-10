@@ -3798,6 +3798,65 @@ async fn test_staff_order_list_and_pickup_steps() {
     app.cleanup().await.ok();
 }
 
+/// The language of a customer's e-mails: taken from the sign-up (explicit or
+/// `Accept-Language`), then changed on the profile; invalid tags are refused
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_customer_email_language() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let stored = |email: String| {
+        let pool = app.db_pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Option<String>>("SELECT locale FROM customers WHERE email = $1")
+                .bind(email)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let register = |email: &str, locale: Option<&str>, accept: &str| {
+        let mut body = serde_json::json!({
+            "email": email, "password": "LocalePassword123!",
+            "first_name": "Lang", "last_name": "Test"
+        });
+        if let Some(locale) = locale {
+            body["locale"] = serde_json::json!(locale);
+        }
+        app.http_client
+            .post(format!("{}/api/v1/auth/register", app.base_url()))
+            .header("Accept-Language", accept)
+            .json(&body)
+            .send()
+    };
+    let by_header = format!("lang_{}@example.com", Uuid::new_v4());
+    let response = register(&by_header, None, "de-DE;q=0.9, nl-BE;q=0.8")
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 201);
+    assert_eq!(stored(by_header).await.as_deref(), Some("nl"));
+    let explicit = format!("lang_{}@example.com", Uuid::new_v4());
+    let response = register(&explicit, Some("fr_BE"), "nl").await.unwrap();
+    assert_eq!(response.status(), 201);
+    assert_eq!(stored(explicit).await.as_deref(), Some("fr-be"));
+
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let update = |locale: &str| {
+        app.http_client
+            .put(format!("{}/api/v1/customers/me", app.base_url()))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "locale": locale }))
+            .send()
+    };
+    let response = update("NL").await.unwrap();
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["customer"]["locale"], "nl", "{body}");
+    assert_eq!(update("1x!").await.unwrap().status(), 400);
+    let body: serde_json::Value = update("").await.unwrap().json().await.unwrap();
+    assert!(body["customer"]["locale"].is_null(), "{body}");
+}
+
 /// Sign-ups racing for one e-mail: one account is created, the others are
 /// refused as a client error (no server error)
 #[tokio::test]

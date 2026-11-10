@@ -200,6 +200,8 @@ pub struct CompleteCheckoutRequest {
     /// Location the order's stock comes from when it is delivered; a pickup
     /// rate always uses its own location
     pub fulfillment_location_id: Option<Uuid>,
+    /// Language the order was placed in (its e-mails are written in it)
+    pub locale: Option<String>,
 }
 
 /// Checkout result
@@ -752,6 +754,9 @@ impl CheckoutService {
             "shipping_service": validated_rate.service_code,
             "fulfillment_location_id": fulfillment_location_id,
         });
+        if let Some(locale) = &request.locale {
+            order_metadata["locale"] = serde_json::json!(locale);
+        }
         if pickup_location(&validated_rate).is_some() {
             order_metadata["pickup"] = serde_json::json!({
                 "location_id": fulfillment_location_id,
@@ -2186,6 +2191,7 @@ mod tests {
             subscription: None,
             payment_consent_id: None,
             fulfillment_location_id: None,
+            locale: None,
         }
     }
 

@@ -849,8 +849,14 @@ pub async fn cancel_order(
 
     let order = fetch_order(&state, id).await?;
     if !order.customer_email.is_empty() {
-        let notification =
-            super::email_helpers::build_order_cancelled_notification(&order, payment_captured);
+        let locale =
+            super::email_helpers::order_email_locale(state.db.pool(), id, &state.email_locale)
+                .await;
+        let notification = super::email_helpers::build_order_cancelled_notification(
+            &order,
+            payment_captured,
+            &locale,
+        );
         super::email_helpers::spawn_send(&state, notification, "order-cancelled email");
     }
     Ok(Json(build_order_response(&state, order).await?))

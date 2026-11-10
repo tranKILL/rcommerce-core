@@ -1274,3 +1274,39 @@ impl BounceHandler {
 ```
 
 This comprehensive notification system provides multi-channel support, template management, queue-based delivery, analytics, and proper bounce/complaint handling suitable for production ecommerce environments.
+## E-mail languages
+
+Customer e-mails are written in the customer's language. Each language has one
+message catalogue (`crates/rcommerce-core/src/notification/locales/<locale>.toml`):
+a section per e-mail (`[order_ready_for_pickup]`) and a `[common]` section for
+shared labels, the footer, and the date and money formats. Templates refer to a
+text as `{{ t.key }}`; texts can hold the e-mail's own `{{ variable }}`
+placeholders. English, French and Dutch are built in; English is the base, and a
+text missing from another language is sent in English.
+
+**Adding a language** needs no rebuild: put `<locale>.toml` (for example
+`de.toml`, copied from `en.toml` and translated) in the directory named by
+`notifications.locales_dir`. A file for a built-in language replaces only the
+texts it gives, so a store can change its footer note or a single sentence.
+Amounts and dates follow `common.money_format`, `decimal_separator`,
+`thousands_separator`, `date_format` and `months`.
+
+**Which language** an e-mail uses, first match wins (a language counts only when
+a catalogue exists for it, `fr-BE` falling back to `fr`):
+
+| E-mail | Order of preference |
+|---|---|
+| Order e-mails (confirmation, ready for pickup, shipped, cancelled, refunded) | the language the order was placed in (`locale` on `POST /checkout/complete`, else the request's `Accept-Language`), the customer's preferred language, `notifications.default_locale` |
+| E-mail confirmation, password reset | `locale` in the request body, `Accept-Language`, the customer's preferred language, `notifications.default_locale` |
+| Shop-operator e-mails (new order) | `notifications.default_locale` |
+
+The customer's preferred language is set at sign-up (`locale` on
+`POST /auth/register`, else `Accept-Language`) and changed with
+`PUT /customers/me {"locale": "nl-BE"}` (an empty string removes it). Tags are
+stored lower-cased (`nl-be`) even before a catalogue exists for them, so a
+language added later applies to customers who already chose it.
+
+Translated so far: account e-mails (welcome, e-mail confirmation, password
+reset) and order e-mails (confirmation, new order, shipped, ready for pickup,
+cancelled, refunded). Subscription, dunning and abandoned-cart e-mails are still
+English only.
