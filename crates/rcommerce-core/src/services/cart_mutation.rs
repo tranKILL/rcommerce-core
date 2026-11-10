@@ -416,6 +416,12 @@ impl PostgresCartMutation {
         cart_id: Uuid,
     ) -> Result<()> {
         let cart = lock_cart(tx, cart_id).await?;
+        crate::services::price_list_service::reprice_cart_lines(
+            &mut **tx,
+            cart_id,
+            cart.customer_id,
+        )
+        .await?;
         let mut items = lock_items(tx, cart_id).await?;
         let subtotal: Decimal = items
             .iter()

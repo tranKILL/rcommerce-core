@@ -119,5 +119,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/orders/:id", patch(set_order_test_flag))
         .merge(products::router())
         .merge(super::staff_lists::router())
+        .merge(super::company::admin_router())
+        .merge(super::price_lists::admin_router())
         .merge(staff::router())
 }

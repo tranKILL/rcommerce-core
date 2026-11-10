@@ -313,6 +313,7 @@ impl CheckoutService {
         request: InitiateCheckoutRequest,
     ) -> Result<CheckoutSummary> {
         info!("Initiating checkout for cart {}", request.cart_id);
+        self.cart_service.refresh_prices(request.cart_id).await?;
 
         // Get cart with items
         let cart_with_items = self
@@ -517,6 +518,7 @@ impl CheckoutService {
         request: CompleteCheckoutRequest,
     ) -> Result<CheckoutResult> {
         info!("Completing checkout for cart {}", request.cart_id);
+        self.cart_service.refresh_prices(request.cart_id).await?;
 
         // Get cart with items
         let cart_with_items = self

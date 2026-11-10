@@ -25,6 +25,10 @@ pub struct Config {
     #[serde(default)]
     pub notifications: NotificationConfig,
 
+    /// Company (business customer) accounts
+    #[serde(default)]
+    pub companies: CompaniesConfig,
+
     #[serde(default)]
     pub rate_limiting: RateLimitConfig,
 
@@ -833,6 +837,18 @@ pub struct ImageSize {
     pub width: u32,
     pub height: u32,
     pub crop: bool,
+}
+
+/// Company accounts: how a VAT number is checked when a company signs up
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompaniesConfig {
+    /// `vies` (format, check digits, then the EU register; default) or
+    /// `format` (format and check digits only: development, tests)
+    #[serde(default)]
+    pub vat_check: crate::services::company_service::VatCheckMode,
+    /// Replaces the EU VIES endpoint (a test double)
+    #[serde(default)]
+    pub vies_url: Option<String>,
 }
 
 fn default_email_locale() -> String {

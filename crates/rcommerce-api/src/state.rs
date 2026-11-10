@@ -168,6 +168,10 @@ pub struct AppState {
     /// Language of e-mails when neither the request, the customer nor the
     /// order names one, and of shop-operator e-mails
     pub email_locale: String,
+    /// Company (business customer) accounts
+    pub companies: rcommerce_core::services::company_service::CompanyService,
+    /// Negotiated prices of customer groups and companies
+    pub price_lists: rcommerce_core::services::price_list_service::PriceListService,
     /// Accounting export configuration (store code/name, site URL)
     pub accounting: rcommerce_core::config::AccountingConfig,
     /// Store base currency for new carts (ISO code, e.g. "USD", "AUD")
@@ -304,6 +308,7 @@ impl AppState {
                 None
             }
         });
+        let pool = params.db.pool().clone();
 
         Self {
             product_service: params.product_service,
@@ -337,6 +342,12 @@ impl AppState {
             xero_client,
             branding,
             email_locale: rcommerce_core::notification::i18n::BASE_LOCALE.to_string(),
+            companies: rcommerce_core::services::company_service::CompanyService::new(
+                pool.clone(),
+                Default::default(),
+                None,
+            ),
+            price_lists: rcommerce_core::services::price_list_service::PriceListService::new(pool),
             accounting: params.accounting,
             default_currency: params.default_currency,
             settlement_sync,

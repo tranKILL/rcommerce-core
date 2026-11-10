@@ -252,7 +252,13 @@ impl TestApp {
             None,               // No Airwallex for tests
         );
 
-        let app_state = AppState::new(params).await;
+        let mut app_state = AppState::new(params).await;
+        // VAT numbers are checked offline (format and check digits) in tests
+        app_state.companies = rcommerce_core::services::company_service::CompanyService::new(
+            app_state.db.pool().clone(),
+            rcommerce_core::services::company_service::VatCheckMode::Format,
+            None,
+        );
 
         // Create HTTP client with proxy disabled for localhost
         let http_client = reqwest::Client::builder()
@@ -4124,6 +4130,239 @@ async fn z_generate_report_index() {
         count, output_dir
     );
     println!("📊 View index: open {}/index.html", output_dir);
+}
+
+/// A Belgian VAT number no test used before, with valid check digits
+fn fresh_belgian_vat() -> String {
+    let body = (Uuid::new_v4().as_u128() % 20_000_000) as u64;
+    format!("BE{body:08}{:02}", 97 - body % 97)
+}
+
+/// Any method with an optional JSON body; status and JSON answer
+async fn send_json(
+    app: &TestApp,
+    method: reqwest::Method,
+    token: &str,
+    path: &str,
+    body: Option<serde_json::Value>,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let url = format!("{}/api/v1{path}", app.base_url());
+    let mut request = app.http_client.request(method, url).bearer_auth(token);
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request.send().await.unwrap();
+    let status = response.status();
+    (status, response.json().await.unwrap_or_default())
+}
+
+/// A signed-in customer opens a company account with a VAT number, adds a
+/// buyer and removes them; staff find and suspend the company
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_company_accounts() {
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (owner, password) = app.create_test_customer().await.unwrap();
+    let owner_token = app.login(&owner.email, &password).await.unwrap();
+    let (buyer, password) = app.create_test_customer().await.unwrap();
+    let buyer_token = app.login(&buyer.email, &password).await.unwrap();
+    let vat = fresh_belgian_vat();
+    let typed = format!("{} {}.{}.{}", &vat[..2], &vat[2..6], &vat[6..9], &vat[9..]);
+
+    let last = vat.chars().last().unwrap().to_digit(10).unwrap();
+    let bad = format!("{}{}", &vat[..11], (last + 1) % 10);
+    let wrong = serde_json::json!({"vat_number": bad, "name": "Bad"});
+    let (status, _) = call_json(&app, &owner_token, "/companies", Some(wrong)).await;
+    assert_eq!(status, 400, "wrong check digits");
+    let sign_up = serde_json::json!({"vat_number": typed, "name": "Test Builders"});
+    let (status, body) = call_json(&app, &owner_token, "/companies", Some(sign_up.clone())).await;
+    assert_eq!(status, 201, "{body}");
+    assert_eq!(body["company"]["vat_number"], vat);
+    assert_eq!(body["role"], "owner");
+    assert!(
+        !body["company"]["customer_group_id"].is_null(),
+        "in the trade group"
+    );
+    let company_id = body["company"]["id"].as_str().unwrap().to_string();
+    let (status, _) = call_json(&app, &buyer_token, "/companies", Some(sign_up)).await;
+    assert_eq!(status, 409, "one account per VAT number");
+
+    let add = serde_json::json!({"email": buyer.email});
+    let (status, body) = call_json(
+        &app,
+        &owner_token,
+        "/companies/me/members",
+        Some(add.clone()),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let (status, mine) = call_json(&app, &buyer_token, "/companies/me", None).await;
+    assert_eq!(status, 200);
+    assert_eq!(mine["role"], "buyer");
+    assert!(mine["members"].is_null(), "only the owner sees members");
+    let (status, _) = call_json(&app, &buyer_token, "/companies/me/members", Some(add)).await;
+    assert_eq!(status, 403, "only the owner manages members");
+    let path = format!("/companies/me/members/{}", buyer.id);
+    let (status, _) = send_json(&app, Method::DELETE, &owner_token, &path, None).await;
+    assert_eq!(status, 204);
+    assert_eq!(
+        call_json(&app, &buyer_token, "/companies/me", None).await.0,
+        404
+    );
+
+    let search = format!("/admin/companies?q={vat}");
+    assert_eq!(call_json(&app, &owner_token, &search, None).await.0, 403);
+    let (status, list) = call_json(&app, &admin, &search, None).await;
+    assert_eq!(status, 200, "{list}");
+    assert_eq!(list["meta"]["total"], 1, "{list}");
+    let path = format!("/admin/companies/{company_id}");
+    let suspend = serde_json::json!({"status": "suspended"});
+    let (status, body) = send_json(&app, Method::PUT, &admin, &path, Some(suspend)).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["company"]["status"], "suspended");
+    let closed = serde_json::json!({"status": "closed"});
+    assert_eq!(
+        send_json(&app, Method::PUT, &admin, &path, Some(closed))
+            .await
+            .0,
+        400
+    );
+}
+
+/// A product in a new category; returns (product, category)
+async fn product_in_category(app: &TestApp, price: Decimal) -> (Uuid, Uuid) {
+    let product = app
+        .create_test_product("Priced bricks", price, 100)
+        .await
+        .unwrap();
+    let category = Uuid::new_v4();
+    sqlx::query("INSERT INTO product_categories (id, name, slug) VALUES ($1, 'Bricks', $2)")
+        .bind(category)
+        .bind(format!("bricks-{category}"))
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO product_category_relations (product_id, category_id) VALUES ($1, $2)")
+        .bind(product)
+        .bind(category)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    (product, category)
+}
+
+/// A price list created by staff; returns its id
+async fn new_price_list(app: &TestApp, admin: &str, body: serde_json::Value) -> String {
+    let (status, created) = call_json(app, admin, "/admin/price-lists", Some(body)).await;
+    assert_eq!(status, 201, "{created}");
+    created["price_list"]["id"].as_str().unwrap().to_string()
+}
+
+/// The unit price of the first line of the customer's cart
+async fn first_unit_price(app: &TestApp, token: &str) -> Decimal {
+    let (_, cart) = call_json(app, token, "/carts/me", None).await;
+    cart["items"][0]["unit_price"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+/// Negotiated prices: a list for the trade group and one for a single
+/// company; the lowest price wins, quantity tiers apply in the cart, and a
+/// suspended company goes back to catalogue prices
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_price_lists_in_the_cart() {
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (product, category) = product_in_category(&app, Decimal::new(1000, 2)).await;
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let sign_up = serde_json::json!({"vat_number": fresh_belgian_vat(), "name": "Priced Builders"});
+    let (status, body) = call_json(&app, &token, "/companies", Some(sign_up)).await;
+    assert_eq!(status, 201, "{body}");
+    let company = body["company"]["id"].as_str().unwrap().to_string();
+    let group = body["company"]["customer_group_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let trade = serde_json::json!({"name": "Trade", "customer_group_id": group});
+    let trade = new_price_list(&app, &admin, trade).await;
+    let own = serde_json::json!({"name": "Priced Builders", "company_id": company});
+    let own = new_price_list(&app, &admin, own).await;
+    let rules = [
+        (
+            &trade,
+            serde_json::json!({"scope": "category", "target_id": category, "adjustment": "percent_off", "value": 10}),
+            201,
+        ),
+        (
+            &own,
+            serde_json::json!({"scope": "product", "target_id": product, "adjustment": "fixed", "value": "8.50", "min_quantity": 10}),
+            201,
+        ),
+        (
+            &own,
+            serde_json::json!({"scope": "all", "adjustment": "percent_off", "value": 120}),
+            400,
+        ),
+    ];
+    for (list, rule, expected) in rules {
+        let path = format!("/admin/price-lists/{list}/rules");
+        let (status, body) = call_json(&app, &admin, &path, Some(rule)).await;
+        assert_eq!(status, expected, "{body}");
+    }
+    let both =
+        serde_json::json!({"name": "Both", "customer_group_id": group, "company_id": company});
+    assert_eq!(
+        call_json(&app, &admin, "/admin/price-lists", Some(both))
+            .await
+            .0,
+        400
+    );
+
+    let path = format!("/customers/me/prices?product_ids={product}");
+    let (status, prices) = call_json(&app, &token, &path, None).await;
+    assert_eq!(status, 200, "{prices}");
+    let first = &prices["prices"][0];
+    assert_eq!(first["price"], "9.00", "10 % off in the category: {prices}");
+    assert_eq!(first["base_price"], "10.00");
+    assert_eq!(
+        first["tiers"],
+        serde_json::json!([{"min_quantity": 10, "price": "8.50"}])
+    );
+
+    let (_, cart) = call_json(&app, &token, "/carts/me", None).await;
+    let cart_id: Uuid = cart["cart"]["id"].as_str().unwrap().parse().unwrap();
+    let item = app
+        .add_item_to_cart(cart_id, product, 2, &token)
+        .await
+        .unwrap();
+    assert_eq!(first_unit_price(&app, &token).await, Decimal::new(900, 2));
+    let line = format!("/carts/{cart_id}/items/{item}");
+    let twelve = serde_json::json!({"quantity": 12});
+    send_json(&app, Method::PUT, &token, &line, Some(twelve)).await;
+    assert_eq!(
+        first_unit_price(&app, &token).await,
+        Decimal::new(850, 2),
+        "tier from 10"
+    );
+
+    let suspend = serde_json::json!({"status": "suspended"});
+    let path = format!("/admin/companies/{company}");
+    send_json(&app, Method::PUT, &admin, &path, Some(suspend)).await;
+    let eleven = serde_json::json!({"quantity": 11});
+    send_json(&app, Method::PUT, &token, &line, Some(eleven)).await;
+    assert_eq!(
+        first_unit_price(&app, &token).await,
+        Decimal::new(1000, 2),
+        "suspended: catalogue price"
+    );
 }
 
 /// A guest cart holding `quantity` of `product`, past checkout's first step;

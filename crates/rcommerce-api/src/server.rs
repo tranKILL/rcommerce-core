@@ -1115,6 +1115,11 @@ async fn create_app_state(config: &Config) -> Result<AppState> {
     }
     app_state.catalogue_sync = init_catalogue(config, &app_state.db).await?;
     app_state.email_locale = init_email_locales(config)?;
+    app_state.companies = rcommerce_core::services::company_service::CompanyService::new(
+        app_state.db.pool().clone(),
+        config.companies.vat_check,
+        config.companies.vies_url.clone(),
+    );
     Ok(app_state)
 }
 
@@ -1652,6 +1657,9 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         .merge(crate::routes::review_protected_router())
         // An order's downloads, for its customer (or an admin)
         .merge(crate::routes::downloads_protected_router())
+        // Company accounts and the customer's negotiated prices
+        .merge(crate::routes::company::protected_router())
+        .merge(crate::routes::price_lists::protected_router())
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,

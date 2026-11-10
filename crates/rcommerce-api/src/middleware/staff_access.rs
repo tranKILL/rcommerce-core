@@ -24,6 +24,9 @@ const ADMIN_AREAS: &[(&str, Resource)] = &[
     ("/admin/subscriptions", Resource::Payments),
     ("/admin/dunning", Resource::Payments),
     ("/admin/inventory", Resource::Inventory),
+    ("/admin/companies", Resource::Customers),
+    ("/admin/customer-groups", Resource::Customers),
+    ("/admin/price-lists", Resource::Products),
 ];
 
 /// POST routes that only read, so `read` is enough

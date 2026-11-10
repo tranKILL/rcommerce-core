@@ -722,6 +722,18 @@ impl CartService {
         Ok(())
     }
 
+    /// Apply the customer's current price lists and recompute the totals.
+    /// Checkout calls this, so a list that ended or changed since the cart
+    /// last changed never reaches an order.
+    /// A cart already turned into an order (a replayed checkout) or a missing
+    /// one is left to the caller's own checks.
+    pub async fn refresh_prices(&self, cart_id: Uuid) -> Result<()> {
+        match self.cart_repo.find_by_id(cart_id).await? {
+            Some(cart) if !cart.converted_to_order => self.recalculate_cart(cart_id).await,
+            _ => Ok(()),
+        }
+    }
+
     /// Recalculate cart totals
     async fn recalculate_cart(&self, cart_id: Uuid) -> Result<()> {
         if let Some(mutation) = self.postgres_mutation() {

@@ -122,6 +122,12 @@ impl ViesValidator {
     }
 
     /// Create with custom client
+    /// Send checks to `base_url` instead of the EU service (a test double)
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into();
+        self
+    }
+
     pub fn with_client(client: reqwest::Client) -> Self {
         Self {
             client,
