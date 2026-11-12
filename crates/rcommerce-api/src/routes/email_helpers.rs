@@ -200,14 +200,18 @@ pub async fn send_admin_order_email(state: &AppState, order_id: Uuid) {
     // Attach the invoice PDF, same as the customer confirmation email
     match super::payment::fetch_invoice_order(&state.db, order_id).await {
         Ok((order, items)) => {
-            let invoice_data =
-                super::invoice::invoice_data_from_order(&order, &items, &state.branding);
+            let invoice_data = super::invoice::invoice_data_from_order(
+                &order,
+                &items,
+                &state.branding,
+                &state.email_locale,
+            );
             match rcommerce_core::invoice::generate_invoice_pdf(&invoice_data) {
                 Ok(pdf) => {
                     notification
                         .attachments
                         .push(rcommerce_core::notification::EmailAttachment {
-                            filename: format!("invoice-{}.pdf", order.order_number),
+                            filename: invoice_data.file_name(),
                             content_type: "application/pdf".to_string(),
                             content: pdf,
                         });

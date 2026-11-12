@@ -4,12 +4,53 @@
 //! saved as PDF from the browser.
 
 pub use rcommerce_core::invoice::{format_address, InvoiceAddress, InvoiceData, InvoiceItem};
+use rcommerce_core::models::{Order, PaymentStatus};
+use rcommerce_core::notification::i18n;
 
-/// Build invoice data from an order row and its items.
+/// How the order is paid, in `locale`: the method when known, else where the
+/// payment stands
+fn payment_text(order: &Order, locale: &str) -> String {
+    if let Some(method) = order.payment_method.as_deref().filter(|m| !m.is_empty()) {
+        return rcommerce_core::invoice::display_shipping_method(method);
+    }
+    let key = match order.payment_status {
+        PaymentStatus::Paid => "paid",
+        PaymentStatus::Pending => "awaiting_payment",
+        PaymentStatus::Authorized => "payment_authorized",
+        PaymentStatus::Failed => "payment_failed",
+        PaymentStatus::Cancelled => "payment_cancelled",
+        PaymentStatus::Refunded => "refunded",
+    };
+    i18n::text(locale, "order_document", key)
+}
+
+/// How the order is handed over, in `locale`: collected at a store location
+/// (with the day it is ready) or delivered
+fn fulfilment_text(order: &Order, locale: &str) -> Option<String> {
+    let t = |key: &str| i18n::text(locale, "order_document", key);
+    let metadata = order.metadata.as_ref()?;
+    if let Some(pickup) = metadata.get("pickup") {
+        let place = pickup.get("location_name")?.as_str()?;
+        let ready = pickup
+            .get("ready_at")
+            .and_then(|v| v.as_str())
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok());
+        return Some(match ready {
+            Some(at) => t("pickup_ready")
+                .replace("{place}", place)
+                .replace("{date}", &i18n::date(locale, at.date_naive())),
+            None => t("pickup").replace("{place}", place),
+        });
+    }
+    metadata.get("delivery").map(|_| t("delivery"))
+}
+
+/// Build invoice data from an order row and its items, in `locale`.
 pub fn invoice_data_from_order(
     order: &rcommerce_core::models::Order,
     items: &[rcommerce_core::order::OrderItem],
     branding: &rcommerce_core::BrandingConfig,
+    locale: &str,
 ) -> InvoiceData {
     let billing = order.billing_address.as_ref().map(|v| InvoiceAddress {
         first_name: v
@@ -137,7 +178,7 @@ pub fn invoice_data_from_order(
         logo: branding.pdf_logo.clone(),
         company_lines: branding.address_lines.clone(),
         order_number: order.order_number.clone(),
-        order_date: order.created_at.format("%B %d, %Y").to_string(),
+        order_date: i18n::date(locale, order.created_at.date_naive()),
         status: format!("{:?}", order.status).to_lowercase(),
         currency: order.currency.to_string(),
         customer_email: order.customer_email.clone(),
@@ -151,8 +192,11 @@ pub fn invoice_data_from_order(
         shipping_total: format!("{:.2}", order.shipping_total),
         tax_total: format!("{:.2}", order.tax_total),
         total: format!("{:.2}", order.total),
-        payment_method: order.payment_method.clone().unwrap_or_default(),
+        payment_method: payment_text(order, locale),
         shipping_method: order.shipping_method.clone(),
+        locale: locale.to_string(),
+        summary_only: branding.issues_invoices,
+        fulfilment: fulfilment_text(order, locale),
         brand_name: branding.name.clone(),
         brand_email: branding.support_email.clone(),
     }
@@ -202,25 +246,43 @@ pub fn generate_invoice_html(data: &InvoiceData) -> Result<String, String> {
                 <td class="item-name">{name}{variant}</td>
                 <td class="item-sku">{sku}</td>
                 <td class="item-qty">{qty}</td>
-                <td class="item-price">{currency} {price}</td>
-                <td class="item-total">{currency} {total}</td>
+                <td class="item-price">{price}</td>
+                <td class="item-total">{total}</td>
             </tr>"#,
                 name = escape_html(&item.name),
                 variant = variant_line,
                 sku = escape_html(sku_line),
                 qty = item.quantity,
-                currency = data.currency,
-                price = item.unit_price,
-                total = item.total,
+                price = data.money(&item.unit_price),
+                total = data.money(&item.total),
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
 
-    let payment_display = if data.payment_method.is_empty() {
-        "Credit card".to_string()
+    let t = |key: &str| escape_html(&data.text(key));
+    let status_key = match data.status.as_str() {
+        "onhold" => "status_on_hold".to_string(),
+        other => format!("status_{other}"),
+    };
+    let payment_row = if data.payment_method.is_empty() {
+        String::new()
     } else {
-        data.payment_method.clone()
+        format!(
+            "<div><strong>{}:</strong> {}</div>",
+            t("payment"),
+            escape_html(&data.payment_method)
+        )
+    };
+    let fulfilment_row = data
+        .fulfilment
+        .as_deref()
+        .map(|line| format!("<div>{}</div>", escape_html(line)))
+        .unwrap_or_default();
+    let summary_note = if data.summary_only {
+        format!(r#"<p style="margin-top: 4px;">{}</p>"#, t("not_an_invoice"))
+    } else {
+        String::new()
     };
 
     // Discount row: only when a discount was applied, shown as a negative
@@ -232,25 +294,24 @@ pub fn generate_invoice_html(data: &InvoiceData) -> Result<String, String> {
         .filter(|d| *d > rust_decimal::Decimal::ZERO)
         .map(|d| {
             let label = match data.coupon_code.as_deref() {
-                Some(code) if !code.is_empty() => format!("Discount ({code})"),
-                _ => "Discount".to_string(),
+                Some(code) if !code.is_empty() => data.text("discount_code").replace("{code}", code),
+                _ => data.text("discount"),
             };
             format!(
-                r#"<div class="total-row discount"><span>{label}</span><span style="color:#059669;">-{currency} {amount}</span></div>"#,
-                label = label,
-                currency = data.currency,
-                amount = d,
+                r#"<div class="total-row discount"><span>{label}</span><span style="color:#059669;">{amount}</span></div>"#,
+                label = escape_html(&label),
+                amount = data.money(&(-d).to_string()),
             )
         })
         .unwrap_or_default();
 
     Ok(format!(
         r#"<!DOCTYPE html>
-<html lang="en">
+<html lang="{lang}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Invoice {order_number}</title>
+<title>{title} {order_number}</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -295,26 +356,26 @@ pub fn generate_invoice_html(data: &InvoiceData) -> Result<String, String> {
   <div class="header">
     <div>
       <div class="brand">{brand}<span>.</span></div>
-      <div style="font-size: 13px; color: #666; margin-top: 4px;">Premium longboard wheels & accessories</div>
     </div>
     <div style="text-align: right;">
-      <div class="invoice-label">Invoice</div>
+      <div class="invoice-label">{title}</div>
       <div style="font-size: 13px; color: #666; margin-top: 4px;">{order_number}</div>
     </div>
   </div>
 
   <div class="meta">
     <div class="meta-block">
-      <div class="meta-label">Order details</div>
+      <div class="meta-label">{l_details}</div>
       <div class="meta-value">
-        <div><strong>Order:</strong> {order_number}</div>
-        <div><strong>Date:</strong> {order_date}</div>
-        <div><strong>Status:</strong> <span class="status-badge status-{status_class}">{status}</span></div>
-        <div><strong>Payment:</strong> {payment_display}</div>
+        <div><strong>{l_order}:</strong> {order_number}</div>
+        <div><strong>{l_date}:</strong> {order_date}</div>
+        <div><strong>{l_status}:</strong> <span class="status-badge status-{status_class}">{status}</span></div>
+        {payment_row}
+        {fulfilment_row}
       </div>
     </div>
     <div class="meta-block">
-      <div class="meta-label">Contact</div>
+      <div class="meta-label">{l_contact}</div>
       <div class="meta-value">
         <div>{customer_email}</div>
       </div>
@@ -323,11 +384,11 @@ pub fn generate_invoice_html(data: &InvoiceData) -> Result<String, String> {
 
   <div class="meta">
     <div class="meta-block">
-      <div class="meta-label">Billing address</div>
+      <div class="meta-label">{l_billing}</div>
       <div class="meta-value">{billing_html}</div>
     </div>
     <div class="meta-block">
-      <div class="meta-label">Shipping address</div>
+      <div class="meta-label">{l_shipping_address}</div>
       <div class="meta-value">{shipping_html}</div>
     </div>
   </div>
@@ -335,11 +396,11 @@ pub fn generate_invoice_html(data: &InvoiceData) -> Result<String, String> {
   <table class="items-table">
     <thead>
       <tr>
-        <th>Product</th>
-        <th>SKU</th>
-        <th style="text-align:center">Qty</th>
-        <th style="text-align:right">Price</th>
-        <th style="text-align:right">Total</th>
+        <th>{l_product}</th>
+        <th>{l_sku}</th>
+        <th style="text-align:center">{l_qty}</th>
+        <th style="text-align:right">{l_price}</th>
+        <th style="text-align:right">{l_total}</th>
       </tr>
     </thead>
     <tbody>
@@ -350,23 +411,24 @@ pub fn generate_invoice_html(data: &InvoiceData) -> Result<String, String> {
   <div class="totals">
     <div class="totals-box">
       <div class="total-row">
-        <span>Subtotal</span><span>{currency} {subtotal}</span>
+        <span>{l_subtotal}</span><span>{subtotal}</span>
       </div>
       {discount_row}
       <div class="total-row">
-        <span>Shipping</span><span>{currency} {shipping_total}</span>
+        <span>{l_shipping}</span><span>{shipping_total}</span>
       </div>
       <div class="total-row">
-        <span>Tax</span><span>{currency} {tax_total}</span>
+        <span>{l_tax}</span><span>{tax_total}</span>
       </div>
       <div class="total-row grand">
-        <span>Total</span><span>{currency} {total}</span>
+        <span>{l_total}</span><span>{total}</span>
       </div>
     </div>
   </div>
 
   <div class="footer">
-    <p>Thank you for your order! If you have questions, contact us at {contact}</p>
+    <p>{thanks}</p>
+    {summary_note}
     <p style="margin-top: 4px;">{brand}</p>
   </div>
 </div>
@@ -374,25 +436,48 @@ pub fn generate_invoice_html(data: &InvoiceData) -> Result<String, String> {
 </html>"#,
         order_number = data.order_number,
         order_date = data.order_date,
-        status = capitalize(&data.status),
+        status = t(&status_key),
         status_class = data.status.to_lowercase(),
-        payment_display = payment_display,
+        payment_row = payment_row,
+        fulfilment_row = fulfilment_row,
+        summary_note = summary_note,
+        lang = escape_html(&data.locale),
+        title = t(if data.summary_only {
+            "title_summary"
+        } else {
+            "title_invoice"
+        }),
+        l_details = t("order_details"),
+        l_order = t("order_number"),
+        l_date = t("order_date"),
+        l_status = t("status"),
+        l_contact = t("contact"),
+        l_billing = t("billing_address"),
+        l_shipping_address = t("shipping_address"),
+        l_product = t("product"),
+        l_sku = t("sku"),
+        l_qty = t("qty"),
+        l_price = t("price"),
+        l_total = t("total"),
+        l_subtotal = t("subtotal"),
+        l_shipping = t("shipping"),
+        l_tax = t("tax"),
+        thanks = escape_html(&data.text("thanks").replace("{email}", contact)),
         customer_email = data.customer_email,
-        billing_html = format_address_html(&billing_lines),
-        shipping_html = format_address_html(&shipping_lines),
+        billing_html = format_address_html(&billing_lines, &t("no_address")),
+        shipping_html = format_address_html(&shipping_lines, &t("no_address")),
         items_html = items_html,
         discount_row = discount_row,
-        currency = data.currency,
-        subtotal = data.subtotal,
-        shipping_total = data.shipping_total,
-        tax_total = data.tax_total,
-        total = data.total,
+        subtotal = data.money(&data.subtotal),
+        shipping_total = data.money(&data.shipping_total),
+        tax_total = data.money(&data.tax_total),
+        total = data.money(&data.total),
     ))
 }
 
-fn format_address_html(lines: &[String]) -> String {
+fn format_address_html(lines: &[String], none: &str) -> String {
     if lines.is_empty() {
-        return "<em style='color:#999'>No address provided</em>".to_string();
+        return format!("<em style='color:#999'>{none}</em>");
     }
     lines
         .iter()
@@ -406,14 +491,6 @@ fn escape_html(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
-}
-
-fn capitalize(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        None => String::new(),
-        Some(f) => f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase(),
-    }
 }
 
 #[cfg(test)]
@@ -506,8 +583,12 @@ mod tests {
             ),
         ];
 
-        let data =
-            invoice_data_from_order(&order, &items, &rcommerce_core::BrandingConfig::default());
+        let data = invoice_data_from_order(
+            &order,
+            &items,
+            &rcommerce_core::BrandingConfig::default(),
+            "en",
+        );
 
         assert_eq!(data.items.len(), 2, "component line must be excluded");
         assert_eq!(data.items[0].name, "Race Pack");
@@ -543,7 +624,7 @@ mod tests {
             "discount row must be labelled with the coupon code"
         );
         assert!(
-            html.contains(r#"<span style="color:#059669;">-USD 12.75</span>"#),
+            html.contains(r#"<span style="color:#059669;">-$12.75</span>"#),
             "discount amount must render as a negative green amount"
         );
         // Discount row sits between Subtotal and Shipping in the totals block.
@@ -606,9 +687,24 @@ mod tests {
             cancelled_at: None,
         };
 
-        let data = invoice_data_from_order(&order, &[], &rcommerce_core::BrandingConfig::default());
+        let data = invoice_data_from_order(
+            &order,
+            &[],
+            &rcommerce_core::BrandingConfig::default(),
+            "en",
+        );
         assert_eq!(data.discount_total, None);
         let html = generate_invoice_html(&data).expect("invoice html generation failed");
         assert!(!html.contains("Discount"), "no discount row must render");
+
+        let branding = rcommerce_core::BrandingConfig {
+            issues_invoices: true,
+            ..Default::default()
+        };
+        let french = generate_invoice_html(&invoice_data_from_order(&order, &[], &branding, "fr"))
+            .expect("french html");
+        assert!(french.contains(r#"<html lang="fr">"#));
+        assert!(french.contains("Bon de commande") && french.contains("n'est pas une facture"));
+        assert!(french.contains("Payé") && !french.contains("Invoice"));
     }
 }

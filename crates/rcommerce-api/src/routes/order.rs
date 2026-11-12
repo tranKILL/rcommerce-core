@@ -785,7 +785,9 @@ async fn get_invoice(
     })?;
 
     // Build invoice data
-    let data = super::invoice::invoice_data_from_order(&order, &items, &state.branding);
+    let locale =
+        super::email_helpers::order_email_locale(state.db.pool(), id, &state.email_locale).await;
+    let data = super::invoice::invoice_data_from_order(&order, &items, &state.branding, &locale);
 
     match super::invoice::generate_invoice_html(&data) {
         Ok(html) => {

@@ -1911,13 +1911,14 @@ async fn send_order_confirmation_email(
 
     // Attach the invoice PDF; never block the confirmation email on PDF failure.
     if let Some((order, items)) = invoice_order {
-        let invoice_data = super::invoice::invoice_data_from_order(&order, &items, branding);
+        let invoice_data =
+            super::invoice::invoice_data_from_order(&order, &items, branding, &locale);
         match rcommerce_core::invoice::generate_invoice_pdf(&invoice_data) {
             Ok(pdf) => {
                 notification
                     .attachments
                     .push(rcommerce_core::notification::EmailAttachment {
-                        filename: format!("invoice-{}.pdf", order.order_number),
+                        filename: invoice_data.file_name(),
                         content_type: "application/pdf".to_string(),
                         content: pdf,
                     });

@@ -4,6 +4,7 @@ pub mod legal;
 
 use std::sync::Arc;
 
+use crate::notification::i18n;
 use crate::{Error, Result};
 use printpdf::{
     Color, Line, LinePoint, Mm, Op, ParsedFont, PdfDocument, PdfFontHandle, PdfPage,
@@ -33,8 +34,16 @@ pub struct InvoiceData {
     pub shipping_total: String,
     pub tax_total: String,
     pub total: String,
+    /// How the order is paid, ready to print; empty leaves the row out
     pub payment_method: String,
     pub shipping_method: Option<String>,
+    /// Language of the texts, dates and amounts (`fr`, `nl-BE`, `en`…)
+    pub locale: String,
+    /// The store issues legal invoices of its own: this document is then an
+    /// order summary, titled as such and saying it is not an invoice
+    pub summary_only: bool,
+    /// How the order is handed over, ready to print ("Collect at: South depot")
+    pub fulfilment: Option<String>,
     /// Store brand name (invoice header); empty falls back to the default
     pub brand_name: String,
     /// Store support email (invoice footer); empty falls back to the default
@@ -92,6 +101,55 @@ pub fn format_address(addr: &InvoiceAddress) -> Vec<String> {
         }
     }
     lines
+}
+
+impl InvoiceData {
+    /// A text of the order document in the document's language
+    pub fn text(&self, key: &str) -> String {
+        i18n::text(&self.locale, "order_document", key)
+    }
+
+    /// An amount ("1234.5") as written in the document's language
+    pub fn money(&self, amount: &str) -> String {
+        match amount.parse::<rust_decimal::Decimal>() {
+            Ok(value) => i18n::money(&self.locale, value, &self.currency),
+            Err(_) => format!("{}{}", currency_symbol(&self.currency), amount),
+        }
+    }
+
+    /// The document's title: an invoice, or an order summary when the store
+    /// issues legal invoices separately
+    pub fn title(&self) -> String {
+        self.text(if self.summary_only {
+            "title_summary"
+        } else {
+            "title_invoice"
+        })
+    }
+
+    /// File name of the PDF, in the document's language
+    pub fn file_name(&self) -> String {
+        let stem = self.text(if self.summary_only {
+            "file_summary"
+        } else {
+            "file_invoice"
+        });
+        format!("{stem}-{}.pdf", self.order_number)
+    }
+
+    /// The reference rows under the address: label and value
+    fn reference_rows(&self) -> Vec<(String, String)> {
+        let today = i18n::date(&self.locale, chrono::Utc::now().date_naive());
+        let mut rows = vec![
+            (self.text("document_date"), today),
+            (self.text("order_number"), self.order_number.clone()),
+            (self.text("order_date"), self.order_date.clone()),
+        ];
+        if !self.payment_method.is_empty() {
+            rows.push((self.text("payment"), self.payment_method.clone()));
+        }
+        rows
+    }
 }
 
 const PAGE_WIDTH_PT: f32 = 595.28;
@@ -391,7 +449,7 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
     let bold = ParsedFont::from_bytes(HELVETICA_BOLD, 0, &mut font_warnings)
         .ok_or_else(|| Error::internal("Failed to parse embedded bold font"))?;
 
-    let mut doc = PdfDocument::new(&format!("Invoice {}", data.order_number));
+    let mut doc = PdfDocument::new(&format!("{} {}", data.title(), data.order_number));
     let regular_id = doc.add_font(&regular);
     let bold_id = doc.add_font(&bold);
     let regular = PdfFontHandle::External(regular_id);
@@ -441,7 +499,8 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
 
     // Row 2: INVOICE heading (left)
     let invoice_y = y - logo_height_pt - 42.0;
-    write_text(&mut ops, bold.clone(), 21.0, MARGIN, invoice_y, "INVOICE");
+    let title = data.title().to_uppercase();
+    write_text(&mut ops, bold.clone(), 21.0, MARGIN, invoice_y, &title);
 
     // Row 3: single shipping address directly under INVOICE (plain lines, no
     // label); the meta block sits to the right at the same vertical level.
@@ -451,7 +510,11 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
         .clone()
         .or_else(|| data.billing.clone())
         .map(|a| format_address(&a))
-        .unwrap_or_else(|| vec!["No address provided".to_string()]);
+        .unwrap_or_else(|| vec![data.text("no_address")]);
+    let address_lines = match &data.fulfilment {
+        Some(line) => [address_lines, vec![String::new(), line.clone()]].concat(),
+        None => address_lines,
+    };
     for (i, line) in address_lines.iter().enumerate() {
         write_text(
             &mut ops,
@@ -462,28 +525,23 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
             line,
         );
     }
-    let meta_label_x = COMPANY_X;
-    let meta_value_x = 414.0;
-    let invoice_date = chrono::Utc::now().format("%B %d, %Y").to_string();
-    let payment_method = if data.payment_method.is_empty() {
-        "Credit Card".to_string()
-    } else {
-        data.payment_method.clone()
-    };
-    let meta_rows: Vec<(&str, String)> = vec![
-        ("Invoice Date:", invoice_date),
-        ("Order Number:", data.order_number.clone()),
-        ("Order Date:", data.order_date.clone()),
-        ("Payment Method:", payment_method),
-    ];
+    // Labels, colons and values each in their own column
+    let meta_rows = data.reference_rows();
+    let widest = meta_rows
+        .iter()
+        .map(|(label, _)| estimate_width(label, 9.5, false))
+        .fold(0.0, f32::max);
+    let colon_x = COMPANY_X + widest + 4.0;
     for (i, (label, value)) in meta_rows.iter().enumerate() {
         let row_y = address_top - i as f32 * 14.0;
-        write_text(&mut ops, regular.clone(), 9.5, meta_label_x, row_y, label);
-        write_text(&mut ops, regular.clone(), 9.5, meta_value_x, row_y, value);
+        write_text(&mut ops, regular.clone(), 9.5, COMPANY_X, row_y, label);
+        write_text(&mut ops, regular.clone(), 9.5, colon_x, row_y, ":");
+        write_text(&mut ops, regular.clone(), 9.5, colon_x + 7.0, row_y, value);
     }
 
     // Items table with a solid black header bar (white bold column titles)
-    let bar_top = address_top - address_lines.len() as f32 * 13.0 - 22.0;
+    let block_height = (address_lines.len() as f32 * 13.0).max(meta_rows.len() as f32 * 14.0);
+    let bar_top = address_top - block_height - 22.0;
     let bar_height = 24.0;
     ops.push(Op::SetFillColor { col: black() });
     ops.push(Op::DrawRectangle {
@@ -505,7 +563,7 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
         9.5,
         MARGIN + 6.0,
         bar_top - 16.5,
-        "Product",
+        &data.text("product"),
     );
     write_text(
         &mut ops,
@@ -513,16 +571,16 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
         9.5,
         QTY_X,
         bar_top - 16.5,
-        "Quantity",
+        &data.text("quantity"),
     );
-    let price_header = "Price";
+    let price_header = data.text("price");
     write_text(
         &mut ops,
         bold.clone(),
         9.5,
-        MONEY_RIGHT - estimate_width(price_header, 9.5, true),
+        MONEY_RIGHT - estimate_width(&price_header, 9.5, true),
         bar_top - 16.5,
-        price_header,
+        &price_header,
     );
     ops.push(Op::SetFillColor { col: black() });
 
@@ -548,7 +606,7 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
         }
         let qty = format!("{}", item.quantity);
         write_text(&mut ops, regular.clone(), 9.5, QTY_X, y, &qty);
-        let price = format!("{}{}", currency_symbol(&data.currency), item.total);
+        let price = data.money(&item.total);
         write_text(
             &mut ops,
             regular.clone(),
@@ -580,7 +638,7 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
                     8.0,
                     item_x,
                     sku_y,
-                    &format!("SKU: {}", sku),
+                    &data.text("sku_line").replace("{value}", sku),
                 );
             }
         }
@@ -593,7 +651,7 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
                     8.0,
                     item_x,
                     weight_y,
-                    &format!("Weight: {}", weight),
+                    &data.text("weight_line").replace("{value}", weight),
                 );
             }
         }
@@ -606,12 +664,18 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
     // Quantity column x, amounts right-aligned at the (slightly inset) money
     // column, one uniform row rhythm, thin rule under Subtotal, thick rules
     // snug above and below Total.
-    let symbol = currency_symbol(&data.currency);
     let row_pitch = 17.0;
     y -= 8.0;
 
-    write_text(&mut ops, bold.clone(), 9.5, QTY_X, y, "Subtotal");
-    let subtotal_value = format!("{}{}", symbol, data.subtotal);
+    write_text(
+        &mut ops,
+        bold.clone(),
+        9.5,
+        QTY_X,
+        y,
+        &data.text("subtotal"),
+    );
+    let subtotal_value = data.money(&data.subtotal);
     write_text(
         &mut ops,
         regular.clone(),
@@ -640,11 +704,11 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
         .filter(|d| *d > rust_decimal::Decimal::ZERO);
     if let Some(discount) = discount_amount {
         let label = match data.coupon_code.as_deref() {
-            Some(code) if !code.is_empty() => format!("Discount ({code})"),
-            _ => "Discount".to_string(),
+            Some(code) if !code.is_empty() => data.text("discount_code").replace("{code}", code),
+            _ => data.text("discount"),
         };
         write_text(&mut ops, bold.clone(), 9.5, QTY_X, y, &label);
-        let discount_value = format!("-{}{}", symbol, discount);
+        let discount_value = data.money(&(-discount).to_string());
         ops.push(Op::SetFillColor {
             col: rgb(0.02, 0.59, 0.41), // #059669
         });
@@ -660,8 +724,15 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
         y -= row_pitch;
     }
 
-    write_text(&mut ops, bold.clone(), 9.5, QTY_X, y, "Shipping");
-    let shipping_value = format!("{}{}", symbol, data.shipping_total);
+    write_text(
+        &mut ops,
+        bold.clone(),
+        9.5,
+        QTY_X,
+        y,
+        &data.text("shipping"),
+    );
+    let shipping_value = data.money(&data.shipping_total);
     write_text(
         &mut ops,
         regular.clone(),
@@ -673,8 +744,8 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
     y -= row_pitch;
 
     if data.tax_total != "0.00" {
-        write_text(&mut ops, bold.clone(), 9.5, QTY_X, y, "Tax");
-        let tax_value = format!("{}{}", symbol, data.tax_total);
+        write_text(&mut ops, bold.clone(), 9.5, QTY_X, y, &data.text("tax"));
+        let tax_value = data.money(&data.tax_total);
         write_text(
             &mut ops,
             regular.clone(),
@@ -689,8 +760,8 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
     y -= 6.0;
     draw_line(&mut ops, QTY_X, y, MONEY_RIGHT, y, 2.0, black());
     y -= 12.0;
-    let total_value = format!("{}{}", symbol, data.total);
-    write_text(&mut ops, bold.clone(), 10.5, QTY_X, y, "Total");
+    let total_value = data.money(&data.total);
+    write_text(&mut ops, bold.clone(), 10.5, QTY_X, y, &data.text("total"));
     write_text(
         &mut ops,
         bold.clone(),
@@ -718,8 +789,13 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
     } else {
         &data.brand_email
     };
-    let contact = format!("Thank you for your order! Questions: {brand_email}");
-    let footer = "Payments are in USD. All sales are final.";
+    let contact = data.text("thanks").replace("{email}", brand_email);
+    let footer = if data.summary_only {
+        data.text("not_an_invoice")
+    } else {
+        String::new()
+    };
+    let footer = footer.as_str();
     ops.push(Op::SetFillColor { col: gray() });
     write_text(
         &mut ops,
@@ -819,7 +895,39 @@ mod tests {
             brand_email: String::new(),
             logo: None,
             company_lines: Vec::new(),
+            locale: "en".to_string(),
+            summary_only: false,
+            fulfilment: None,
         }
+    }
+
+    #[test]
+    fn an_order_summary_speaks_the_order_language() {
+        let data = InvoiceData {
+            locale: "fr".to_string(),
+            currency: "EUR".to_string(),
+            summary_only: true,
+            fulfilment: Some("Retrait : Dépôt Sud".to_string()),
+            ..sample_invoice()
+        };
+        assert_eq!(data.title(), "Bon de commande");
+        assert_eq!(data.file_name(), "bon-de-commande-ORD123456.pdf");
+        let amount = data.money("1234.5");
+        assert!(
+            amount.contains("234,50") && amount.ends_with('€'),
+            "{amount}"
+        );
+        assert_eq!(data.text("subtotal"), "Sous-total");
+        let rows = data.reference_rows();
+        assert_eq!(
+            rows[1],
+            ("Numéro de commande".to_string(), "ORD123456".to_string())
+        );
+        assert_eq!(&generate_invoice_pdf(&data).unwrap()[..4], b"%PDF");
+
+        let english = sample_invoice();
+        assert_eq!(english.title(), "Invoice");
+        assert_eq!(english.file_name(), "invoice-ORD123456.pdf");
     }
 
     #[test]

@@ -264,6 +264,10 @@ pub struct BrandingConfig {
     /// start-up; empty prints the built-in one
     #[serde(skip)]
     pub address_lines: Vec<String>,
+    /// The store issues legal invoices (`[invoicing] enabled`, set at
+    /// start-up): order PDFs are then order summaries, not invoices
+    #[serde(skip)]
+    pub issues_invoices: bool,
 }
 
 impl Default for BrandingConfig {
@@ -277,6 +281,7 @@ impl Default for BrandingConfig {
             logo_file: None,
             pdf_logo: None,
             address_lines: Vec::new(),
+            issues_invoices: false,
         }
     }
 }
