@@ -134,6 +134,13 @@ impl OrderService {
             .map(|c| c.total_tax)
             .unwrap_or(request.tax_total);
 
+        // Lines keep the product name in the order's language (`metadata.locale`)
+        let locale = request
+            .metadata
+            .get("locale")
+            .and_then(|v| v.as_str())
+            .and_then(crate::common::locale::normalize_locale);
+
         // Validate and reserve inventory for items
         let mut order_items = Vec::new();
         let mut subtotal = Decimal::ZERO;
@@ -142,7 +149,7 @@ impl OrderService {
         for item in request.items.iter() {
             // Fetch product/variant details and validate the product is active
             let details = self
-                .get_product_order_details(item.product_id, item.variant_id)
+                .get_product_order_details(item.product_id, item.variant_id, locale.as_deref())
                 .await?;
 
             // Reserve inventory unless explicitly skipped (e.g. bundle parent lines)
@@ -383,7 +390,7 @@ impl OrderService {
         let mut taxable_items = Vec::with_capacity(items.len());
         for item in items {
             let details = self
-                .get_product_order_details(item.product_id, item.variant_id)
+                .get_product_order_details(item.product_id, item.variant_id, None)
                 .await?;
 
             taxable_items.push(TaxableItem {
@@ -1127,22 +1134,27 @@ impl OrderService {
         Ok(())
     }
 
+    /// Name, variant and SKU of an active product, the name in `locale` when
+    /// the product has a translation in it
     async fn get_product_order_details(
         &self,
         product_id: Uuid,
         variant_id: Option<Uuid>,
+        locale: Option<&str>,
     ) -> Result<ProductOrderDetails> {
         if let Some(variant_id) = variant_id {
             let row = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
                 r#"
-                SELECT p.title, v.title, v.sku
+                SELECT COALESCE(t.title, p.title), v.title, v.sku
                 FROM products p
                 JOIN product_variants v ON p.id = v.product_id
+                LEFT JOIN product_translations t ON t.product_id = p.id AND t.locale = $3
                 WHERE p.id = $1 AND p.is_active = true AND v.id = $2
                 "#,
             )
             .bind(product_id)
             .bind(variant_id)
+            .bind(locale)
             .fetch_optional(self.db.pool())
             .await?
             .ok_or_else(|| Error::not_found("Product or variant not found"))?;
@@ -1154,9 +1166,12 @@ impl OrderService {
             })
         } else {
             let row = sqlx::query_as::<_, (String, Option<String>)>(
-                "SELECT title, sku FROM products WHERE id = $1 AND is_active = true",
+                "SELECT COALESCE(t.title, p.title), p.sku FROM products p \
+                 LEFT JOIN product_translations t ON t.product_id = p.id AND t.locale = $2 \
+                 WHERE p.id = $1 AND p.is_active = true",
             )
             .bind(product_id)
+            .bind(locale)
             .fetch_optional(self.db.pool())
             .await?
             .ok_or_else(|| Error::not_found("Product not found or inactive"))?;

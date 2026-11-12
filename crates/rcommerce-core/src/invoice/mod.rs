@@ -88,10 +88,10 @@ pub fn format_address(addr: &InvoiceAddress) -> Vec<String> {
         }
     }
     lines.push(addr.address_1.clone());
-    let city_line = if let Some(ref state) = addr.state {
-        format!("{}, {} {}", addr.city, state, addr.postcode)
-    } else {
-        format!("{} {}", addr.city, addr.postcode)
+    // "City, ST 12345" with a state; "1000 City" (European order) without
+    let city_line = match addr.state.as_deref().filter(|s| !s.is_empty()) {
+        Some(state) => format!("{}, {} {}", addr.city, state, addr.postcode),
+        None => format!("{} {}", addr.postcode, addr.city),
     };
     lines.push(city_line);
     lines.push(addr.country.clone());
@@ -1012,7 +1012,7 @@ mod tests {
         assert_eq!(lines[0], "Jane Smith");
         assert_eq!(lines[1], "Floor 2");
         assert_eq!(lines[2], "1 Road");
-        assert_eq!(lines[3], "Hong Kong 0000");
+        assert_eq!(lines[3], "0000 Hong Kong", "postcode first without a state");
     }
 
     #[test]

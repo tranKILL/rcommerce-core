@@ -163,7 +163,8 @@ pub fn invoice_data_from_order(
             sku: i.sku.clone(),
             quantity: i.quantity,
             unit_price: format!("{:.2}", i.price),
-            total: format!("{:.2}", i.total),
+            // Excluding VAT, like the subtotal they add up to
+            total: format!("{:.2}", i.subtotal),
             weight: i.weight.map(|w| {
                 let unit = i
                     .weight_unit
