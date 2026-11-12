@@ -269,6 +269,11 @@ impl Migrator {
                 "invoices",
                 include_str!("../../migrations/034_invoices.sql"),
             ),
+            (
+                35,
+                "search_languages",
+                include_str!("../../migrations/035_search_languages.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

@@ -479,7 +479,8 @@ index = "rcommerce-products"
 
 # Languages indexed (product translations, falling back to the base text).
 # The first one is used when a request asks for an unlisted language.
-# fr, nl, en and de get stemming and stop words; others are folded and lowercased.
+# fr, nl, en, de, it, es, pt, tr and ro get stemming and stop words; others
+# (pl...) are folded and lowercased.
 locales = ["en", "fr", "nl"]
 ```
 

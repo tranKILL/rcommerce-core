@@ -1281,11 +1281,19 @@ message catalogue (`crates/rcommerce-core/src/notification/locales/<locale>.toml
 a section per e-mail (`[order_ready_for_pickup]`) and a `[common]` section for
 shared labels, the footer, and the date and money formats. Templates refer to a
 text as `{{ t.key }}`; texts can hold the e-mail's own `{{ variable }}`
-placeholders. English, French and Dutch are built in; English is the base, and a
-text missing from another language is sent in English.
+placeholders. English, French, Dutch, German, Italian, Spanish, Portuguese,
+Turkish, Romanian and Polish are built in; English is the base, a test checks
+that every built-in language has every English text with the same
+placeholders, and a text missing from a store's own catalogue is sent in
+English.
+
+In HTML bodies every variable is escaped, so names, addresses and product
+lines typed by customers stay text; only the pieces the code builds as HTML
+(item rows, total rows, addresses) are inserted as they are, and their
+builders escape what they contain.
 
 **Adding a language** needs no rebuild: put `<locale>.toml` (for example
-`de.toml`, copied from `en.toml` and translated) in the directory named by
+`sv.toml`, copied from `en.toml` and translated) in the directory named by
 `notifications.locales_dir`. A file for a built-in language replaces only the
 texts it gives, so a store can change its footer note or a single sentence.
 Amounts and dates follow `common.money_format`, `decimal_separator`,

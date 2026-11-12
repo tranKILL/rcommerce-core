@@ -244,7 +244,8 @@ crop = false
 enabled = true
 
 # Language of e-mails when neither the request, the customer nor the order
-# names one, and of shop-operator e-mails (built in: en, fr, nl)
+# names one, and of shop-operator e-mails (built in: en, fr, nl, de, it, es, pt,
+# tr, ro, pl)
 # default_locale = "en"
 
 # Directory of extra e-mail catalogues, one `<locale>.toml` per language: adds a

@@ -457,8 +457,8 @@ language is a query parameter rather than `Accept-Language`, so caches key on th
   names and slugs.
 
 **Search (`?q=`):** PostgreSQL full-text search, ranked, with the stemmer of the
-requested language (English, French, Dutch, German, Spanish, Italian, Portuguese;
-`simple` otherwise). Every word must match, either as the prefix of a title word
+requested language (English, French, Dutch, German, Spanish, Italian, Portuguese,
+Turkish, Romanian; `simple` otherwise). Every word must match, either as the prefix of a title word
 ("perc" finds "perceuse") or as a whole word in the title or description, so a short
 word does not match longer description words ("colle" vs "click & collect"). When
 nothing matches, titles are searched by substring, which finds words inside
