@@ -83,6 +83,11 @@ pub struct PricingContext {
     pub company_id: Option<Uuid>,
     /// Their company's group; their own group when not in a company
     pub customer_group_id: Option<Uuid>,
+    /// A trade customer: in an active company, or in a group whose prices
+    /// exclude VAT (promotions for `pro` reach them, not those for customers)
+    pub pro: bool,
+    /// The customer (promotion usage limits and first-order conditions)
+    pub customer_id: Option<Uuid>,
 }
 
 /// A VAT number that passed the check

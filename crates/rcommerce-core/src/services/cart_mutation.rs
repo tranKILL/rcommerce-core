@@ -5,11 +5,16 @@ use rust_decimal::Decimal;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+use std::collections::HashMap;
+
 use crate::{
     models::{AddToCartInput, Cart, CartItem, UpdateCartItemInput},
     repository::{CouponRepository, Database},
     services::{
         cart_service::{BundleCartDetails, ProductDetails},
+        loyalty_service,
+        price_list_service::RepricedCart,
+        promotion_service::{evaluate_cart, CartLineView, CartOutcome, CartPromotion},
         CouponService,
     },
     Error, Result,
@@ -48,7 +53,9 @@ impl PostgresCartMutation {
         lock_cart(&mut tx, cart_id).await?;
         let items = lock_items(&mut tx, cart_id).await?;
         let existing = items.iter().find(|item| {
-            item.product_id == input.product_id && item.variant_id == input.variant_id
+            item.product_id == input.product_id
+                && item.variant_id == input.variant_id
+                && gift_promotion(item).is_none()
         });
 
         if let Some(item) = existing {
@@ -89,6 +96,7 @@ impl PostgresCartMutation {
                     requires_shipping: product_details.requires_shipping,
                     is_gift_card: product_details.is_gift_card,
                     custom_attributes: input.custom_attributes,
+                    promotion_ids: Vec::new(),
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 };
@@ -192,6 +200,7 @@ impl PostgresCartMutation {
                     "is_bundle_parent": true,
                     "bundle_product_id": bundle_product_id.to_string(),
                 })),
+                promotion_ids: Vec::new(),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             };
@@ -229,6 +238,7 @@ impl PostgresCartMutation {
                         "bundle_parent_id": bundle_product_id.to_string(),
                         "is_bundle_component": true,
                     })),
+                    promotion_ids: Vec::new(),
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 };
@@ -274,6 +284,11 @@ impl PostgresCartMutation {
         if is_bundle_component(item) {
             return Err(Error::validation(
                 "Bundle components must be updated through their parent item",
+            ));
+        }
+        if gift_promotion(item).is_some() {
+            return Err(Error::validation(
+                "A gift line follows its promotion and cannot be changed",
             ));
         }
 
@@ -416,60 +431,212 @@ impl PostgresCartMutation {
         cart_id: Uuid,
     ) -> Result<()> {
         let cart = lock_cart(tx, cart_id).await?;
-        crate::services::price_list_service::reprice_cart_lines(
+        let repriced = crate::services::price_list_service::reprice_cart_lines(
             &mut **tx,
             cart_id,
             cart.customer_id,
+            cart.email.as_deref(),
         )
         .await?;
-        let mut items = lock_items(tx, cart_id).await?;
+        let items = lock_items(tx, cart_id).await?;
+        let outcome = evaluate_promotions(&repriced, &items);
+        let items = if sync_gifts(tx, cart_id, &items, &outcome.gifts).await? {
+            lock_items(tx, cart_id).await?
+        } else {
+            items
+        };
         let subtotal: Decimal = items
             .iter()
             .filter(|item| !is_bundle_component(item))
             .map(|item| item.subtotal)
             .sum();
-        let discount_total = if let Some(coupon_code) = &cart.coupon_code {
-            if let Some(coupon) = self.coupon_repo.find_by_code(coupon_code).await? {
-                self.coupon_service
-                    .calculate_discount(&coupon, subtotal, &items)
-                    .await?
-            } else {
-                Decimal::ZERO
-            }
-        } else {
-            Decimal::ZERO
-        };
-
-        for item in items.iter_mut().filter(|item| !is_bundle_component(item)) {
-            let ratio = if subtotal > Decimal::ZERO {
-                item.subtotal / subtotal
-            } else {
-                Decimal::ZERO
-            };
-            item.discount_amount = (discount_total * ratio).round_dp(2);
-            item.total = item.subtotal - item.discount_amount;
-            sqlx::query(
-                "UPDATE cart_items SET discount_amount = $2, total = $3, updated_at = NOW() WHERE id = $1",
-            )
-            .bind(item.id)
-            .bind(item.discount_amount)
-            .bind(item.total)
-            .execute(&mut **tx)
-            .await?;
+        let coupon = self.coupon_discount(&cart, subtotal, &items).await?;
+        let room = subtotal - outcome.discount() - coupon;
+        let (points, loyalty) = redeemable_points(tx, &cart, &repriced.context, room).await?;
+        allocate_discounts(tx, &items, &outcome, coupon + loyalty).await?;
+        let mut applied = outcome.applied.clone();
+        if points > 0 {
+            applied.push(CartPromotion {
+                id: Uuid::nil(),
+                name: format!("{points} points"),
+                kind: "loyalty".into(),
+                discount: loyalty,
+                points: Some(points),
+            });
         }
-
-        let total = subtotal - discount_total + cart.shipping_total;
+        let discount_total = outcome.discount() + coupon + loyalty;
         sqlx::query(
-            "UPDATE carts SET subtotal = $2, discount_total = $3, tax_total = 0, total = $4, updated_at = NOW() WHERE id = $1",
+            "UPDATE carts SET subtotal = $2, discount_total = $3, tax_total = 0, total = $4, \
+             promotions = $5, updated_at = NOW() WHERE id = $1",
         )
         .bind(cart_id)
         .bind(subtotal)
         .bind(discount_total)
-        .bind(total)
+        .bind(subtotal - discount_total + cart.shipping_total)
+        .bind(sqlx::types::Json(&applied))
         .execute(&mut **tx)
         .await?;
         Ok(())
     }
+
+    /// What the cart's coupon takes off
+    async fn coupon_discount(&self, cart: &Cart, subtotal: Decimal, items: &[CartItem]) -> Result<Decimal> {
+        let Some(code) = &cart.coupon_code else {
+            return Ok(Decimal::ZERO);
+        };
+        match self.coupon_repo.find_by_code(code).await? {
+            Some(coupon) => self.coupon_service.calculate_discount(&coupon, subtotal, items).await,
+            None => Ok(Decimal::ZERO),
+        }
+    }
+}
+
+/// A line free under a gift promotion
+fn gift_promotion(item: &CartItem) -> Option<Uuid> {
+    item.custom_attributes
+        .as_ref()?
+        .get("gift_promotion_id")?
+        .as_str()?
+        .parse()
+        .ok()
+}
+
+/// Cart promotions on the regular lines (not bundles, not gifts)
+fn evaluate_promotions(repriced: &RepricedCart, items: &[CartItem]) -> CartOutcome {
+    let combinable: HashMap<Uuid, bool> = repriced.promotions.iter().map(|p| (p.id, p.combinable)).collect();
+    let lines: Vec<CartLineView> = items
+        .iter()
+        .filter(|i| !is_bundle_parent(i) && !is_bundle_component(i) && gift_promotion(i).is_none())
+        .map(|i| CartLineView {
+            id: i.id,
+            product_id: i.product_id,
+            variant_id: i.variant_id,
+            quantity: i.quantity,
+            unit_price: i.unit_price,
+            categories: repriced.paths.get(&i.product_id).cloned().unwrap_or_default(),
+            promotions: i
+                .promotion_ids
+                .iter()
+                .map(|id| (*id, combinable.get(id).copied().unwrap_or(false)))
+                .collect(),
+        })
+        .collect();
+    evaluate_cart(&repriced.promotions, &lines)
+}
+
+/// A free gift line for `promotion`, when the product is on sale and in stock
+async fn gift_line(
+    tx: &mut Transaction<'_, Postgres>,
+    cart_id: Uuid,
+    promotion: Uuid,
+    product: Uuid,
+    quantity: i32,
+) -> Result<Option<CartItem>> {
+    let row: Option<(String, Option<String>, Decimal, i64)> = sqlx::query_as(
+        "SELECT p.title, p.sku, p.price, COALESCE((SELECT SUM(available_quantity) FROM inventory_levels l \
+           WHERE l.product_id = p.id AND l.variant_id IS NULL), 0)::bigint \
+         FROM products p WHERE p.id = $1 AND p.is_active",
+    )
+    .bind(product)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((title, sku, price, stock)) = row.filter(|r| r.3 >= i64::from(quantity)) else {
+        return Ok(None);
+    };
+    Ok(Some(CartItem {
+        id: Uuid::new_v4(),
+        cart_id,
+        product_id: product,
+        variant_id: None,
+        quantity,
+        unit_price: Decimal::ZERO,
+        original_price: price,
+        subtotal: Decimal::ZERO,
+        discount_amount: Decimal::ZERO,
+        total: Decimal::ZERO,
+        sku,
+        title,
+        variant_title: None,
+        image_url: None,
+        requires_shipping: true,
+        is_gift_card: false,
+        custom_attributes: Some(serde_json::json!({ "gift_promotion_id": promotion.to_string() })),
+        promotion_ids: vec![promotion],
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    }))
+}
+
+/// Make the cart's gift lines those the promotions give; whether any changed
+async fn sync_gifts(
+    tx: &mut Transaction<'_, Postgres>,
+    cart_id: Uuid,
+    items: &[CartItem],
+    gifts: &[(Uuid, Uuid, i32)],
+) -> Result<bool> {
+    let mut changed = false;
+    for item in items {
+        let wanted = gift_promotion(item)
+            .is_some_and(|p| gifts.iter().any(|g| *g == (p, item.product_id, item.quantity)));
+        if gift_promotion(item).is_some() && !wanted {
+            sqlx::query("DELETE FROM cart_items WHERE id = $1").bind(item.id).execute(&mut **tx).await?;
+            changed = true;
+        }
+    }
+    for (promotion, product, quantity) in gifts {
+        let present = items.iter().any(|i| gift_promotion(i) == Some(*promotion) && i.product_id == *product && i.quantity == *quantity);
+        if present {
+            continue;
+        }
+        if let Some(line) = gift_line(tx, cart_id, *promotion, *product, *quantity).await? {
+            insert_item(tx, &line).await?;
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
+/// The loyalty points the cart redeems and what they take off (none for a
+/// guest, outside the programme's audience, or below its minimum)
+async fn redeemable_points(
+    tx: &mut Transaction<'_, Postgres>,
+    cart: &Cart,
+    context: &crate::services::company_service::PricingContext,
+    room: Decimal,
+) -> Result<(i32, Decimal)> {
+    let Some(customer) = cart.customer_id.filter(|_| cart.loyalty_points > 0) else {
+        return Ok((0, Decimal::ZERO));
+    };
+    let settings = loyalty_service::settings(&mut **tx).await?;
+    if !settings.reaches(context.pro) {
+        return Ok((0, Decimal::ZERO));
+    }
+    let balance = loyalty_service::balance(&mut **tx, customer, &settings).await?;
+    Ok(settings.redeemable(cart.loyalty_points, balance, room))
+}
+
+/// Each line's discount: its own promotion discount, plus its share of the
+/// cart-wide discounts (coupon, points) by what it still costs
+async fn allocate_discounts(
+    tx: &mut Transaction<'_, Postgres>,
+    items: &[CartItem],
+    outcome: &CartOutcome,
+    shared: Decimal,
+) -> Result<()> {
+    let own = |item: &CartItem| outcome.line_discounts.get(&item.id).copied().unwrap_or_default();
+    let regular: Vec<&CartItem> = items.iter().filter(|i| !is_bundle_component(i)).collect();
+    let base: Decimal = regular.iter().map(|i| i.subtotal - own(i)).sum();
+    for item in regular {
+        let ratio = if base > Decimal::ZERO { (item.subtotal - own(item)) / base } else { Decimal::ZERO };
+        let discount = own(item) + (shared * ratio).round_dp(2);
+        sqlx::query("UPDATE cart_items SET discount_amount = $2, total = $3, updated_at = NOW() WHERE id = $1")
+            .bind(item.id)
+            .bind(discount)
+            .bind(item.subtotal - discount)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
 }
 
 async fn lock_cart(tx: &mut Transaction<'_, Postgres>, cart_id: Uuid) -> Result<Cart> {

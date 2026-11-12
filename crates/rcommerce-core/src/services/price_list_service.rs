@@ -16,6 +16,9 @@ use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::services::company_service::PricingContext;
+use crate::services::promotion_service::{
+    catalogue_price, live_promotions, AppliedPromotion, Buyer, CatalogueItem, Promotion,
+};
 use crate::{Error, Result};
 
 /// A price list
@@ -102,7 +105,7 @@ pub struct NewPriceRule {
 }
 
 /// A decimal sent as a JSON number (`10`, `8.5`) or as text (`"8.50"`)
-fn number_or_text<'de, D>(deserializer: D) -> std::result::Result<Decimal, D::Error>
+pub(crate) fn number_or_text<'de, D>(deserializer: D) -> std::result::Result<Decimal, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -154,6 +157,8 @@ pub struct ResolvedPrice {
     pub price_list_id: Option<Uuid>,
     /// Prices from larger quantities, cheapest last (only those below `price`)
     pub tiers: Vec<PriceTier>,
+    /// The catalogue promotions behind `price` (empty without one)
+    pub promotions: Vec<AppliedPromotion>,
 }
 
 /// An applicable rule, joined with what it targets
@@ -234,6 +239,43 @@ fn resolve_item(item: &PriceItem, rules: &[LiveRule], categories: &HashSet<Uuid>
         price,
         price_list_id,
         tiers,
+        promotions: Vec::new(),
+    }
+}
+
+/// Apply catalogue promotions to a negotiated price (see promotion_service)
+fn with_promotions(
+    mut resolved: ResolvedPrice,
+    item: &PriceItem,
+    promotions: &[Promotion],
+    categories: &HashSet<Uuid>,
+    amounts: Option<&HashMap<Uuid, Decimal>>,
+) -> ResolvedPrice {
+    let catalogue_item = CatalogueItem {
+        product_id: item.product_id,
+        variant_id: item.variant_id,
+        categories,
+        quantity: item.quantity.max(1),
+        base: item.base_price,
+        negotiated: resolved.price,
+    };
+    if let Some((price, used)) = catalogue_price(promotions, &catalogue_item, amounts) {
+        if used.iter().all(|p| !p.combinable) {
+            resolved.price_list_id = None;
+        }
+        resolved.price = price;
+        resolved.tiers.retain(|t| t.price < price);
+        resolved.promotions = used.into_iter().map(AppliedPromotion::from).collect();
+    }
+    resolved
+}
+
+/// The buyer promotions are looked up for in a pricing context
+pub fn buyer_of(context: &PricingContext, email: Option<&str>) -> Buyer {
+    Buyer {
+        pro: context.pro,
+        customer_id: context.customer_id,
+        email: email.map(str::to_string),
     }
 }
 
@@ -267,7 +309,7 @@ async fn live_rules(
 }
 
 /// Each product's categories with all their ancestors
-async fn category_paths(
+pub(crate) async fn category_paths(
     conn: &mut PgConnection,
     products: &[Uuid],
 ) -> Result<HashMap<Uuid, HashSet<Uuid>>> {
@@ -291,46 +333,79 @@ async fn category_paths(
     Ok(paths)
 }
 
-/// The prices `context` pays for `items`, in the same order
+/// The prices `context` pays for `items`, in the same order, with the
+/// catalogue promotions in force for them (listings: no cart amounts)
 pub async fn resolve_prices(
     conn: &mut PgConnection,
     context: PricingContext,
     items: &[PriceItem],
 ) -> Result<Vec<ResolvedPrice>> {
+    let promotions = live_promotions(&mut *conn, &buyer_of(&context, None)).await?;
+    resolve_with(conn, context, items, &promotions, None).await
+}
+
+/// Each product's categories with their ancestors, when a rule or promotion
+/// targets a category
+async fn paths_if_needed(
+    conn: &mut PgConnection,
+    items: &[PriceItem],
+    category_scoped: bool,
+) -> Result<HashMap<Uuid, HashSet<Uuid>>> {
+    if !category_scoped {
+        return Ok(HashMap::new());
+    }
+    let products: Vec<Uuid> = items.iter().map(|i| i.product_id).collect();
+    category_paths(conn, &products).await
+}
+
+/// The prices of `items` under `context`'s price lists and `promotions`
+pub async fn resolve_with(
+    conn: &mut PgConnection,
+    context: PricingContext,
+    items: &[PriceItem],
+    promotions: &[Promotion],
+    amounts: Option<&HashMap<Uuid, Decimal>>,
+) -> Result<Vec<ResolvedPrice>> {
     let rules = live_rules(&mut *conn, context, items).await?;
-    let paths = if rules.iter().any(|r| r.scope == "category") {
-        let products: Vec<Uuid> = items.iter().map(|i| i.product_id).collect();
-        category_paths(&mut *conn, &products).await?
-    } else {
-        HashMap::new()
-    };
+    let category_scoped = rules.iter().any(|r| r.scope == "category")
+        || promotions.iter().any(|p| p.scope == "category");
+    let paths = paths_if_needed(&mut *conn, items, category_scoped).await?;
     let none = HashSet::new();
     Ok(items
         .iter()
-        .map(|item| resolve_item(item, &rules, paths.get(&item.product_id).unwrap_or(&none)))
+        .map(|item| {
+            let categories = paths.get(&item.product_id).unwrap_or(&none);
+            let negotiated = resolve_item(item, &rules, categories);
+            with_promotions(negotiated, item, promotions, categories, amounts)
+        })
         .collect())
 }
 
 /// The pricing context of a customer: their active company and its group,
 /// else their own group
 pub async fn pricing_context(conn: &mut PgConnection, customer: Uuid) -> Result<PricingContext> {
-    let row: Option<(Option<Uuid>, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
-        "SELECT co.id, co.customer_group_id, c.customer_group_id FROM customers c \
+    let row: Option<(Option<Uuid>, Option<Uuid>, Option<Uuid>, bool)> = sqlx::query_as(
+        "SELECT co.id, co.customer_group_id, c.customer_group_id, COALESCE(g.prices_exclude_tax, false) \
+         FROM customers c \
          LEFT JOIN company_members m ON m.customer_id = c.id \
          LEFT JOIN companies co ON co.id = m.company_id AND co.status = 'active' \
+         LEFT JOIN customer_groups g ON g.id = CASE WHEN co.id IS NULL THEN c.customer_group_id \
+                                                   ELSE co.customer_group_id END \
          WHERE c.id = $1",
     )
     .bind(customer)
     .fetch_optional(conn)
     .await?;
     Ok(match row {
-        Some((company, company_group, own_group)) => PricingContext {
+        Some((company, company_group, own_group, net_prices)) => PricingContext {
             company_id: company,
             customer_group_id: if company.is_some() {
                 company_group
             } else {
                 own_group
             },
+            pro: company.is_some() || net_prices,
+            customer_id: Some(customer),
         },
         None => PricingContext::default(),
     })
@@ -364,14 +439,13 @@ pub async fn catalogue_prices(
     ))
 }
 
-/// A cart line that may follow price lists
+/// A regular cart line (not a bundle line nor a gift)
 #[derive(Debug, sqlx::FromRow)]
 struct CartLine {
     id: Uuid,
     product_id: Uuid,
     variant_id: Option<Uuid>,
     quantity: i32,
-    price_list_id: Option<Uuid>,
 }
 
 /// The lines that still have a catalogue price, with what to price for each
@@ -398,50 +472,98 @@ fn price_items<'a>(
         .unzip()
 }
 
-/// Give a cart's lines the prices of its customer's price lists. Lines priced
-/// by a list follow it (and go back to the catalogue price when no list applies
-/// any more); lines no list ever priced are left as they are. Bundle lines are
-/// not repriced. Call inside the cart's lock, before its totals.
-pub async fn reprice_cart_lines(
+/// What repricing found, for the cart promotions that follow
+pub struct RepricedCart {
+    pub context: PricingContext,
+    /// Promotions in force for the cart's buyer
+    pub promotions: Vec<Promotion>,
+    /// Each product's categories with their ancestors (when a scope needs them)
+    pub paths: HashMap<Uuid, HashSet<Uuid>>,
+}
+
+/// Per catalogue promotion with a minimum amount: the cart's total, at
+/// catalogue prices, of the lines it targets
+fn targeted_amounts(
+    promotions: &[Promotion],
+    items: &[PriceItem],
+    paths: &HashMap<Uuid, HashSet<Uuid>>,
+) -> HashMap<Uuid, Decimal> {
+    let none = HashSet::new();
+    promotions
+        .iter()
+        .filter(|p| p.min_amount.is_some())
+        .map(|p| {
+            let amount = items
+                .iter()
+                .filter(|i| {
+                    let categories = paths.get(&i.product_id).unwrap_or(&none);
+                    crate::services::promotion_service::targets(
+                        &p.scope, p.target_id, i.product_id, i.variant_id, categories,
+                    )
+                })
+                .map(|i| i.base_price * Decimal::from(i.quantity))
+                .sum();
+            (p.id, amount)
+        })
+        .collect()
+}
+
+/// Write each line's price, list and promotions
+async fn write_line_prices(
     conn: &mut PgConnection,
-    cart_id: Uuid,
-    customer: Option<Uuid>,
+    lines: &[&CartLine],
+    prices: Vec<ResolvedPrice>,
 ) -> Result<()> {
-    let context = match customer {
-        Some(id) => pricing_context(&mut *conn, id).await?,
-        None => PricingContext::default(),
-    };
-    let lines: Vec<CartLine> = sqlx::query_as(
-        "SELECT id, product_id, variant_id, quantity, price_list_id FROM cart_items          WHERE cart_id = $1 AND COALESCE((custom_attributes->>'is_bundle_component')::boolean, false) = false            AND COALESCE((custom_attributes->>'is_bundle_parent')::boolean, false) = false",
-    )
-    .bind(cart_id)
-    .fetch_all(&mut *conn)
-    .await?;
-    let no_context = context.company_id.is_none() && context.customer_group_id.is_none();
-    if lines.is_empty() || (no_context && lines.iter().all(|l| l.price_list_id.is_none())) {
-        return Ok(());
-    }
-    let products: Vec<Uuid> = lines.iter().map(|l| l.product_id).collect();
-    let variants: Vec<Uuid> = lines.iter().filter_map(|l| l.variant_id).collect();
-    let (product_prices, variant_prices) =
-        catalogue_prices(&mut *conn, &products, &variants).await?;
-    let (priced, items) = price_items(&lines, &product_prices, &variant_prices);
-    let resolved = resolve_prices(&mut *conn, context, &items).await?;
-    for (line, price) in priced.into_iter().zip(resolved) {
-        if price.price_list_id.is_none() && line.price_list_id.is_none() {
-            continue;
-        }
+    for (line, price) in lines.iter().zip(prices) {
+        let promotions: Vec<Uuid> = price.promotions.iter().map(|p| p.id).collect();
         sqlx::query(
-            "UPDATE cart_items SET unit_price = $2, subtotal = $2 * quantity, price_list_id = $3,              original_price = GREATEST(original_price, $4), updated_at = NOW() WHERE id = $1",
+            "UPDATE cart_items SET unit_price = $2, subtotal = $2 * quantity, price_list_id = $3, \
+             original_price = $4, promotion_ids = $5, updated_at = NOW() WHERE id = $1",
         )
         .bind(line.id)
         .bind(price.price)
         .bind(price.price_list_id)
         .bind(price.base_price)
+        .bind(&promotions)
         .execute(&mut *conn)
         .await?;
     }
     Ok(())
+}
+
+/// Give a cart's regular lines (not bundle lines, not gifts) their price: the
+/// catalogue price, the customer's negotiated price or a catalogue promotion,
+/// whichever applies (see promotion_service). Call inside the cart's lock,
+/// before its totals.
+pub async fn reprice_cart_lines(
+    conn: &mut PgConnection,
+    cart_id: Uuid,
+    customer: Option<Uuid>,
+    email: Option<&str>,
+) -> Result<RepricedCart> {
+    let context = match customer {
+        Some(id) => pricing_context(&mut *conn, id).await?,
+        None => PricingContext::default(),
+    };
+    let promotions = live_promotions(&mut *conn, &buyer_of(&context, email)).await?;
+    let lines: Vec<CartLine> = sqlx::query_as(
+        "SELECT id, product_id, variant_id, quantity FROM cart_items WHERE cart_id = $1 \
+           AND COALESCE((custom_attributes->>'is_bundle_component')::boolean, false) = false \
+           AND COALESCE((custom_attributes->>'is_bundle_parent')::boolean, false) = false \
+           AND custom_attributes->>'gift_promotion_id' IS NULL",
+    )
+    .bind(cart_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let products: Vec<Uuid> = lines.iter().map(|l| l.product_id).collect();
+    let variants: Vec<Uuid> = lines.iter().filter_map(|l| l.variant_id).collect();
+    let (product_prices, variant_prices) = catalogue_prices(&mut *conn, &products, &variants).await?;
+    let (priced, items) = price_items(&lines, &product_prices, &variant_prices);
+    let paths = paths_if_needed(&mut *conn, &items, promotions.iter().any(|p| p.scope == "category")).await?;
+    let amounts = targeted_amounts(&promotions, &items, &paths);
+    let prices = resolve_with(&mut *conn, context, &items, &promotions, Some(&amounts)).await?;
+    write_line_prices(&mut *conn, &priced, prices).await?;
+    Ok(RepricedCart { context, promotions, paths })
 }
 
 fn check_rule(rule: &NewPriceRule) -> Result<()> {

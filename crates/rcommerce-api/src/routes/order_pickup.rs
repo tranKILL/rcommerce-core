@@ -125,6 +125,14 @@ pub async fn mark_ready(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    rcommerce_core::services::order_events::record(
+        &mut tx,
+        id,
+        "ready",
+        rcommerce_core::services::order_events::Actor::Staff(auth.customer_id),
+        serde_json::json!({ "location": pickup.location_name }),
+    )
+    .await?;
     tx.commit().await?;
     super::email_helpers::send_order_ready_email(&state, id).await;
     let order = fetch_order(&state, id).await?;
@@ -150,8 +158,16 @@ pub async fn mark_collected(
     }
     record_collection(&mut tx, id, collector, pickup.location_name.as_deref()).await?;
     release_committed_stock(&mut tx, id).await?;
+    rcommerce_core::services::order_events::record(
+        &mut tx,
+        id,
+        "collected",
+        rcommerce_core::services::order_events::Actor::Staff(auth.customer_id),
+        serde_json::json!({ "collected_by": collector, "location": pickup.location_name }),
+    )
+    .await?;
     tx.commit().await?;
-    super::invoices::issue_after_handover(&state, id).await;
+    super::order_history::after_handover(&state, id).await;
     let order = fetch_order(&state, id).await?;
     Ok(Json(build_order_response(&state, order).await?))
 }

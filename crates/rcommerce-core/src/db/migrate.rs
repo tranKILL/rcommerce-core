@@ -274,6 +274,21 @@ impl Migrator {
                 "search_languages",
                 include_str!("../../migrations/035_search_languages.sql"),
             ),
+            (
+                36,
+                "promotions_loyalty",
+                include_str!("../../migrations/036_promotions_loyalty.sql"),
+            ),
+            (
+                37,
+                "content_blocks",
+                include_str!("../../migrations/037_content_blocks.sql"),
+            ),
+            (
+                38,
+                "order_events_loyalty_card",
+                include_str!("../../migrations/038_order_events_loyalty_card.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

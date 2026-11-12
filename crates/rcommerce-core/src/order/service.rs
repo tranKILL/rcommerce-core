@@ -47,6 +47,11 @@ pub struct OrderService {
 }
 
 impl OrderService {
+    /// The store's database
+    pub fn database(&self) -> &Database {
+        &self.db
+    }
+
     /// Create a new order service
     pub fn new(
         db: Database,
@@ -363,6 +368,14 @@ impl OrderService {
 
         // Dispatch order created event
         self.event_dispatcher.order_created(&order).await?;
+        crate::services::order_events::record_quietly(
+            self.db.pool(),
+            order_id,
+            "placed",
+            crate::services::order_events::Actor::Customer(order.customer_id),
+            serde_json::json!({}),
+        )
+        .await;
 
         info!(
             "Order created: id={}, number={}, total={}",
@@ -674,6 +687,16 @@ impl OrderService {
         .fetch_optional(self.db.pool())
         .await?;
         let transitioned = updated.is_some();
+        if transitioned {
+            crate::services::order_events::record_quietly(
+                self.db.pool(),
+                order_id,
+                "paid",
+                crate::services::order_events::Actor::System,
+                serde_json::json!({}),
+            )
+            .await;
+        }
         let order = match updated {
             Some(order) => order,
             None => {

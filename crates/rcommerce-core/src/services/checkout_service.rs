@@ -26,6 +26,11 @@ use crate::{
     Error, Result,
 };
 
+/// Whether the cart earned free delivery (a free_delivery promotion applies)
+fn free_delivery(cart: &Cart) -> bool {
+    cart.promotions.0.iter().any(|p| p.kind == "free_delivery")
+}
+
 /// Checkout service that orchestrates the complete checkout flow
 pub struct CheckoutService {
     cart_service: Arc<CartService>,
@@ -371,7 +376,7 @@ impl CheckoutService {
         // Get available shipping rates
         let package = self.estimate_package(&items).await?;
         let shipping_rates = self
-            .get_shipping_rates(&request.shipping_address, &package, cart.currency)
+            .get_shipping_rates(&request.shipping_address, &package, cart.currency, free_delivery(&cart))
             .await?;
 
         // Default to the cheapest available rate (updated when customer selects rate)
@@ -452,6 +457,7 @@ impl CheckoutService {
                 &shipping_address,
                 &package,
                 cart.currency,
+                free_delivery(&cart),
             )
             .await?;
 
@@ -486,7 +492,7 @@ impl CheckoutService {
 
         // Get available shipping rates (server-estimated package, same as initiate)
         let shipping_rates = self
-            .get_shipping_rates(&shipping_address, &package, cart.currency)
+            .get_shipping_rates(&shipping_address, &package, cart.currency, free_delivery(&cart))
             .await?;
 
         let summary = CheckoutSummary {
@@ -611,6 +617,7 @@ impl CheckoutService {
                 &request.shipping_address,
                 &package,
                 cart.currency,
+                free_delivery(&cart),
             )
             .await?;
 
@@ -759,6 +766,13 @@ impl CheckoutService {
         if let Some(locale) = &request.locale {
             order_metadata["locale"] = serde_json::json!(locale);
         }
+        if !cart.promotions.0.is_empty() {
+            order_metadata["promotions"] = serde_json::json!(cart.promotions.0);
+        }
+        let redeemed = crate::services::promotion_service::CartPromotion::redeemed(&cart.promotions.0);
+        if redeemed > 0 {
+            order_metadata["loyalty_points"] = serde_json::json!(redeemed);
+        }
         if pickup_location(&validated_rate).is_some() {
             order_metadata["pickup"] = serde_json::json!({
                 "location_id": fulfillment_location_id,
@@ -807,6 +821,8 @@ impl CheckoutService {
         let order = self
             .order_service
             .create_order(create_order_request)
+            .await?;
+        self.record_promotions_and_points(&cart, &items, &order, request.customer_id, &request.customer_email)
             .await?;
 
         // Record tax transaction for reporting. The calculation's line item ids
@@ -1352,6 +1368,40 @@ impl CheckoutService {
         }
     }
 
+    /// After an order is created from `cart`: the promotions it used (usage
+    /// limits) and the loyalty points it redeems (refused when the balance
+    /// no longer covers them: the order is then cancelled)
+    async fn record_promotions_and_points(
+        &self,
+        cart: &Cart,
+        items: &[CartItem],
+        order: &crate::order::Order,
+        customer: Option<Uuid>,
+        email: &str,
+    ) -> Result<()> {
+        let mut used: Vec<Uuid> = items.iter().flat_map(|i| i.promotion_ids.iter().copied()).collect();
+        used.extend(cart.promotions.0.iter().map(|p| p.id).filter(|id| !id.is_nil()));
+        used.sort();
+        used.dedup();
+        let pool = self.order_service.database().pool();
+        let mut conn = pool.acquire().await?;
+        if !used.is_empty() {
+            crate::services::promotion_service::record_uses(&mut conn, order.id, customer, email, &used).await?;
+        }
+        let points = crate::services::promotion_service::CartPromotion::redeemed(&cart.promotions.0);
+        if let (Some(customer), true) = (customer, points > 0) {
+            let mut tx = pool.begin().await?;
+            let redeemed = crate::services::loyalty_service::redeem_for_order(&mut tx, customer, order.id, points).await;
+            if let Err(e) = redeemed {
+                drop(tx);
+                let _ = self.order_service.cancel_order(order.id, "Loyalty points no longer available".into()).await;
+                return Err(e);
+            }
+            tx.commit().await?;
+        }
+        Ok(())
+    }
+
     /// Re-quote shipping server-side and return the authoritative rate matching
     /// the client-submitted one by (carrier, service_code). The submitted cost
     /// is never trusted: a missing identifier, an unknown rate, or a price that
@@ -1362,9 +1412,10 @@ impl CheckoutService {
         destination: &Address,
         package: &Package,
         currency: Currency,
+        free_delivery: bool,
     ) -> Result<ShippingRate> {
         let rates = self
-            .get_shipping_rates(destination, package, currency)
+            .get_shipping_rates(destination, package, currency, free_delivery)
             .await?;
         match_shipping_rate(submitted, &rates).cloned()
     }
@@ -1375,6 +1426,7 @@ impl CheckoutService {
         destination: &Address,
         package: &Package,
         currency: Currency,
+        free_delivery: bool,
     ) -> Result<Vec<ShippingRate>> {
         // TODO: Get origin address from configuration
         let origin = Address {
@@ -1414,6 +1466,12 @@ impl CheckoutService {
         let mut rates = aggregator
             .get_all_rates(&origin, destination, package, &options)
             .await?;
+        if free_delivery {
+            // a free delivery promotion: delivery rates cost nothing
+            for rate in rates.iter_mut() {
+                rate.total_cost = Decimal::ZERO;
+            }
+        }
         if let Some(pickup) = &self.pickup {
             rates.extend(pickup.rates(&currency.to_string(), Utc::now()).await?);
         }
@@ -1650,6 +1708,7 @@ mod tests {
             requires_shipping: true,
             is_gift_card: false,
             custom_attributes: None,
+            promotion_ids: Vec::new(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

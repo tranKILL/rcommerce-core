@@ -847,7 +847,16 @@ pub async fn cancel_order(
         rcommerce_core::models::PaymentStatus::Paid
     );
 
-    state.order_service.cancel_order(id, reason).await?;
+    state.order_service.cancel_order(id, reason.clone()).await?;
+    rcommerce_core::services::order_events::record_quietly(
+        state.db.pool(),
+        id,
+        "cancelled",
+        super::order_history::actor(&auth, customer_id),
+        serde_json::json!({ "reason": reason }),
+    )
+    .await;
+    super::order_history::after_cancel(&state, id).await;
 
     let order = fetch_order(&state, id).await?;
     if !order.customer_email.is_empty() {
@@ -902,7 +911,16 @@ pub async fn refund_order(
     let order_before = fetch_order(&state, id).await?;
     let refund_amount = amount.unwrap_or(order_before.total);
 
-    state.order_service.refund_order(id, amount, reason).await?;
+    state.order_service.refund_order(id, amount, reason.clone()).await?;
+    rcommerce_core::services::order_events::record_quietly(
+        state.db.pool(),
+        id,
+        "refunded",
+        rcommerce_core::services::order_events::Actor::Staff(auth.customer_id),
+        serde_json::json!({ "amount": refund_amount, "reason": reason }),
+    )
+    .await;
+    super::order_history::after_cancel(&state, id).await;
 
     let order = fetch_order(&state, id).await?;
     if !order.customer_email.is_empty() {
@@ -1132,6 +1150,24 @@ pub async fn update_order_status(
         .order_service
         .update_order_status(id, new_status)
         .await?;
+    let kind = match new_status {
+        LifecycleOrderStatus::Processing => "preparing",
+        LifecycleOrderStatus::Completed => "completed",
+        LifecycleOrderStatus::OnHold => "on_hold",
+        LifecycleOrderStatus::Canceled => "cancelled",
+        _ => "status",
+    };
+    rcommerce_core::services::order_events::record_quietly(
+        state.db.pool(),
+        id,
+        kind,
+        rcommerce_core::services::order_events::Actor::Staff(auth.customer_id),
+        serde_json::json!({ "status": request.status }),
+    )
+    .await;
+    if kind == "cancelled" {
+        super::order_history::after_cancel(&state, id).await;
+    }
 
     let order = fetch_order(&state, id).await?;
     Ok(Json(build_order_response(&state, order).await?))
@@ -1312,6 +1348,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/orders/:id", get(get_order))
         .route("/orders/:id/invoice", get(get_invoice))
+        .route("/orders/:id/events", get(super::order_history::order_events))
         .route("/orders/:id/cancel", post(cancel_order))
         .route("/orders/:id/refund", post(refund_order))
         .route("/orders/:id/fulfillments", post(create_fulfillment))

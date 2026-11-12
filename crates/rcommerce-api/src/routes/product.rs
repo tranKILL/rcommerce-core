@@ -5,6 +5,7 @@ use axum::{
     Extension, Json, Router,
 };
 use serde::Deserialize;
+use rcommerce_core::services::promotion_service::{self, ProductOffers};
 use uuid::Uuid;
 
 use crate::middleware::JwtAuth;
@@ -183,6 +184,17 @@ struct ProductCards {
     reviews: HashMap<Uuid, (f64, i64)>,
     bundle_stock: HashMap<Uuid, i32>,
     translations: HashMap<Uuid, ProductTranslation>,
+    offers: HashMap<Uuid, ProductOffers>,
+}
+
+/// The retail promotions of products (reduced price, prior price, offers);
+/// signed-in trade customers get theirs from `/customers/me/prices`
+pub(crate) async fn retail_offers(
+    state: &AppState,
+    products: &[(Uuid, rust_decimal::Decimal)],
+) -> rcommerce_core::Result<HashMap<Uuid, ProductOffers>> {
+    let mut conn = state.db.pool().acquire().await?;
+    promotion_service::product_offers(&mut conn, &promotion_service::Buyer::default(), products).await
 }
 
 impl ProductCards {
@@ -196,12 +208,14 @@ impl ProductCards {
                 None => Ok(HashMap::new()),
             }
         };
-        let (images, categories, reviews, bundle_stock, translations) = tokio::join!(
+        let priced: Vec<(Uuid, rust_decimal::Decimal)> = products.iter().map(|p| (p.id, p.price)).collect();
+        let (images, categories, reviews, bundle_stock, translations, offers) = tokio::join!(
             state.product_service.repository.find_first_images(&ids),
             cat_repo.categories_for_products(&ids, locale),
             review_aggregates(state, &ids),
             bundle_stock(state, products),
             translations,
+            retail_offers(state, &priced),
         );
         Self {
             images: or_empty(images, "product images"),
@@ -209,6 +223,7 @@ impl ProductCards {
             reviews: or_empty(reviews, "review aggregates"),
             bundle_stock: or_empty(bundle_stock, "bundle stock"),
             translations: or_empty(translations, "product translations"),
+            offers: or_empty(offers, "promotions"),
         }
     }
 
@@ -239,6 +254,7 @@ impl ProductCards {
             "categories": categories,
             "average_rating": average_rating,
             "review_count": review_count,
+            "promotion": self.offers.remove(&p.id),
             "created_at": p.created_at
         })
     }
@@ -519,6 +535,11 @@ pub async fn get_product(
     if is_admin {
         body["product"]["cost_price"] = serde_json::json!(cost_price);
     }
+    let offers = retail_offers(&state, &[(p.id, p.price)]).await.unwrap_or_else(|e| {
+        tracing::warn!("Failed to load the promotions of product {}: {}", p.id, e);
+        HashMap::new()
+    });
+    body["product"]["promotion"] = serde_json::json!(offers.get(&p.id));
     Ok(Json(body))
 }
 

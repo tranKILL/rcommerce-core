@@ -133,6 +133,8 @@ impl CartService {
             billing_address_id: None,
             shipping_method: None,
             notes: None,
+            promotions: Default::default(),
+            loyalty_points: 0,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             expires_at: Some(Utc::now() + Duration::days(30)),
@@ -405,6 +407,7 @@ impl CartService {
             requires_shipping: product_details.requires_shipping,
             is_gift_card: product_details.is_gift_card,
             custom_attributes: input.custom_attributes,
+            promotion_ids: Vec::new(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -469,6 +472,7 @@ impl CartService {
                 "is_bundle_parent": true,
                 "bundle_product_id": bundle_product_id.to_string(),
             })),
+            promotion_ids: Vec::new(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -500,6 +504,7 @@ impl CartService {
                     "bundle_parent_id": bundle_product_id.to_string(),
                     "is_bundle_component": true
                 })),
+                promotion_ids: Vec::new(),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             };

@@ -32,6 +32,14 @@ pub async fn issue_after_handover(state: &AppState, order_id: Uuid) {
     }
     match state.invoices.issue_for_order(order_id).await {
         Ok(invoice) => {
+            rcommerce_core::services::order_events::record_quietly(
+                state.db.pool(),
+                order_id,
+                "invoiced",
+                rcommerce_core::services::order_events::Actor::System,
+                serde_json::json!({ "invoice_number": invoice.number }),
+            )
+            .await;
             send_invoice_email(state, &invoice);
             if let Some(peppol) = state.peppol.clone() {
                 let invoices = state.invoices.clone();

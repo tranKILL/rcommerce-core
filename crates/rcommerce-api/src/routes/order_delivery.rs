@@ -126,6 +126,14 @@ pub async fn mark_dispatched(
         &note,
     )
     .await?;
+    rcommerce_core::services::order_events::record(
+        &mut tx,
+        id,
+        "dispatched",
+        rcommerce_core::services::order_events::Actor::Staff(auth.customer_id),
+        serde_json::json!({ "driver": driver }),
+    )
+    .await?;
     tx.commit().await?;
     let order = fetch_order(&state, id).await?;
     Ok(Json(build_order_response(&state, order).await?))
@@ -175,8 +183,16 @@ pub async fn mark_delivered(
         .execute(&mut *tx)
         .await?;
     release_committed_stock(&mut tx, id).await?;
+    rcommerce_core::services::order_events::record(
+        &mut tx,
+        id,
+        "delivered",
+        rcommerce_core::services::order_events::Actor::Staff(auth.customer_id),
+        serde_json::json!({ "received_by": receiver }),
+    )
+    .await?;
     tx.commit().await?;
-    super::invoices::issue_after_handover(&state, id).await;
+    super::order_history::after_handover(&state, id).await;
     let order = fetch_order(&state, id).await?;
     Ok(Json(build_order_response(&state, order).await?))
 }

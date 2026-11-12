@@ -123,5 +123,8 @@ pub fn router() -> Router<AppState> {
         .merge(super::price_lists::admin_router())
         .merge(super::invoices::admin_router())
         .merge(super::dashboard::router())
+        .merge(super::content::admin_router())
+        .merge(super::promotions::admin_router())
+        .merge(super::loyalty::admin_router())
         .merge(staff::router())
 }

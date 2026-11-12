@@ -52,6 +52,14 @@ pub struct Cart {
     pub converted_to_order: bool,
     /// The order ID if converted
     pub order_id: Option<Uuid>,
+    /// Cart promotions that apply (buy X get Y, tiers, free delivery, gifts)
+    /// and the loyalty redemption, with what each takes off
+    #[sqlx(default)]
+    pub promotions: sqlx::types::Json<Vec<crate::services::promotion_service::CartPromotion>>,
+    /// Loyalty points the customer asked to redeem (those used: the
+    /// `loyalty` line of `promotions`)
+    #[sqlx(default)]
+    pub loyalty_points: i32,
 }
 
 /// Cart item - represents a product in the cart
@@ -87,6 +95,9 @@ pub struct CartItem {
     pub is_gift_card: bool,
     /// Custom attributes (e.g., personalization)
     pub custom_attributes: Option<serde_json::Value>,
+    /// Catalogue promotions behind the unit price
+    #[sqlx(default)]
+    pub promotion_ids: Vec<Uuid>,
     /// When the item was added
     pub created_at: DateTime<Utc>,
     /// When the item was last updated

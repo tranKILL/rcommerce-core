@@ -4964,3 +4964,281 @@ async fn test_dashboard_follows_staff_roles() {
     assert_eq!(board["stock"]["out_of_stock"], 0, "3 of 5 left: {board}");
     app.cleanup().await.ok();
 }
+
+/// The home banner and other storefront texts, edited per language by staff
+/// with settings rights and read by anyone, falling back to the store's
+/// default language
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_content_blocks_per_language() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let key = format!("hero_{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let path = format!("/admin/content/{key}");
+    let body = serde_json::json!({"languages": {
+        "en": {"title": "Everything to build", "text": "Collect in one hour"},
+        "nl": {"title": "Alles om te bouwen", "text": " "},
+    }});
+    let (status, _) = send_json(&app, reqwest::Method::PUT, &token, &path, Some(body.clone())).await;
+    assert_eq!(status, 403, "customers cannot edit");
+    let (status, saved) = send_json(&app, reqwest::Method::PUT, &admin, &path, Some(body)).await;
+    assert_eq!(status, 200, "{saved}");
+    assert_eq!(saved["languages"]["nl"], serde_json::json!({"title": "Alles om te bouwen"}));
+
+    let public = |lang: &str| app.http_client.get(format!("{}/api/v1/content/{key}?lang={lang}", app.base_url())).send();
+    let nl: serde_json::Value = public("nl-BE").await.unwrap().json().await.unwrap();
+    assert_eq!((nl["locale"].as_str(), nl["content"]["title"].as_str()), (Some("nl"), Some("Alles om te bouwen")));
+    let pl: serde_json::Value = public("pl").await.unwrap().json().await.unwrap();
+    assert_eq!(pl["locale"], "en", "falls back to the default language: {pl}");
+
+    let clear = serde_json::json!({"languages": {"en": {"title": "", "text": ""}, "nl": {"title": ""}}});
+    send_json(&app, reqwest::Method::PUT, &admin, &path, Some(clear)).await;
+    assert_eq!(public("nl").await.unwrap().status(), 404, "no block left: built-in texts");
+    app.cleanup().await.ok();
+}
+
+/// Create a promotion as staff; its id
+async fn new_promotion(app: &TestApp, admin: &str, body: serde_json::Value) -> String {
+    let (status, created) = call_json(app, admin, "/admin/promotions", Some(body)).await;
+    assert_eq!(status, 201, "{created}");
+    created["id"].as_str().unwrap().to_string()
+}
+
+/// A guest cart with `quantity` of `product`; its id
+async fn guest_cart_with(app: &TestApp, product: Uuid, quantity: i32) -> Uuid {
+    let (cart_id, _) = app.create_guest_cart().await.unwrap();
+    let response = app
+        .http_client
+        .post(format!("{}/api/v1/carts/{}/items", app.base_url(), cart_id))
+        .json(&serde_json::json!({"product_id": product, "quantity": quantity}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    cart_id
+}
+
+async fn guest_cart(app: &TestApp, cart_id: Uuid) -> serde_json::Value {
+    let url = format!("{}/api/v1/carts/{}", app.base_url(), cart_id);
+    app.http_client.get(url).send().await.unwrap().json().await.unwrap()
+}
+
+fn money(value: &serde_json::Value) -> Decimal {
+    value
+        .as_str()
+        .map(|s| s.parse().unwrap())
+        .unwrap_or_else(|| value.to_string().parse().unwrap())
+}
+
+/// A catalogue promotion for retail customers shows on the product with the
+/// prior price and is charged in the cart; trade customers keep their price
+/// until a promotion for them applies; customers cannot manage promotions
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_catalogue_promotions_reach_their_audience() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (product, _) = product_in_category(&app, Decimal::new(5000, 2)).await;
+    let retail = serde_json::json!({"name": "Spring sale", "kind": "percent_off", "value": 20,
+        "scope": "product", "target_id": product});
+    let retail_id = new_promotion(&app, &admin, retail.clone()).await;
+
+    let url = format!("{}/api/v1/products/{product}", app.base_url());
+    let page: serde_json::Value = app.http_client.get(&url).send().await.unwrap().json().await.unwrap();
+    let promotion = &page["product"]["promotion"];
+    assert_eq!(money(&promotion["price"]), Decimal::new(4000, 2), "{page}");
+    assert_eq!(money(&promotion["reference_price"]), Decimal::new(5000, 2), "lowest of the last 30 days");
+    let cart = guest_cart(&app, guest_cart_with(&app, product, 1).await).await;
+    assert_eq!(money(&cart["items"][0]["unit_price"]), Decimal::new(4000, 2), "{cart}");
+
+    let (pro, password) = app.create_test_customer().await.unwrap();
+    let pro_token = app.login(&pro.email, &password).await.unwrap();
+    let company = serde_json::json!({"vat_number": fresh_belgian_vat(), "name": "Promo Builders"});
+    let (status, _) = call_json(&app, &pro_token, "/companies", Some(company)).await;
+    assert_eq!(status, 201);
+    let prices = format!("/customers/me/prices?product_ids={product}");
+    let (_, mine) = call_json(&app, &pro_token, &prices, None).await;
+    assert_eq!(money(&mine["prices"][0]["price"]), Decimal::new(5000, 2), "retail promotion: not for trade");
+    let trade = serde_json::json!({"name": "Trade days", "kind": "amount_off", "value": 5,
+        "audience": "pro", "scope": "product", "target_id": product});
+    let pro_id = new_promotion(&app, &admin, trade).await;
+    let (_, mine) = call_json(&app, &pro_token, &prices, None).await;
+    assert_eq!(money(&mine["prices"][0]["price"]), Decimal::new(4500, 2), "{mine}");
+
+    let (status, _) = call_json(&app, &pro_token, "/admin/promotions", Some(retail)).await;
+    assert_eq!(status, 403);
+    let (_, listed) = call_json(&app, &admin, "/admin/promotions?state=live&sort=name", None).await;
+    assert!(listed["promotions"].as_array().unwrap().len() >= 2, "{listed}");
+    for id in [retail_id, pro_id] {
+        let path = format!("/admin/promotions/{id}");
+        let (status, _) = send_json(&app, reqwest::Method::DELETE, &admin, &path, None).await;
+        assert_eq!(status, 204);
+    }
+    app.cleanup().await.ok();
+}
+
+/// Buy 2 get 1, a spending tier and a gift on the same lines when they are
+/// combinable; a non-combinable tier leaves the line buy X get Y took
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_cart_promotions_add_up_when_combinable() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (product, _) = product_in_category(&app, Decimal::new(1000, 2)).await;
+    let (gift, _) = product_in_category(&app, Decimal::new(500, 2)).await;
+    let target = |mut body: serde_json::Value| {
+        body["scope"] = "product".into();
+        body["target_id"] = serde_json::json!(product);
+        body
+    };
+    let bxgy_body = serde_json::json!({"name": "2 + 1", "kind": "buy_x_get_y",
+        "buy_quantity": 2, "get_quantity": 1, "combinable": true});
+    let bxgy = new_promotion(&app, &admin, target(bxgy_body)).await;
+    let tiers_body = target(serde_json::json!({"name": "Spend more", "kind": "spend_tiers",
+        "combinable": true, "tiers": [{"min_amount": 15, "percent": 10}]}));
+    let tiers = new_promotion(&app, &admin, tiers_body.clone()).await;
+    let gift_body = serde_json::json!({"name": "Free gloves", "kind": "gift",
+        "gift_product_id": gift, "min_amount": 15, "combinable": true});
+    let gift_id = new_promotion(&app, &admin, target(gift_body)).await;
+
+    let cart = guest_cart(&app, guest_cart_with(&app, product, 3).await).await;
+    // 30 - 10 (third free) = 20, then 10 % = 2
+    assert_eq!(money(&cart["cart"]["discount_total"]), Decimal::new(1200, 2), "{cart}");
+    assert_eq!(cart["cart"]["promotions"].as_array().unwrap().len(), 3, "{cart}");
+    let items = cart["items"].as_array().unwrap();
+    let gift_line = items.iter().find(|i| i["product_id"] == gift.to_string());
+    assert_eq!(money(&gift_line.expect("gift line")["unit_price"]), Decimal::ZERO);
+
+    let mut alone = tiers_body;
+    alone["combinable"] = false.into();
+    let path = format!("/admin/promotions/{tiers}");
+    send_json(&app, reqwest::Method::PUT, &admin, &path, Some(alone)).await;
+    let cart = guest_cart(&app, guest_cart_with(&app, product, 3).await).await;
+    assert_eq!(money(&cart["cart"]["discount_total"]), Decimal::new(1000, 2), "the tier keeps away: {cart}");
+
+    let small = guest_cart(&app, guest_cart_with(&app, product, 1).await).await;
+    assert_eq!(small["items"].as_array().unwrap().len(), 1, "no gift under 15: {small}");
+    for id in [bxgy, tiers, gift_id] {
+        let path = format!("/admin/promotions/{id}");
+        send_json(&app, reqwest::Method::DELETE, &admin, &path, None).await;
+    }
+    app.cleanup().await.ok();
+}
+
+/// Ready, then collected by `collector`, by staff
+async fn collect(app: &TestApp, admin: &str, order: &str, collector: &str) {
+    let ready = format!("/orders/{order}/pickup/ready");
+    let (status, body) = call_json(app, admin, &ready, Some(serde_json::json!({}))).await;
+    assert_eq!(status, 200, "{body}");
+    let collected = format!("/orders/{order}/pickup/collected");
+    let body = serde_json::json!({ "collected_by": collector });
+    let (status, body) = call_json(app, admin, &collected, Some(body)).await;
+    assert_eq!(status, 200, "{body}");
+}
+
+/// Points are earned when an order is collected, shown with the loyalty
+/// card, redeemed in the cart, given back when the order is cancelled; staff
+/// adjust them; nothing when the programme is off
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_loyalty_points_earned_redeemed_and_given_back() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let on = serde_json::json!({"enabled": true, "points_per_euro": 10, "point_value": 0.01, "min_redeem": 50});
+    let (status, _) = send_json(&app, reqwest::Method::PUT, &admin, "/admin/loyalty/settings", Some(on)).await;
+    assert_eq!(status, 200);
+    let location = create_pickup_location(&app, &admin).await;
+    let product = app.create_test_product("Loyal bricks", Decimal::new(1000, 2), 0).await.unwrap();
+    app.app_state.inventory_service.receive_stock(product, location, 10, None).await.unwrap();
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let (_, mine) = call_json(&app, &token, "/customers/me/loyalty", None).await;
+    let card = mine["card"].as_str().unwrap().to_string();
+    assert!(mine["enabled"] == true && mine["points"] == 0, "{mine}");
+    assert!(card.len() == 13 && card.starts_with("29"), "{card}");
+
+    let order = customer_pickup_order(&app, &token, &customer.email, location, product).await;
+    collect(&app, &admin, &order, "C. Loyal").await;
+    let (_, mine) = call_json(&app, &token, "/customers/me/loyalty", None).await;
+    assert_eq!(mine["points"], 200, "2 x 10 euros x 10 points: {mine}");
+    let (_, found) = call_json(&app, &admin, &format!("/admin/loyalty/cards/{card}"), None).await;
+    assert_eq!(found["customer_id"], customer.id.to_string());
+
+    let (_, cart) = call_json(&app, &token, "/carts/me", None).await;
+    let cart_id = cart["cart"]["id"].as_str().unwrap().to_string();
+    let use_points = serde_json::json!({"points": 100});
+    let path = format!("/carts/{cart_id}/loyalty");
+    let (status, cart) = send_json(&app, reqwest::Method::PUT, &token, &path, Some(use_points)).await;
+    assert_eq!(status, 200, "{cart}");
+    let second = customer_pickup_order(&app, &token, &customer.email, location, product).await;
+    let (_, mine) = call_json(&app, &token, "/customers/me/loyalty", None).await;
+    assert_eq!(mine["points"], 100, "redeemed: {mine}");
+    let (_, placed) = call_json(&app, &token, &format!("/orders/{second}"), None).await;
+    assert_eq!(money(&placed["discount_total"]), Decimal::ONE, "100 points x 0.01: {placed}");
+    // staff cancel it (a paid order's own cancellation refunds through the gateway)
+    let cancel = format!("/orders/{second}/status");
+    let body = serde_json::json!({"status": "cancelled"});
+    let (status, _) = send_json(&app, reqwest::Method::PUT, &admin, &cancel, Some(body)).await;
+    assert_eq!(status, 200);
+    let refunded: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM loyalty_entries WHERE order_id = $1::uuid AND kind = 'refund'")
+        .bind(&second)
+        .fetch_one(&app.db_pool)
+        .await
+        .unwrap();
+    assert_eq!(refunded, 1);
+    let (_, mine) = call_json(&app, &token, "/customers/me/loyalty", None).await;
+    assert_eq!(mine["points"], 200, "given back: {mine}");
+
+    let adjust = serde_json::json!({"points": -20, "note": "Goodwill reversed"});
+    let path = format!("/admin/loyalty/customers/{}/adjust", customer.id);
+    let (status, _) = call_json(&app, &token, &path, Some(adjust.clone())).await;
+    assert_eq!(status, 403);
+    let (_, account) = call_json(&app, &admin, &path, Some(adjust)).await;
+    assert_eq!(account["points"], 180, "{account}");
+    let off = serde_json::json!({"enabled": false});
+    send_json(&app, reqwest::Method::PUT, &admin, "/admin/loyalty/settings", Some(off)).await;
+    let (_, mine) = call_json(&app, &token, "/customers/me/loyalty", None).await;
+    assert_eq!(mine["enabled"], false);
+    app.cleanup().await.ok();
+}
+
+/// Each step of a pickup order is in its history with who and when; the
+/// customer sees the steps without staff names; others see nothing
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_order_history_by_whom_and_when() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    let product = app.create_test_product("Tracked bricks", Decimal::new(1000, 2), 0).await.unwrap();
+    app.app_state.inventory_service.receive_stock(product, location, 10, None).await.unwrap();
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let order = customer_pickup_order(&app, &token, &customer.email, location, product).await;
+    collect(&app, &admin, &order, "J. Mason").await;
+
+    let path = format!("/orders/{order}/events");
+    let (_, staff_view) = call_json(&app, &admin, &path, None).await;
+    let events = staff_view["events"].as_array().unwrap();
+    let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds.first(), Some(&"placed"), "{staff_view}");
+    assert!(kinds.contains(&"ready") && kinds.ends_with(&["collected"]), "{kinds:?}");
+    let collected = events.iter().find(|e| e["kind"] == "collected").unwrap();
+    assert_eq!(collected["detail"]["collected_by"], "J. Mason");
+    assert_eq!(collected["actor_role"], "staff");
+    assert!(collected["actor_name"].is_string(), "staff see who: {collected}");
+    assert_eq!(events[0]["actor_role"], "customer");
+
+    let (_, customer_view) = call_json(&app, &token, &path, None).await;
+    let seen = customer_view["events"].as_array().unwrap();
+    let collected = seen.iter().find(|e| e["kind"] == "collected").unwrap();
+    assert!(collected["actor_name"].is_null(), "no staff names for customers: {collected}");
+    assert_eq!(collected["detail"]["collected_by"], "J. Mason");
+    let (other, other_password) = app.create_test_customer().await.unwrap();
+    let other_token = app.login(&other.email, &other_password).await.unwrap();
+    let (status, _) = call_json(&app, &other_token, &path, None).await;
+    assert_eq!(status, 403);
+    app.cleanup().await.ok();
+}
