@@ -91,27 +91,13 @@ impl NotificationTemplate {
 
     /// Render template with variables
     pub fn render(&self, variables: &TemplateVariables) -> Result<String> {
-        let mut rendered = self.body.clone();
-
-        for (key, value) in variables.iter() {
-            let placeholder = format!("{{{{ {} }}}}", key);
-            rendered = rendered.replace(&placeholder, value);
-        }
-
-        Ok(rendered)
+        Ok(fill(&self.body, variables, false))
     }
 
     /// Render HTML template with variables
     pub fn render_html(&self, variables: &TemplateVariables) -> Result<Option<String>> {
         if let Some(ref html_template) = self.html_body {
-            let mut rendered = html_template.clone();
-
-            for (key, value) in variables.iter() {
-                let placeholder = format!("{{{{ {} }}}}", key);
-                rendered = rendered.replace(&placeholder, value);
-            }
-
-            let rendered = clean_unset_placeholders(&rendered);
+            let rendered = clean_unset_placeholders(&fill(html_template, variables, true));
             Ok(Some(wrap_localized_email_html(
                 &self.locale,
                 &self.name,
@@ -131,14 +117,7 @@ impl NotificationTemplate {
         brand: &BrandingConfig,
     ) -> Result<Option<String>> {
         if let Some(ref html_template) = self.html_body {
-            let mut rendered = html_template.clone();
-
-            for (key, value) in variables.iter() {
-                let placeholder = format!("{{{{ {} }}}}", key);
-                rendered = rendered.replace(&placeholder, value);
-            }
-
-            let rendered = clean_unset_placeholders(&rendered);
+            let rendered = clean_unset_placeholders(&fill(html_template, variables, true));
             Ok(Some(wrap_localized_email_html(
                 &self.locale,
                 &self.name,
@@ -152,14 +131,7 @@ impl NotificationTemplate {
 
     /// Render subject line with variables
     pub fn render_subject(&self, variables: &TemplateVariables) -> Result<String> {
-        let mut rendered = self.subject.clone();
-
-        for (key, value) in variables.iter() {
-            let placeholder = format!("{{{{ {} }}}}", key);
-            rendered = rendered.replace(&placeholder, value);
-        }
-
-        Ok(rendered)
+        Ok(fill(&self.subject, variables, false))
     }
 
     /// Load HTML template from embedded file
@@ -897,6 +869,49 @@ pub const EMAIL_SUPPORT_EMAIL: &str = "support@example.com";
 pub const EMAIL_SITE_URL: &str = "https://example.com";
 
 /// Remove any `{{ ... }}` placeholders that were not substituted.
+/// Variables that hold HTML built by the code (item rows, total rows,
+/// addresses); their builders escape the data they contain
+const HTML_VARIABLES: &[&str] = &[
+    "items",
+    "tax_row",
+    "discount_row",
+    "shipping_address",
+    "billing_address",
+    "cart_items",
+];
+
+/// `text` with the characters that start HTML markup or end an attribute
+/// written as entities, so names and addresses typed by customers stay text
+pub fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Replace every `{{ name }}` of `template`; in HTML, values are escaped
+/// except the HTML pieces of [`HTML_VARIABLES`]
+fn fill(template: &str, variables: &TemplateVariables, html: bool) -> String {
+    let mut rendered = template.to_string();
+    for (key, value) in variables.iter() {
+        let placeholder = format!("{{{{ {} }}}}", key);
+        if html && !HTML_VARIABLES.contains(&key.as_str()) {
+            rendered = rendered.replace(&placeholder, &escape_html(value));
+        } else {
+            rendered = rendered.replace(&placeholder, value);
+        }
+    }
+    rendered
+}
+
 fn clean_unset_placeholders(rendered: &str) -> String {
     let mut out = String::with_capacity(rendered.len());
     let mut rest = rendered;
@@ -1070,12 +1085,12 @@ impl TemplateVariables {
 
         let shipping_str = format!(
             "{}<br>{}<br>{}, {} {}<br>{}",
-            recipient_name,
-            street_address,
-            shipping.city,
-            shipping.state.as_deref().unwrap_or(""),
-            shipping.zip,
-            shipping.country
+            escape_html(&recipient_name),
+            escape_html(&street_address),
+            escape_html(&shipping.city),
+            escape_html(shipping.state.as_deref().unwrap_or("")),
+            escape_html(&shipping.zip),
+            escape_html(&shipping.country)
         );
         self.add("shipping_address".to_string(), shipping_str);
 
@@ -1092,12 +1107,12 @@ impl TemplateVariables {
 
         let billing_str = format!(
             "{}<br>{}<br>{}, {} {}<br>{}",
-            billing_recipient,
-            billing_street,
-            billing.city,
-            billing.state.as_deref().unwrap_or(""),
-            billing.zip,
-            billing.country
+            escape_html(&billing_recipient),
+            escape_html(&billing_street),
+            escape_html(&billing.city),
+            escape_html(billing.state.as_deref().unwrap_or("")),
+            escape_html(&billing.zip),
+            escape_html(&billing.country)
         );
         self.add("billing_address".to_string(), billing_str);
 

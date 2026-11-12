@@ -3,6 +3,7 @@
 //! This module provides HTML email templates for various notification types.
 //! It uses the existing template system with the invoice.html as the base design.
 
+use crate::notification::templates::escape_html;
 use crate::notification::{
     i18n,
     templates::{NotificationTemplate, TemplateVariables},
@@ -163,7 +164,8 @@ impl EmailNotificationFactory {
         };
         let amount = i18n::money(locale, params.discount_total, params.currency);
         let discount_row = format!(
-            "<tr><td style=\"padding:4px 0;font-size:13px;color:#666666;\">{label}</td><td align=\"right\" style=\"padding:4px 0;font-size:13px;color:#059669;\">-{amount}</td></tr>"
+            "<tr><td style=\"padding:4px 0;font-size:13px;color:#666666;\">{}</td><td align=\"right\" style=\"padding:4px 0;font-size:13px;color:#059669;\">-{amount}</td></tr>",
+            escape_html(&label)
         );
         vars.insert("discount_row", discount_row);
         vars.insert("discount_line", format!("{label}: -{amount}\n"));
@@ -358,7 +360,7 @@ impl EmailNotificationFactory {
                 .map(|v| {
                     format!(
                         "<span style=\"display:block;font-size:12px;color:#666666;padding-top:2px;\">{}</span>",
-                        v
+                        escape_html(v)
                     )
                 })
                 .unwrap_or_default();
@@ -367,12 +369,12 @@ impl EmailNotificationFactory {
             } else {
                 format!(
                     "<span style=\"display:block;font-size:12px;color:#999999;padding-top:2px;\">{sku_label}: {}</span>",
-                    item.sku
+                    escape_html(&item.sku)
                 )
             };
             html.push_str(&format!(
                 "<tr><td style=\"padding:12px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#1a1a1a;\"><span style=\"display:block;font-weight:bold;\">{}</span>{}{}</td><td align=\"center\" width=\"60\" style=\"padding:12px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#555555;\">{}</td><td align=\"right\" width=\"100\" style=\"padding:12px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#1a1a1a;\">{}</td></tr>",
-                item.name,
+                escape_html(&item.name),
                 variant_line,
                 sku_line,
                 item.quantity,
@@ -390,7 +392,12 @@ impl EmailNotificationFactory {
     pub fn format_address(address: &Address) -> String {
         format!(
             "<p style=\"margin:0;font-size:13px;line-height:1.7;color:#333333;\"><strong>{}</strong><br>{}<br>{}, {} {}<br>{}</p>",
-            address.name, address.street, address.city, address.state, address.zip, address.country
+            escape_html(&address.name),
+            escape_html(&address.street),
+            escape_html(&address.city),
+            escape_html(&address.state),
+            escape_html(&address.zip),
+            escape_html(&address.country)
         )
     }
 }
@@ -501,6 +508,62 @@ mod tests {
             1,
             "only the SKU line"
         );
+    }
+
+    #[test]
+    fn customer_text_stays_text_in_html_emails() {
+        let evil = "<a href=\"https://evil.test\">Pay here</a>";
+        let addr = Address {
+            name: evil.to_string(),
+            street: "<img src=x onerror=alert(1)>".to_string(),
+            city: "Town".to_string(),
+            state: String::new(),
+            zip: "1000".to_string(),
+            country: "BE".to_string(),
+        };
+        let items = vec![OrderItem {
+            name: "<script>steal()</script>".to_string(),
+            variant_title: Some("<b>bold</b>".to_string()),
+            sku: "<i>".to_string(),
+            quantity: 1,
+            price: "10.00".to_string(),
+            is_bundle_component: false,
+        }];
+        let notification = EmailNotificationFactory::order_confirmation(OrderConfirmationParams {
+            recipient_email: "customer@example.com",
+            customer_name: evil,
+            order_number: "ORD-1",
+            locale: "fr",
+            currency: "EUR",
+            order_date: chrono::NaiveDate::from_ymd_opt(2026, 11, 12).unwrap(),
+            order_total: rust_decimal_macros::dec!(10),
+            subtotal: rust_decimal_macros::dec!(10),
+            discount_total: rust_decimal_macros::dec!(1),
+            discount_code: Some("<u>CODE</u>"),
+            shipping_total: rust_decimal_macros::dec!(0),
+            shipping_method: "",
+            tax_total: rust_decimal_macros::dec!(0),
+            items: &items,
+            shipping_address: &addr,
+            billing_address: &addr,
+            branding: &crate::config::BrandingConfig::default(),
+        })
+        .unwrap();
+        let html = notification.html_body.as_deref().unwrap();
+        for raw in [
+            "<a href=\"https://evil.test\"",
+            "<img src=x",
+            "<script>",
+            "<b>bold",
+            "<u>CODE",
+            "<i>",
+        ] {
+            assert!(!html.contains(raw), "{raw} left as markup");
+        }
+        assert!(html.contains("&lt;script&gt;steal()&lt;/script&gt;"));
+        assert!(html.contains("&lt;a href=&quot;https://evil.test&quot;&gt;Pay here"));
+        // The plain-text part keeps the text as typed
+        assert!(notification.body.contains(evil));
     }
 
     #[test]
