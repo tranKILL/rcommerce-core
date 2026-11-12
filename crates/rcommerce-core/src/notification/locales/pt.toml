@@ -1,0 +1,281 @@
+# Textos dos e-mails em português. Estrutura: ver en.toml; um texto que falte
+# aqui é enviado em inglês.
+
+[common]
+questions = "Dúvidas?"
+footer_note = ""
+customer_fallback = "cliente"
+order_number = "Número da encomenda"
+order_date = "Data da encomenda"
+total = "Total"
+status = "Estado"
+subtotal = "Subtotal"
+shipping = "Entrega"
+tax = "IVA"
+discount = "Desconto"
+discount_code = "Desconto ({code})"
+item = "Artigo"
+qty = "Qtd."
+price = "Preço"
+sku = "Ref."
+shipping_address = "Morada de entrega"
+billing_address = "Morada de faturação"
+refund_amount = "Montante reembolsado"
+copy_link = "Ou copie esta ligação para o seu navegador:"
+date_format = "{day} de {month} de {year}"
+months = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+money_format = "{amount} {symbol}"
+decimal_separator = ","
+thousands_separator = " "
+hours = "{n} horas"
+one_hour = "{n} hora"
+
+[welcome]
+subject = "Boas-vindas a {{ company_name }}!"
+heading = "Boas-vindas a {{ company_name }}!"
+intro = "Olá {{ customer_name }}, a sua conta foi criada e está pronta a usar. Faça compras, acompanhe as suas encomendas e gira a sua conta na sua área de cliente."
+account_name = "Nome da conta"
+active = "Ativa"
+start_shopping = "Começar a comprar"
+sign_in = "Inicie sessão na sua conta:"
+text = '''
+Olá {{ customer_name }},
+
+Boas-vindas a {{ company_name }}! A sua conta está pronta.
+
+Loja: {{ shop_url }}
+Iniciar sessão: {{ login_url }}
+
+{{ company_name }}
+'''
+
+[verify_email]
+subject = "Confirme o seu endereço de e-mail"
+heading = "Confirme o seu endereço de e-mail"
+intro = "Olá {{ customer_name }}, obrigado por criar uma conta em {{ company_name }}. Confirme o seu endereço de e-mail para iniciar sessão."
+button = "Confirmar o meu endereço de e-mail"
+expires = "Esta ligação expira dentro de {{ expires_in }}. Se não criou esta conta, pode ignorar este e-mail."
+text = '''
+Olá {{ customer_name }},
+
+Obrigado por criar uma conta em {{ company_name }}. Confirme o seu endereço de e-mail para iniciar sessão:
+
+{{ verification_url }}
+
+Esta ligação expira dentro de {{ expires_in }}. Se não criou esta conta, pode ignorar este e-mail.
+
+{{ company_name }}
+'''
+
+[password_reset]
+subject = "Redefinir a palavra-passe"
+heading = "Redefinir a palavra-passe"
+intro = "Olá {{ customer_name }}, recebemos um pedido para redefinir a sua palavra-passe."
+security_notice = "Aviso de segurança"
+security_text = "Se não fez este pedido, ignore este e-mail. A sua palavra-passe só muda quando usar a ligação abaixo."
+expires = "Esta ligação expira dentro de {{ expires_in }}."
+button = "Redefinir a palavra-passe"
+text = '''
+Olá {{ customer_name }},
+
+Recebemos um pedido para redefinir a sua palavra-passe.
+
+Redefinir a palavra-passe: {{ reset_url }}
+
+Esta ligação expira dentro de {{ expires_in }}. Se não fez este pedido, pode ignorar este e-mail.
+
+{{ company_name }}
+'''
+
+[order_confirmation]
+subject = "Encomenda confirmada: {{ order_number }}"
+order_label = "Encomenda {{ order_number }}"
+heading = "Obrigado pela sua encomenda, {{ customer_name }}!"
+intro = "Recebemos a sua encomenda e estamos a prepará-la. O resumo da encomenda segue em anexo em PDF."
+text = '''
+Olá {{ customer_name }},
+
+Obrigado pela sua encomenda! A encomenda {{ order_number }} está confirmada.
+
+Detalhes da encomenda:
+----------------
+Subtotal: {{ subtotal }}
+{{ discount_line }}Entrega: {{ shipping_cost }}
+IVA: {{ tax }}
+Total: {{ order_total }}
+
+O resumo da encomenda segue em anexo em PDF.
+
+Voltaremos a escrever-lhe quando a encomenda estiver pronta.
+
+Com os melhores cumprimentos,
+A equipa {{ company_name }}
+'''
+
+[admin_new_order]
+subject = "Nova encomenda: {{ order_number }}"
+new_order = "Nova encomenda"
+customer = "Cliente:"
+text = '''
+Nova encomenda {{ order_number }}
+
+Cliente: {{ customer_name }} ({{ customer_email }})
+
+Total da encomenda: {{ order_total }}
+
+Morada de entrega:
+{{ shipping_address_text }}
+'''
+
+[order_shipped]
+subject = "A sua encomenda está a caminho: {{ order_number }}"
+heading = "A sua encomenda está a caminho!"
+intro = "Olá {{ customer_name }}, boas notícias: a encomenda <strong>{{ order_number }}</strong> está a caminho."
+carrier = "Transportadora"
+in_transit = "A caminho"
+tracking_number = "Número de seguimento:"
+track_button = "Seguir a encomenda"
+text = '''
+Olá {{ customer_name }},
+
+Boas notícias! A sua encomenda {{ order_number }} está a caminho.
+
+Número de seguimento: {{ tracking_number }}
+Transportadora: {{ shipping_carrier }}
+
+Seguir a encomenda: {{ tracking_url }}
+
+{{ company_name }}
+'''
+
+[order_ready_for_pickup]
+subject = "A sua encomenda {{ order_number }} está pronta para levantamento"
+heading = "A sua encomenda está pronta"
+intro = "Olá {{ customer_name }}, a encomenda <strong>{{ order_number }}</strong> espera por si no balcão."
+pickup_at = "Levantamento em"
+bring = "Traga o número da encomenda. Quem levantar a encomenda indica o seu nome no balcão."
+location_fallback = "o nosso armazém"
+text = '''
+Olá {{ customer_name }},
+
+A sua encomenda {{ order_number }} está pronta para levantamento em {{ location_name }}.
+
+Traga o número da encomenda. Quem levantar a encomenda indica o seu nome no balcão.
+
+{{ company_name }}
+'''
+
+[order_cancelled]
+subject = "A sua encomenda {{ order_number }} foi cancelada"
+greeting = "Olá,"
+cancelled = "A sua encomenda {{ order_number }} foi cancelada."
+sorry = "Lamentamos o incómodo. Se tiver dúvidas, basta responder a este e-mail."
+refunded = "Qualquer pagamento já cobrado foi reembolsado no seu meio de pagamento original."
+
+[refund_processed]
+subject = "Reembolso efetuado: {{ order_number }}"
+heading = "O seu reembolso foi efetuado"
+intro = "Olá {{ customer_name }}, o reembolso da sua encomenda <strong>{{ order_number }}</strong> está em curso."
+refund_method = "Forma de reembolso"
+processing_time = "Prazo"
+bank_delay = "Consoante o seu banco, o montante pode demorar alguns dias úteis a aparecer na sua conta."
+original_method = "Meio de pagamento original"
+business_days = "5 a 10 dias úteis"
+text = '''
+Olá {{ customer_name }},
+
+O reembolso da sua encomenda {{ order_number }} foi efetuado.
+
+Montante reembolsado: {{ refund_amount }}
+Forma de reembolso: {{ refund_method }}
+Prazo: {{ processing_time }}
+
+{{ company_name }}
+'''
+
+[invoice_document]
+title = "Fatura"
+credit_note = "Nota de crédito"
+number = "Número da fatura"
+issue_date = "Data da fatura"
+due_date = "Vencimento"
+order = "Encomenda"
+seller = "Vendedor"
+buyer = "Cliente"
+vat_number = "NIF/IVA"
+company_number = "N.º de empresa"
+description = "Descrição"
+quantity = "Qtd."
+unit_price = "Preço unit. s/ IVA"
+vat_rate = "IVA"
+amount = "Montante s/ IVA"
+taxable = "Base tributável"
+vat_amount = "IVA"
+subtotal = "Total s/ IVA"
+total = "Total c/ IVA"
+paid = "Pago"
+amount_due = "Montante em dívida"
+pay_to = "Pagar na conta"
+reference = "Comunicação estruturada"
+reverse_charge = "Autoliquidação do IVA (fornecimento intracomunitário)"
+delivery = "Entrega"
+discount = "Desconto"
+
+[invoice_issued]
+subject = "A sua fatura {{ invoice_number }}"
+heading = "A sua fatura"
+intro = "Olá {{ customer_name }}, segue a fatura {{ invoice_number }} da sua encomenda {{ order_number }}."
+amount = "Total c/ IVA"
+status = "Estado"
+paid = "Paga, obrigado."
+due = "A pagar até {{ due_date }} com a comunicação estruturada {{ payment_reference }}."
+peppol = "Como a sua empresa recebe faturas eletrónicas, esta fatura também lhe foi enviada através da Peppol."
+attached = "A fatura segue em anexo em PDF."
+text = '''
+Olá {{ customer_name }},
+
+Segue a fatura {{ invoice_number }} da sua encomenda {{ order_number }}.
+
+Total c/ IVA: {{ invoice_total }}
+{{ payment_line }}
+
+A fatura segue em anexo em PDF.
+
+{{ company_name }}
+'''
+
+[order_document]
+title_invoice = "Fatura"
+title_summary = "Resumo da encomenda"
+file_invoice = "fatura"
+file_summary = "encomenda"
+document_date = "Data"
+order_number = "Número da encomenda"
+order_date = "Data da encomenda"
+payment = "Pagamento"
+no_address = "Sem morada indicada"
+product = "Produto"
+quantity = "Quantidade"
+price = "Preço"
+sku_line = "Ref.: {value}"
+weight_line = "Peso: {value}"
+thanks = "Obrigado pela sua encomenda! Dúvidas: {email}"
+not_an_invoice = "Este documento não é uma fatura: a fatura é-lhe entregue com a encomenda."
+pickup = "Levantamento: {place}"
+pickup_ready = "Levantamento: {place}, pronta a partir de {date}"
+delivery = "Entrega na morada acima"
+order_details = "Detalhes da encomenda"
+contact = "Contacto"
+paid = "Pago"
+awaiting_payment = "A aguardar pagamento"
+payment_authorized = "Pagamento autorizado"
+payment_failed = "Pagamento falhado"
+payment_cancelled = "Pagamento cancelado"
+refunded = "Reembolsado"
+status_pending = "A aguardar pagamento"
+status_confirmed = "Confirmada"
+status_processing = "Em preparação"
+status_on_hold = "Em espera"
+status_completed = "Concluída"
+status_cancelled = "Cancelada"
+status_refunded = "Reembolsada"

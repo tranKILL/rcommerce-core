@@ -1,0 +1,281 @@
+# Türkçe e-posta metinleri. Yapı için en.toml'a bakın; burada olmayan bir metin
+# İngilizce gönderilir.
+
+[common]
+questions = "Sorularınız mı var?"
+footer_note = ""
+customer_fallback = "Değerli müşterimiz"
+order_number = "Sipariş numarası"
+order_date = "Sipariş tarihi"
+total = "Toplam"
+status = "Durum"
+subtotal = "Ara toplam"
+shipping = "Teslimat"
+tax = "KDV"
+discount = "İndirim"
+discount_code = "İndirim ({code})"
+item = "Ürün"
+qty = "Adet"
+price = "Fiyat"
+sku = "Ürün kodu"
+shipping_address = "Teslimat adresi"
+billing_address = "Fatura adresi"
+refund_amount = "İade tutarı"
+copy_link = "Ya da bu bağlantıyı tarayıcınıza kopyalayın:"
+date_format = "{day} {month} {year}"
+months = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+money_format = "{amount} {symbol}"
+decimal_separator = ","
+thousands_separator = "."
+hours = "{n} saat"
+one_hour = "{n} saat"
+
+[welcome]
+subject = "{{ company_name }} mağazasına hoş geldiniz!"
+heading = "{{ company_name }} mağazasına hoş geldiniz!"
+intro = "Merhaba {{ customer_name }}, hesabınız oluşturuldu ve kullanıma hazır. Alışveriş yapın, siparişlerinizi takip edin ve hesabınızı müşteri alanınızdan yönetin."
+account_name = "Hesap adı"
+active = "Etkin"
+start_shopping = "Alışverişe başla"
+sign_in = "Hesabınıza giriş yapın:"
+text = '''
+Merhaba {{ customer_name }},
+
+{{ company_name }} mağazasına hoş geldiniz! Hesabınız hazır.
+
+Mağaza: {{ shop_url }}
+Giriş: {{ login_url }}
+
+{{ company_name }}
+'''
+
+[verify_email]
+subject = "E-posta adresinizi onaylayın"
+heading = "E-posta adresinizi onaylayın"
+intro = "Merhaba {{ customer_name }}, {{ company_name }} mağazasında hesap oluşturduğunuz için teşekkür ederiz. Giriş yapmak için e-posta adresinizi onaylayın."
+button = "E-posta adresimi onayla"
+expires = "Bu bağlantı {{ expires_in }} içinde geçerliliğini yitirir. Bu hesabı siz oluşturmadıysanız bu e-postayı dikkate almayın."
+text = '''
+Merhaba {{ customer_name }},
+
+{{ company_name }} mağazasında hesap oluşturduğunuz için teşekkür ederiz. Giriş yapmak için e-posta adresinizi onaylayın:
+
+{{ verification_url }}
+
+Bu bağlantı {{ expires_in }} içinde geçerliliğini yitirir. Bu hesabı siz oluşturmadıysanız bu e-postayı dikkate almayın.
+
+{{ company_name }}
+'''
+
+[password_reset]
+subject = "Şifre sıfırlama"
+heading = "Şifre sıfırlama"
+intro = "Merhaba {{ customer_name }}, şifrenizi sıfırlamak için bir talep aldık."
+security_notice = "Güvenlik uyarısı"
+security_text = "Bu talebi siz yapmadıysanız bu e-postayı dikkate almayın. Aşağıdaki bağlantıyı kullanana kadar şifreniz değişmez."
+expires = "Bu bağlantı {{ expires_in }} içinde geçerliliğini yitirir."
+button = "Şifreyi sıfırla"
+text = '''
+Merhaba {{ customer_name }},
+
+Şifrenizi sıfırlamak için bir talep aldık.
+
+Şifreyi sıfırla: {{ reset_url }}
+
+Bu bağlantı {{ expires_in }} içinde geçerliliğini yitirir. Bu talebi siz yapmadıysanız bu e-postayı dikkate almayın.
+
+{{ company_name }}
+'''
+
+[order_confirmation]
+subject = "Sipariş onaylandı: {{ order_number }}"
+order_label = "Sipariş {{ order_number }}"
+heading = "Siparişiniz için teşekkürler, {{ customer_name }}!"
+intro = "Siparişinizi aldık ve hazırlıyoruz. Sipariş özeti bu e-postaya PDF olarak eklenmiştir."
+text = '''
+Merhaba {{ customer_name }},
+
+Siparişiniz için teşekkürler! {{ order_number }} numaralı siparişiniz onaylandı.
+
+Sipariş ayrıntıları:
+----------------
+Ara toplam: {{ subtotal }}
+{{ discount_line }}Teslimat: {{ shipping_cost }}
+KDV: {{ tax }}
+Toplam: {{ order_total }}
+
+Sipariş özeti bu e-postaya PDF olarak eklenmiştir.
+
+Siparişiniz hazır olduğunda size tekrar yazacağız.
+
+Saygılarımızla,
+{{ company_name }} ekibi
+'''
+
+[admin_new_order]
+subject = "Yeni sipariş: {{ order_number }}"
+new_order = "Yeni sipariş"
+customer = "Müşteri:"
+text = '''
+Yeni sipariş {{ order_number }}
+
+Müşteri: {{ customer_name }} ({{ customer_email }})
+
+Sipariş toplamı: {{ order_total }}
+
+Teslimat adresi:
+{{ shipping_address_text }}
+'''
+
+[order_shipped]
+subject = "Siparişiniz yolda: {{ order_number }}"
+heading = "Siparişiniz yolda!"
+intro = "Merhaba {{ customer_name }}, güzel haber: <strong>{{ order_number }}</strong> numaralı sipariş size doğru yola çıktı."
+carrier = "Kargo firması"
+in_transit = "Yolda"
+tracking_number = "Takip numarası:"
+track_button = "Gönderiyi takip et"
+text = '''
+Merhaba {{ customer_name }},
+
+Güzel haber! {{ order_number }} numaralı siparişiniz yolda.
+
+Takip numarası: {{ tracking_number }}
+Kargo firması: {{ shipping_carrier }}
+
+Gönderiyi takip edin: {{ tracking_url }}
+
+{{ company_name }}
+'''
+
+[order_ready_for_pickup]
+subject = "{{ order_number }} numaralı siparişiniz teslim almaya hazır"
+heading = "Siparişiniz hazır"
+intro = "Merhaba {{ customer_name }}, <strong>{{ order_number }}</strong> numaralı sipariş tezgâhta sizi bekliyor."
+pickup_at = "Teslim alma yeri"
+bring = "Sipariş numaranızı yanınızda getirin. Siparişi teslim alan kişi tezgâhta adını söyler."
+location_fallback = "depomuz"
+text = '''
+Merhaba {{ customer_name }},
+
+{{ order_number }} numaralı siparişiniz {{ location_name }} adresinde teslim almaya hazır.
+
+Sipariş numaranızı yanınızda getirin. Siparişi teslim alan kişi tezgâhta adını söyler.
+
+{{ company_name }}
+'''
+
+[order_cancelled]
+subject = "{{ order_number }} numaralı siparişiniz iptal edildi"
+greeting = "Merhaba,"
+cancelled = "{{ order_number }} numaralı siparişiniz iptal edildi."
+sorry = "Yaşanan aksaklık için özür dileriz. Sorularınız için bu e-postayı yanıtlamanız yeterli."
+refunded = "Tahsil edilmiş ödemeler, orijinal ödeme yönteminize iade edildi."
+
+[refund_processed]
+subject = "İade yapıldı: {{ order_number }}"
+heading = "İadeniz yapıldı"
+intro = "Merhaba {{ customer_name }}, <strong>{{ order_number }}</strong> numaralı siparişinizin iadesi yolda."
+refund_method = "İade yöntemi"
+processing_time = "Süre"
+bank_delay = "Bankanıza bağlı olarak tutarın hesabınızda görünmesi birkaç iş günü sürebilir."
+original_method = "Orijinal ödeme yöntemi"
+business_days = "5-10 iş günü"
+text = '''
+Merhaba {{ customer_name }},
+
+{{ order_number }} numaralı siparişinizin iadesi yapıldı.
+
+İade tutarı: {{ refund_amount }}
+İade yöntemi: {{ refund_method }}
+Süre: {{ processing_time }}
+
+{{ company_name }}
+'''
+
+[invoice_document]
+title = "Fatura"
+credit_note = "İade faturası"
+number = "Fatura numarası"
+issue_date = "Fatura tarihi"
+due_date = "Son ödeme tarihi"
+order = "Sipariş"
+seller = "Satıcı"
+buyer = "Müşteri"
+vat_number = "KDV no."
+company_number = "Şirket no."
+description = "Açıklama"
+quantity = "Adet"
+unit_price = "Birim fiyat (KDV hariç)"
+vat_rate = "KDV"
+amount = "Tutar (KDV hariç)"
+taxable = "Matrah"
+vat_amount = "KDV"
+subtotal = "Toplam (KDV hariç)"
+total = "Toplam (KDV dahil)"
+paid = "Ödenen"
+amount_due = "Ödenecek tutar"
+pay_to = "Ödeme hesabı"
+reference = "Yapılandırılmış açıklama"
+reverse_charge = "KDV sorumluluğu alıcıda (AB içi teslimat)"
+delivery = "Teslimat"
+discount = "İndirim"
+
+[invoice_issued]
+subject = "{{ invoice_number }} numaralı faturanız"
+heading = "Faturanız"
+intro = "Merhaba {{ customer_name }}, {{ order_number }} numaralı siparişinize ait {{ invoice_number }} numaralı fatura ektedir."
+amount = "Toplam (KDV dahil)"
+status = "Durum"
+paid = "Ödendi, teşekkürler."
+due = "{{ due_date }} tarihine kadar {{ payment_reference }} açıklamasıyla ödenmelidir."
+peppol = "Şirketiniz e-fatura aldığı için bu fatura size Peppol üzerinden de gönderildi."
+attached = "Fatura PDF olarak eklenmiştir."
+text = '''
+Merhaba {{ customer_name }},
+
+{{ order_number }} numaralı siparişinize ait {{ invoice_number }} numaralı fatura ektedir.
+
+Toplam (KDV dahil): {{ invoice_total }}
+{{ payment_line }}
+
+Fatura PDF olarak eklenmiştir.
+
+{{ company_name }}
+'''
+
+[order_document]
+title_invoice = "Fatura"
+title_summary = "Sipariş özeti"
+file_invoice = "fatura"
+file_summary = "siparis"
+document_date = "Tarih"
+order_number = "Sipariş numarası"
+order_date = "Sipariş tarihi"
+payment = "Ödeme"
+no_address = "Adres belirtilmedi"
+product = "Ürün"
+quantity = "Adet"
+price = "Fiyat"
+sku_line = "Ürün kodu: {value}"
+weight_line = "Ağırlık: {value}"
+thanks = "Siparişiniz için teşekkürler! Sorular: {email}"
+not_an_invoice = "Bu belge fatura değildir: fatura, siparişinizle birlikte verilir."
+pickup = "Teslim alma: {place}"
+pickup_ready = "Teslim alma: {place}, {date} tarihinden itibaren hazır"
+delivery = "Yukarıdaki adrese teslimat"
+order_details = "Sipariş ayrıntıları"
+contact = "İletişim"
+paid = "Ödendi"
+awaiting_payment = "Ödeme bekleniyor"
+payment_authorized = "Ödeme onaylandı"
+payment_failed = "Ödeme başarısız"
+payment_cancelled = "Ödeme iptal edildi"
+refunded = "İade edildi"
+status_pending = "Ödeme bekleniyor"
+status_confirmed = "Onaylandı"
+status_processing = "Hazırlanıyor"
+status_on_hold = "Beklemede"
+status_completed = "Tamamlandı"
+status_cancelled = "İptal edildi"
+status_refunded = "İade edildi"

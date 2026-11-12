@@ -1,0 +1,281 @@
+# Textos de los correos en español. Estructura: ver en.toml; un texto que falte
+# aquí se envía en inglés.
+
+[common]
+questions = "¿Preguntas?"
+footer_note = ""
+customer_fallback = "cliente"
+order_number = "Número de pedido"
+order_date = "Fecha del pedido"
+total = "Total"
+status = "Estado"
+subtotal = "Subtotal"
+shipping = "Entrega"
+tax = "IVA"
+discount = "Descuento"
+discount_code = "Descuento ({code})"
+item = "Artículo"
+qty = "Cant."
+price = "Precio"
+sku = "Ref."
+shipping_address = "Dirección de entrega"
+billing_address = "Dirección de facturación"
+refund_amount = "Importe reembolsado"
+copy_link = "O copie este enlace en su navegador:"
+date_format = "{day} de {month} de {year}"
+months = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+money_format = "{amount} {symbol}"
+decimal_separator = ","
+thousands_separator = "."
+hours = "{n} horas"
+one_hour = "{n} hora"
+
+[welcome]
+subject = "¡Bienvenido a {{ company_name }}!"
+heading = "¡Bienvenido a {{ company_name }}!"
+intro = "Hola, {{ customer_name }}: su cuenta está creada y lista para usar. Compre, siga sus pedidos y gestione su cuenta desde su área de cliente."
+account_name = "Nombre de la cuenta"
+active = "Activa"
+start_shopping = "Empezar a comprar"
+sign_in = "Inicie sesión en su cuenta:"
+text = '''
+Hola, {{ customer_name }}:
+
+¡Bienvenido a {{ company_name }}! Su cuenta está lista.
+
+Tienda: {{ shop_url }}
+Iniciar sesión: {{ login_url }}
+
+{{ company_name }}
+'''
+
+[verify_email]
+subject = "Confirme su dirección de correo"
+heading = "Confirme su dirección de correo"
+intro = "Hola, {{ customer_name }}: gracias por crear una cuenta en {{ company_name }}. Confirme su dirección de correo para iniciar sesión."
+button = "Confirmar mi dirección de correo"
+expires = "Este enlace caduca en {{ expires_in }}. Si no ha creado esta cuenta, puede ignorar este correo."
+text = '''
+Hola, {{ customer_name }}:
+
+Gracias por crear una cuenta en {{ company_name }}. Confirme su dirección de correo para iniciar sesión:
+
+{{ verification_url }}
+
+Este enlace caduca en {{ expires_in }}. Si no ha creado esta cuenta, puede ignorar este correo.
+
+{{ company_name }}
+'''
+
+[password_reset]
+subject = "Restablecer la contraseña"
+heading = "Restablecer la contraseña"
+intro = "Hola, {{ customer_name }}: hemos recibido una solicitud para restablecer su contraseña."
+security_notice = "Aviso de seguridad"
+security_text = "Si no ha solicitado este cambio, ignore este correo. Su contraseña no cambiará hasta que use el enlace de abajo."
+expires = "Este enlace caduca en {{ expires_in }}."
+button = "Restablecer la contraseña"
+text = '''
+Hola, {{ customer_name }}:
+
+Hemos recibido una solicitud para restablecer su contraseña.
+
+Restablecer la contraseña: {{ reset_url }}
+
+Este enlace caduca en {{ expires_in }}. Si no lo ha solicitado, puede ignorar este correo.
+
+{{ company_name }}
+'''
+
+[order_confirmation]
+subject = "Pedido confirmado: {{ order_number }}"
+order_label = "Pedido {{ order_number }}"
+heading = "¡Gracias por su pedido, {{ customer_name }}!"
+intro = "Hemos recibido su pedido y lo estamos preparando. El resumen del pedido va adjunto a este correo en PDF."
+text = '''
+Hola, {{ customer_name }}:
+
+¡Gracias por su pedido! Su pedido {{ order_number }} está confirmado.
+
+Detalle del pedido:
+----------------
+Subtotal: {{ subtotal }}
+{{ discount_line }}Entrega: {{ shipping_cost }}
+IVA: {{ tax }}
+Total: {{ order_total }}
+
+El resumen del pedido va adjunto a este correo en PDF.
+
+Le escribiremos de nuevo cuando su pedido esté listo.
+
+Atentamente,
+El equipo de {{ company_name }}
+'''
+
+[admin_new_order]
+subject = "Nuevo pedido: {{ order_number }}"
+new_order = "Nuevo pedido"
+customer = "Cliente:"
+text = '''
+Nuevo pedido {{ order_number }}
+
+Cliente: {{ customer_name }} ({{ customer_email }})
+
+Total del pedido: {{ order_total }}
+
+Dirección de entrega:
+{{ shipping_address_text }}
+'''
+
+[order_shipped]
+subject = "Su pedido está en camino: {{ order_number }}"
+heading = "¡Su pedido está en camino!"
+intro = "Hola, {{ customer_name }}: buenas noticias, el pedido <strong>{{ order_number }}</strong> va de camino."
+carrier = "Transportista"
+in_transit = "En camino"
+tracking_number = "Número de seguimiento:"
+track_button = "Seguir el envío"
+text = '''
+Hola, {{ customer_name }}:
+
+¡Buenas noticias! Su pedido {{ order_number }} está en camino.
+
+Número de seguimiento: {{ tracking_number }}
+Transportista: {{ shipping_carrier }}
+
+Seguir el envío: {{ tracking_url }}
+
+{{ company_name }}
+'''
+
+[order_ready_for_pickup]
+subject = "Su pedido {{ order_number }} está listo para recoger"
+heading = "Su pedido está listo"
+intro = "Hola, {{ customer_name }}: el pedido <strong>{{ order_number }}</strong> le espera en el mostrador."
+pickup_at = "Recogida en"
+bring = "Traiga su número de pedido. Quien recoja el pedido indica su nombre en el mostrador."
+location_fallback = "nuestro almacén"
+text = '''
+Hola, {{ customer_name }}:
+
+Su pedido {{ order_number }} está listo para recoger en {{ location_name }}.
+
+Traiga su número de pedido. Quien recoja el pedido indica su nombre en el mostrador.
+
+{{ company_name }}
+'''
+
+[order_cancelled]
+subject = "Su pedido {{ order_number }} ha sido cancelado"
+greeting = "Hola:"
+cancelled = "Su pedido {{ order_number }} ha sido cancelado."
+sorry = "Disculpe las molestias. Si tiene alguna pregunta, responda a este correo."
+refunded = "Cualquier pago ya cobrado se ha reembolsado en su método de pago original."
+
+[refund_processed]
+subject = "Reembolso realizado: {{ order_number }}"
+heading = "Su reembolso se ha realizado"
+intro = "Hola, {{ customer_name }}: el reembolso de su pedido <strong>{{ order_number }}</strong> está en curso."
+refund_method = "Forma de reembolso"
+processing_time = "Plazo"
+bank_delay = "Según su banco, el importe puede tardar unos días hábiles en aparecer en su cuenta."
+original_method = "Método de pago original"
+business_days = "De 5 a 10 días hábiles"
+text = '''
+Hola, {{ customer_name }}:
+
+El reembolso de su pedido {{ order_number }} se ha realizado.
+
+Importe reembolsado: {{ refund_amount }}
+Forma de reembolso: {{ refund_method }}
+Plazo: {{ processing_time }}
+
+{{ company_name }}
+'''
+
+[invoice_document]
+title = "Factura"
+credit_note = "Factura rectificativa"
+number = "Número de factura"
+issue_date = "Fecha de factura"
+due_date = "Vencimiento"
+order = "Pedido"
+seller = "Vendedor"
+buyer = "Cliente"
+vat_number = "NIF-IVA"
+company_number = "N.º de empresa"
+description = "Descripción"
+quantity = "Cant."
+unit_price = "Precio unit. sin IVA"
+vat_rate = "IVA"
+amount = "Importe sin IVA"
+taxable = "Base imponible"
+vat_amount = "IVA"
+subtotal = "Total sin IVA"
+total = "Total con IVA"
+paid = "Pagado"
+amount_due = "Importe pendiente"
+pay_to = "Pagar en la cuenta"
+reference = "Comunicación estructurada"
+reverse_charge = "Inversión del sujeto pasivo (entrega intracomunitaria)"
+delivery = "Entrega"
+discount = "Descuento"
+
+[invoice_issued]
+subject = "Su factura {{ invoice_number }}"
+heading = "Su factura"
+intro = "Hola, {{ customer_name }}: aquí tiene la factura {{ invoice_number }} de su pedido {{ order_number }}."
+amount = "Total con IVA"
+status = "Estado"
+paid = "Pagada, gracias."
+due = "A pagar antes del {{ due_date }} con la comunicación estructurada {{ payment_reference }}."
+peppol = "Como su empresa recibe facturas electrónicas, esta factura también se le ha enviado por Peppol."
+attached = "La factura va adjunta en PDF."
+text = '''
+Hola, {{ customer_name }}:
+
+Aquí tiene la factura {{ invoice_number }} de su pedido {{ order_number }}.
+
+Total con IVA: {{ invoice_total }}
+{{ payment_line }}
+
+La factura va adjunta en PDF.
+
+{{ company_name }}
+'''
+
+[order_document]
+title_invoice = "Factura"
+title_summary = "Resumen del pedido"
+file_invoice = "factura"
+file_summary = "pedido"
+document_date = "Fecha"
+order_number = "Número de pedido"
+order_date = "Fecha del pedido"
+payment = "Pago"
+no_address = "Sin dirección"
+product = "Producto"
+quantity = "Cantidad"
+price = "Precio"
+sku_line = "Ref.: {value}"
+weight_line = "Peso: {value}"
+thanks = "¡Gracias por su pedido! Preguntas: {email}"
+not_an_invoice = "Este documento no es una factura: la factura se le entrega con su pedido."
+pickup = "Recogida: {place}"
+pickup_ready = "Recogida: {place}, listo desde el {date}"
+delivery = "Entrega en la dirección indicada arriba"
+order_details = "Detalle del pedido"
+contact = "Contacto"
+paid = "Pagado"
+awaiting_payment = "Pendiente de pago"
+payment_authorized = "Pago autorizado"
+payment_failed = "Pago fallido"
+payment_cancelled = "Pago cancelado"
+refunded = "Reembolsado"
+status_pending = "Pendiente de pago"
+status_confirmed = "Confirmado"
+status_processing = "En preparación"
+status_on_hold = "En espera"
+status_completed = "Completado"
+status_cancelled = "Cancelado"
+status_refunded = "Reembolsado"

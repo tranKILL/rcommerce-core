@@ -1,0 +1,281 @@
+# Textele e-mailurilor în română. Structura: vezi en.toml; un text care lipsește
+# aici este trimis în engleză.
+
+[common]
+questions = "Întrebări?"
+footer_note = ""
+customer_fallback = "stimate client"
+order_number = "Număr comandă"
+order_date = "Data comenzii"
+total = "Total"
+status = "Stare"
+subtotal = "Subtotal"
+shipping = "Livrare"
+tax = "TVA"
+discount = "Reducere"
+discount_code = "Reducere ({code})"
+item = "Articol"
+qty = "Cant."
+price = "Preț"
+sku = "Cod"
+shipping_address = "Adresa de livrare"
+billing_address = "Adresa de facturare"
+refund_amount = "Suma rambursată"
+copy_link = "Sau copiați acest link în browser:"
+date_format = "{day} {month} {year}"
+months = ["ianuarie", "februarie", "martie", "aprilie", "mai", "iunie", "iulie", "august", "septembrie", "octombrie", "noiembrie", "decembrie"]
+money_format = "{amount} {symbol}"
+decimal_separator = ","
+thousands_separator = "."
+hours = "{n} de ore"
+one_hour = "{n} oră"
+
+[welcome]
+subject = "Bine ați venit la {{ company_name }}!"
+heading = "Bine ați venit la {{ company_name }}!"
+intro = "Bună ziua, {{ customer_name }}, contul dumneavoastră a fost creat și este gata de folosit. Cumpărați, urmăriți comenzile și gestionați contul din zona de client."
+account_name = "Numele contului"
+active = "Activ"
+start_shopping = "Începeți cumpărăturile"
+sign_in = "Conectați-vă la cont:"
+text = '''
+Bună ziua, {{ customer_name }},
+
+Bine ați venit la {{ company_name }}! Contul dumneavoastră este gata.
+
+Magazin: {{ shop_url }}
+Conectare: {{ login_url }}
+
+{{ company_name }}
+'''
+
+[verify_email]
+subject = "Confirmați adresa de e-mail"
+heading = "Confirmați adresa de e-mail"
+intro = "Bună ziua, {{ customer_name }}, vă mulțumim că v-ați creat un cont la {{ company_name }}. Confirmați adresa de e-mail pentru a vă conecta."
+button = "Confirm adresa de e-mail"
+expires = "Acest link expiră în {{ expires_in }}. Dacă nu ați creat acest cont, ignorați acest e-mail."
+text = '''
+Bună ziua, {{ customer_name }},
+
+Vă mulțumim că v-ați creat un cont la {{ company_name }}. Confirmați adresa de e-mail pentru a vă conecta:
+
+{{ verification_url }}
+
+Acest link expiră în {{ expires_in }}. Dacă nu ați creat acest cont, ignorați acest e-mail.
+
+{{ company_name }}
+'''
+
+[password_reset]
+subject = "Resetarea parolei"
+heading = "Resetarea parolei"
+intro = "Bună ziua, {{ customer_name }}, am primit o cerere de resetare a parolei dumneavoastră."
+security_notice = "Notă de securitate"
+security_text = "Dacă nu ați cerut resetarea, ignorați acest e-mail. Parola nu se schimbă până nu folosiți linkul de mai jos."
+expires = "Acest link expiră în {{ expires_in }}."
+button = "Resetează parola"
+text = '''
+Bună ziua, {{ customer_name }},
+
+Am primit o cerere de resetare a parolei dumneavoastră.
+
+Resetați parola: {{ reset_url }}
+
+Acest link expiră în {{ expires_in }}. Dacă nu ați cerut acest lucru, ignorați acest e-mail.
+
+{{ company_name }}
+'''
+
+[order_confirmation]
+subject = "Comandă confirmată: {{ order_number }}"
+order_label = "Comanda {{ order_number }}"
+heading = "Vă mulțumim pentru comandă, {{ customer_name }}!"
+intro = "Am primit comanda dumneavoastră și o pregătim. Rezumatul comenzii este atașat la acest e-mail în format PDF."
+text = '''
+Bună ziua, {{ customer_name }},
+
+Vă mulțumim pentru comandă! Comanda {{ order_number }} este confirmată.
+
+Detaliile comenzii:
+----------------
+Subtotal: {{ subtotal }}
+{{ discount_line }}Livrare: {{ shipping_cost }}
+TVA: {{ tax }}
+Total: {{ order_total }}
+
+Rezumatul comenzii este atașat la acest e-mail în format PDF.
+
+Vă vom scrie din nou când comanda va fi gata.
+
+Cu stimă,
+Echipa {{ company_name }}
+'''
+
+[admin_new_order]
+subject = "Comandă nouă: {{ order_number }}"
+new_order = "Comandă nouă"
+customer = "Client:"
+text = '''
+Comandă nouă {{ order_number }}
+
+Client: {{ customer_name }} ({{ customer_email }})
+
+Totalul comenzii: {{ order_total }}
+
+Adresa de livrare:
+{{ shipping_address_text }}
+'''
+
+[order_shipped]
+subject = "Comanda dumneavoastră este pe drum: {{ order_number }}"
+heading = "Comanda dumneavoastră este pe drum!"
+intro = "Bună ziua, {{ customer_name }}, vești bune: comanda <strong>{{ order_number }}</strong> este pe drum spre dumneavoastră."
+carrier = "Curier"
+in_transit = "Pe drum"
+tracking_number = "Număr de urmărire:"
+track_button = "Urmăriți coletul"
+text = '''
+Bună ziua, {{ customer_name }},
+
+Vești bune! Comanda {{ order_number }} este pe drum.
+
+Număr de urmărire: {{ tracking_number }}
+Curier: {{ shipping_carrier }}
+
+Urmăriți coletul: {{ tracking_url }}
+
+{{ company_name }}
+'''
+
+[order_ready_for_pickup]
+subject = "Comanda {{ order_number }} este gata de ridicare"
+heading = "Comanda dumneavoastră este gata"
+intro = "Bună ziua, {{ customer_name }}, comanda <strong>{{ order_number }}</strong> vă așteaptă la ghișeu."
+pickup_at = "Ridicare de la"
+bring = "Aveți la dumneavoastră numărul comenzii. Persoana care ridică comanda își spune numele la ghișeu."
+location_fallback = "depozitul nostru"
+text = '''
+Bună ziua, {{ customer_name }},
+
+Comanda {{ order_number }} este gata de ridicare de la {{ location_name }}.
+
+Aveți la dumneavoastră numărul comenzii. Persoana care ridică comanda își spune numele la ghișeu.
+
+{{ company_name }}
+'''
+
+[order_cancelled]
+subject = "Comanda {{ order_number }} a fost anulată"
+greeting = "Bună ziua,"
+cancelled = "Comanda {{ order_number }} a fost anulată."
+sorry = "Ne pare rău pentru neplăcere. Pentru orice întrebare, răspundeți la acest e-mail."
+refunded = "Orice plată deja încasată a fost rambursată prin metoda de plată inițială."
+
+[refund_processed]
+subject = "Rambursare efectuată: {{ order_number }}"
+heading = "Rambursarea a fost efectuată"
+intro = "Bună ziua, {{ customer_name }}, rambursarea pentru comanda <strong>{{ order_number }}</strong> este în curs."
+refund_method = "Metoda de rambursare"
+processing_time = "Termen"
+bank_delay = "În funcție de bancă, suma poate apărea în cont după câteva zile lucrătoare."
+original_method = "Metoda de plată inițială"
+business_days = "5-10 zile lucrătoare"
+text = '''
+Bună ziua, {{ customer_name }},
+
+Rambursarea pentru comanda {{ order_number }} a fost efectuată.
+
+Suma rambursată: {{ refund_amount }}
+Metoda de rambursare: {{ refund_method }}
+Termen: {{ processing_time }}
+
+{{ company_name }}
+'''
+
+[invoice_document]
+title = "Factură"
+credit_note = "Factură de stornare"
+number = "Număr factură"
+issue_date = "Data facturii"
+due_date = "Scadență"
+order = "Comandă"
+seller = "Vânzător"
+buyer = "Client"
+vat_number = "Cod TVA"
+company_number = "Nr. firmă"
+description = "Descriere"
+quantity = "Cant."
+unit_price = "Preț unitar fără TVA"
+vat_rate = "TVA"
+amount = "Valoare fără TVA"
+taxable = "Bază impozabilă"
+vat_amount = "TVA"
+subtotal = "Total fără TVA"
+total = "Total cu TVA"
+paid = "Plătit"
+amount_due = "Sumă de plată"
+pay_to = "Plătiți în contul"
+reference = "Comunicare structurată"
+reverse_charge = "Taxare inversă (livrare intracomunitară)"
+delivery = "Livrare"
+discount = "Reducere"
+
+[invoice_issued]
+subject = "Factura dumneavoastră {{ invoice_number }}"
+heading = "Factura dumneavoastră"
+intro = "Bună ziua, {{ customer_name }}, iată factura {{ invoice_number }} pentru comanda {{ order_number }}."
+amount = "Total cu TVA"
+status = "Stare"
+paid = "Plătită, vă mulțumim."
+due = "De plătit până la {{ due_date }} cu comunicarea structurată {{ payment_reference }}."
+peppol = "Deoarece firma dumneavoastră primește facturi electronice, această factură v-a fost trimisă și prin Peppol."
+attached = "Factura este atașată în format PDF."
+text = '''
+Bună ziua, {{ customer_name }},
+
+Iată factura {{ invoice_number }} pentru comanda {{ order_number }}.
+
+Total cu TVA: {{ invoice_total }}
+{{ payment_line }}
+
+Factura este atașată în format PDF.
+
+{{ company_name }}
+'''
+
+[order_document]
+title_invoice = "Factură"
+title_summary = "Rezumatul comenzii"
+file_invoice = "factura"
+file_summary = "comanda"
+document_date = "Data"
+order_number = "Număr comandă"
+order_date = "Data comenzii"
+payment = "Plată"
+no_address = "Nicio adresă indicată"
+product = "Produs"
+quantity = "Cantitate"
+price = "Preț"
+sku_line = "Cod: {value}"
+weight_line = "Greutate: {value}"
+thanks = "Vă mulțumim pentru comandă! Întrebări: {email}"
+not_an_invoice = "Acest document nu este o factură: factura vă este înmânată odată cu comanda."
+pickup = "Ridicare: {place}"
+pickup_ready = "Ridicare: {place}, gata din {date}"
+delivery = "Livrare la adresa de mai sus"
+order_details = "Detaliile comenzii"
+contact = "Contact"
+paid = "Plătit"
+awaiting_payment = "În așteptarea plății"
+payment_authorized = "Plată autorizată"
+payment_failed = "Plată eșuată"
+payment_cancelled = "Plată anulată"
+refunded = "Rambursat"
+status_pending = "În așteptarea plății"
+status_confirmed = "Confirmată"
+status_processing = "În pregătire"
+status_on_hold = "În așteptare"
+status_completed = "Finalizată"
+status_cancelled = "Anulată"
+status_refunded = "Rambursată"

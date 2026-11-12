@@ -56,6 +56,11 @@ fn analyzer_for(locale: &str) -> &'static str {
         "nl" => "rc_nl",
         "en" => "rc_en",
         "de" => "rc_de",
+        "it" => "rc_it",
+        "es" => "rc_es",
+        "pt" => "rc_pt",
+        "tr" => "rc_tr",
+        "ro" => "rc_ro",
         _ => "rc_simple",
     }
 }
@@ -74,7 +79,20 @@ fn analysis_settings() -> Value {
             "rc_en_stop": { "type": "stop", "stopwords": "_english_" },
             "rc_en_stem": { "type": "stemmer", "language": "light_english" },
             "rc_de_stop": { "type": "stop", "stopwords": "_german_" },
-            "rc_de_stem": { "type": "stemmer", "language": "light_german" }
+            "rc_de_stem": { "type": "stemmer", "language": "light_german" },
+            "rc_it_elision": { "type": "elision", "articles_case": true,
+                "articles": ["c", "l", "all", "dall", "dell", "nell", "sull", "coll", "pell", "gl", "agl", "dagl", "degl", "negl", "sugl", "un", "m", "t", "s", "v", "d"] },
+            "rc_it_stop": { "type": "stop", "stopwords": "_italian_" },
+            "rc_it_stem": { "type": "stemmer", "language": "light_italian" },
+            "rc_es_stop": { "type": "stop", "stopwords": "_spanish_" },
+            "rc_es_stem": { "type": "stemmer", "language": "light_spanish" },
+            "rc_pt_stop": { "type": "stop", "stopwords": "_portuguese_" },
+            "rc_pt_stem": { "type": "stemmer", "language": "light_portuguese" },
+            "rc_tr_lowercase": { "type": "lowercase", "language": "turkish" },
+            "rc_tr_stop": { "type": "stop", "stopwords": "_turkish_" },
+            "rc_tr_stem": { "type": "stemmer", "language": "turkish" },
+            "rc_ro_stop": { "type": "stop", "stopwords": "_romanian_" },
+            "rc_ro_stem": { "type": "stemmer", "language": "romanian" }
         },
         "tokenizer": {
             "rc_trigram": { "type": "ngram", "min_gram": 3, "max_gram": 3, "token_chars": ["letter", "digit"] }
@@ -84,6 +102,11 @@ fn analysis_settings() -> Value {
             "rc_nl": { "tokenizer": "standard", "filter": ["lowercase", "asciifolding", "rc_nl_stop", "rc_nl_stem"] },
             "rc_en": { "tokenizer": "standard", "filter": ["lowercase", "asciifolding", "rc_en_stop", "rc_en_stem"] },
             "rc_de": { "tokenizer": "standard", "filter": ["lowercase", "asciifolding", "rc_de_stop", "rc_de_stem"] },
+            "rc_it": { "tokenizer": "standard", "filter": ["rc_it_elision", "lowercase", "asciifolding", "rc_it_stop", "rc_it_stem"] },
+            "rc_es": { "tokenizer": "standard", "filter": ["lowercase", "asciifolding", "rc_es_stop", "rc_es_stem"] },
+            "rc_pt": { "tokenizer": "standard", "filter": ["lowercase", "asciifolding", "rc_pt_stop", "rc_pt_stem"] },
+            "rc_tr": { "tokenizer": "standard", "filter": ["apostrophe", "rc_tr_lowercase", "rc_tr_stop", "rc_tr_stem", "asciifolding"] },
+            "rc_ro": { "tokenizer": "standard", "filter": ["lowercase", "rc_ro_stop", "rc_ro_stem", "asciifolding"] },
             "rc_simple": { "tokenizer": "standard", "filter": ["lowercase", "asciifolding"] },
             "rc_trigram": { "tokenizer": "rc_trigram", "filter": ["lowercase", "asciifolding"] }
         }
@@ -456,6 +479,8 @@ mod tests {
         assert_eq!(analyzer_for("fr"), "rc_fr");
         assert_eq!(analyzer_for("nl"), "rc_nl");
         assert_eq!(analyzer_for("en"), "rc_en");
+        assert_eq!(analyzer_for("tr"), "rc_tr");
+        assert_eq!(analyzer_for("pl"), "rc_simple");
         assert_eq!(analyzer_for("xx"), "rc_simple");
     }
 

@@ -1,0 +1,281 @@
+# E-Mail-Texte auf Deutsch. Aufbau siehe en.toml; ein hier fehlender Text wird
+# auf Englisch verschickt.
+
+[common]
+questions = "Fragen?"
+footer_note = ""
+customer_fallback = "Kundin, Kunde"
+order_number = "Bestellnummer"
+order_date = "Bestelldatum"
+total = "Gesamt"
+status = "Status"
+subtotal = "Zwischensumme"
+shipping = "Lieferung"
+tax = "MwSt."
+discount = "Rabatt"
+discount_code = "Rabatt ({code})"
+item = "Artikel"
+qty = "Menge"
+price = "Preis"
+sku = "Art.-Nr."
+shipping_address = "Lieferadresse"
+billing_address = "Rechnungsadresse"
+refund_amount = "Erstatteter Betrag"
+copy_link = "Oder kopieren Sie diesen Link in Ihren Browser:"
+date_format = "{day}. {month} {year}"
+months = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"]
+money_format = "{amount} {symbol}"
+decimal_separator = ","
+thousands_separator = "."
+hours = "{n} Stunden"
+one_hour = "{n} Stunde"
+
+[welcome]
+subject = "Willkommen bei {{ company_name }}!"
+heading = "Willkommen bei {{ company_name }}!"
+intro = "Hallo {{ customer_name }}, Ihr Konto ist eingerichtet und einsatzbereit. Kaufen Sie ein, verfolgen Sie Ihre Bestellungen und verwalten Sie Ihr Konto in Ihrem Kundenbereich."
+account_name = "Kontoname"
+active = "Aktiv"
+start_shopping = "Jetzt einkaufen"
+sign_in = "Melden Sie sich bei Ihrem Konto an:"
+text = '''
+Hallo {{ customer_name }},
+
+willkommen bei {{ company_name }}! Ihr Konto ist bereit.
+
+Shop: {{ shop_url }}
+Anmelden: {{ login_url }}
+
+{{ company_name }}
+'''
+
+[verify_email]
+subject = "Bestätigen Sie Ihre E-Mail-Adresse"
+heading = "Bestätigen Sie Ihre E-Mail-Adresse"
+intro = "Hallo {{ customer_name }}, vielen Dank für Ihre Registrierung bei {{ company_name }}. Bestätigen Sie Ihre E-Mail-Adresse, um sich anzumelden."
+button = "E-Mail-Adresse bestätigen"
+expires = "Dieser Link ist {{ expires_in }} gültig. Wenn Sie dieses Konto nicht angelegt haben, können Sie diese E-Mail ignorieren."
+text = '''
+Hallo {{ customer_name }},
+
+vielen Dank für Ihre Registrierung bei {{ company_name }}. Bestätigen Sie Ihre E-Mail-Adresse, um sich anzumelden:
+
+{{ verification_url }}
+
+Dieser Link ist {{ expires_in }} gültig. Wenn Sie dieses Konto nicht angelegt haben, können Sie diese E-Mail ignorieren.
+
+{{ company_name }}
+'''
+
+[password_reset]
+subject = "Passwort zurücksetzen"
+heading = "Passwort zurücksetzen"
+intro = "Hallo {{ customer_name }}, wir haben eine Anfrage zum Zurücksetzen Ihres Passworts erhalten."
+security_notice = "Sicherheitshinweis"
+security_text = "Wenn Sie das nicht angefordert haben, ignorieren Sie diese E-Mail. Ihr Passwort ändert sich erst, wenn Sie den Link unten verwenden."
+expires = "Dieser Link ist {{ expires_in }} gültig."
+button = "Passwort zurücksetzen"
+text = '''
+Hallo {{ customer_name }},
+
+wir haben eine Anfrage zum Zurücksetzen Ihres Passworts erhalten.
+
+Passwort zurücksetzen: {{ reset_url }}
+
+Dieser Link ist {{ expires_in }} gültig. Wenn Sie das nicht angefordert haben, können Sie diese E-Mail ignorieren.
+
+{{ company_name }}
+'''
+
+[order_confirmation]
+subject = "Bestellung bestätigt: {{ order_number }}"
+order_label = "Bestellung {{ order_number }}"
+heading = "Vielen Dank für Ihre Bestellung, {{ customer_name }}!"
+intro = "Wir haben Ihre Bestellung erhalten und bereiten sie vor. Die Bestellübersicht finden Sie als PDF im Anhang."
+text = '''
+Hallo {{ customer_name }},
+
+vielen Dank für Ihre Bestellung! Ihre Bestellung {{ order_number }} ist bestätigt.
+
+Bestelldetails:
+----------------
+Zwischensumme: {{ subtotal }}
+{{ discount_line }}Lieferung: {{ shipping_cost }}
+MwSt.: {{ tax }}
+Gesamt: {{ order_total }}
+
+Die Bestellübersicht finden Sie als PDF im Anhang.
+
+Wir melden uns wieder, sobald Ihre Bestellung bereit ist.
+
+Mit freundlichen Grüßen
+Ihr Team von {{ company_name }}
+'''
+
+[admin_new_order]
+subject = "Neue Bestellung: {{ order_number }}"
+new_order = "Neue Bestellung"
+customer = "Kunde:"
+text = '''
+Neue Bestellung {{ order_number }}
+
+Kunde: {{ customer_name }} ({{ customer_email }})
+
+Bestellsumme: {{ order_total }}
+
+Lieferadresse:
+{{ shipping_address_text }}
+'''
+
+[order_shipped]
+subject = "Ihre Bestellung ist unterwegs: {{ order_number }}"
+heading = "Ihre Bestellung ist unterwegs!"
+intro = "Hallo {{ customer_name }}, gute Nachricht: Die Bestellung <strong>{{ order_number }}</strong> ist auf dem Weg zu Ihnen."
+carrier = "Versanddienst"
+in_transit = "Unterwegs"
+tracking_number = "Sendungsnummer:"
+track_button = "Sendung verfolgen"
+text = '''
+Hallo {{ customer_name }},
+
+gute Nachricht! Ihre Bestellung {{ order_number }} ist unterwegs.
+
+Sendungsnummer: {{ tracking_number }}
+Versanddienst: {{ shipping_carrier }}
+
+Sendung verfolgen: {{ tracking_url }}
+
+{{ company_name }}
+'''
+
+[order_ready_for_pickup]
+subject = "Ihre Bestellung {{ order_number }} ist abholbereit"
+heading = "Ihre Bestellung ist abholbereit"
+intro = "Hallo {{ customer_name }}, die Bestellung <strong>{{ order_number }}</strong> wartet an der Theke auf Sie."
+pickup_at = "Abholung in"
+bring = "Bringen Sie Ihre Bestellnummer mit. Wer die Bestellung abholt, nennt an der Theke seinen Namen."
+location_fallback = "unserem Lager"
+text = '''
+Hallo {{ customer_name }},
+
+Ihre Bestellung {{ order_number }} ist in {{ location_name }} abholbereit.
+
+Bringen Sie Ihre Bestellnummer mit. Wer die Bestellung abholt, nennt an der Theke seinen Namen.
+
+{{ company_name }}
+'''
+
+[order_cancelled]
+subject = "Ihre Bestellung {{ order_number }} wurde storniert"
+greeting = "Hallo,"
+cancelled = "Ihre Bestellung {{ order_number }} wurde storniert."
+sorry = "Wir bitten die Unannehmlichkeiten zu entschuldigen. Bei Fragen antworten Sie einfach auf diese E-Mail."
+refunded = "Bereits eingezogene Zahlungen wurden auf Ihr ursprüngliches Zahlungsmittel erstattet."
+
+[refund_processed]
+subject = "Erstattung durchgeführt: {{ order_number }}"
+heading = "Ihre Erstattung wurde durchgeführt"
+intro = "Hallo {{ customer_name }}, die Erstattung für Ihre Bestellung <strong>{{ order_number }}</strong> ist unterwegs."
+refund_method = "Erstattungsart"
+processing_time = "Bearbeitungszeit"
+bank_delay = "Je nach Bank kann es einige Werktage dauern, bis der Betrag auf Ihrem Konto erscheint."
+original_method = "Ursprüngliches Zahlungsmittel"
+business_days = "5 bis 10 Werktage"
+text = '''
+Hallo {{ customer_name }},
+
+die Erstattung für Ihre Bestellung {{ order_number }} wurde durchgeführt.
+
+Erstatteter Betrag: {{ refund_amount }}
+Erstattungsart: {{ refund_method }}
+Bearbeitungszeit: {{ processing_time }}
+
+{{ company_name }}
+'''
+
+[invoice_document]
+title = "Rechnung"
+credit_note = "Gutschrift"
+number = "Rechnungsnummer"
+issue_date = "Rechnungsdatum"
+due_date = "Fällig am"
+order = "Bestellung"
+seller = "Verkäufer"
+buyer = "Kunde"
+vat_number = "USt-IdNr."
+company_number = "Unternehmensnummer"
+description = "Beschreibung"
+quantity = "Menge"
+unit_price = "Einzelpreis netto"
+vat_rate = "MwSt."
+amount = "Betrag netto"
+taxable = "Bemessungsgrundlage"
+vat_amount = "MwSt."
+subtotal = "Summe netto"
+total = "Summe brutto"
+paid = "Bezahlt"
+amount_due = "Offener Betrag"
+pay_to = "Bitte überweisen auf"
+reference = "Strukturierte Mitteilung"
+reverse_charge = "Steuerschuldnerschaft des Leistungsempfängers (innergemeinschaftliche Lieferung)"
+delivery = "Lieferung"
+discount = "Rabatt"
+
+[invoice_issued]
+subject = "Ihre Rechnung {{ invoice_number }}"
+heading = "Ihre Rechnung"
+intro = "Hallo {{ customer_name }}, anbei die Rechnung {{ invoice_number }} zu Ihrer Bestellung {{ order_number }}."
+amount = "Summe brutto"
+status = "Status"
+paid = "Bezahlt, vielen Dank."
+due = "Zahlbar bis {{ due_date }} mit der strukturierten Mitteilung {{ payment_reference }}."
+peppol = "Da Ihr Unternehmen E-Rechnungen empfängt, wurde Ihnen diese Rechnung auch über Peppol zugestellt."
+attached = "Die Rechnung finden Sie als PDF im Anhang."
+text = '''
+Hallo {{ customer_name }},
+
+anbei die Rechnung {{ invoice_number }} zu Ihrer Bestellung {{ order_number }}.
+
+Summe brutto: {{ invoice_total }}
+{{ payment_line }}
+
+Die Rechnung finden Sie als PDF im Anhang.
+
+{{ company_name }}
+'''
+
+[order_document]
+title_invoice = "Rechnung"
+title_summary = "Bestellübersicht"
+file_invoice = "rechnung"
+file_summary = "bestellung"
+document_date = "Datum"
+order_number = "Bestellnummer"
+order_date = "Bestelldatum"
+payment = "Zahlung"
+no_address = "Keine Adresse angegeben"
+product = "Produkt"
+quantity = "Menge"
+price = "Preis"
+sku_line = "Art.-Nr.: {value}"
+weight_line = "Gewicht: {value}"
+thanks = "Vielen Dank für Ihre Bestellung! Fragen: {email}"
+not_an_invoice = "Dies ist keine Rechnung: Die Rechnung erhalten Sie mit Ihrer Bestellung."
+pickup = "Abholung: {place}"
+pickup_ready = "Abholung: {place}, bereit ab {date}"
+delivery = "Lieferung an die obige Adresse"
+order_details = "Bestelldetails"
+contact = "Kontakt"
+paid = "Bezahlt"
+awaiting_payment = "Zahlung ausstehend"
+payment_authorized = "Zahlung autorisiert"
+payment_failed = "Zahlung fehlgeschlagen"
+payment_cancelled = "Zahlung abgebrochen"
+refunded = "Erstattet"
+status_pending = "Zahlung ausstehend"
+status_confirmed = "Bestätigt"
+status_processing = "In Vorbereitung"
+status_on_hold = "Angehalten"
+status_completed = "Abgeschlossen"
+status_cancelled = "Storniert"
+status_refunded = "Erstattet"

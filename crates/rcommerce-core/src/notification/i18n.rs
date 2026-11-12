@@ -6,7 +6,8 @@
 //! a text as `{{ t.key }}`, looked up in its own section, then in `[common]`.
 //! Texts may hold the template's own `{{ variable }}` placeholders.
 //!
-//! English, French and Dutch are built in. `notifications.locales_dir` adds a
+//! English, French, Dutch, German, Italian, Spanish, Portuguese, Turkish,
+//! Romanian and Polish are built in. `notifications.locales_dir` adds a
 //! language (`de.toml`) or replaces some texts of a built-in one without a
 //! rebuild. A text missing from a language falls back to English.
 
@@ -26,6 +27,13 @@ const BUILT_IN: &[(&str, &str)] = &[
     ("en", include_str!("locales/en.toml")),
     ("fr", include_str!("locales/fr.toml")),
     ("nl", include_str!("locales/nl.toml")),
+    ("de", include_str!("locales/de.toml")),
+    ("it", include_str!("locales/it.toml")),
+    ("es", include_str!("locales/es.toml")),
+    ("pt", include_str!("locales/pt.toml")),
+    ("tr", include_str!("locales/tr.toml")),
+    ("ro", include_str!("locales/ro.toml")),
+    ("pl", include_str!("locales/pl.toml")),
 ];
 
 type Catalogue = toml::Table;
@@ -268,9 +276,53 @@ mod tests {
         assert_eq!(pick_locale([Some("xx"), Some("nl_BE")]), "nl");
         assert_eq!(pick_locale([Some("xx"), None]), "en");
         assert_eq!(
-            from_accept_language("de;q=0.9, nl-BE;q=0.8, en;q=0.5").as_deref(),
+            from_accept_language("ja;q=0.9, nl-BE;q=0.8, en;q=0.5").as_deref(),
             Some("nl")
         );
+        assert_eq!(pick_locale([Some("pl-PL")]), "pl");
+    }
+
+    /// The `{{ name }}` and `{name}` placeholders of a text, sorted
+    fn placeholders(text: &str) -> Vec<String> {
+        let mut found: Vec<String> = text
+            .split('{')
+            .skip(1)
+            .filter_map(|part| part.split('}').next())
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect();
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn every_built_in_language_has_every_text_with_its_placeholders() {
+        let base: toml::Table = BUILT_IN[0].1.parse().unwrap();
+        for (code, source) in &BUILT_IN[1..] {
+            let catalogue: toml::Table = source.parse().unwrap();
+            for (section, texts) in &base {
+                for (key, english) in texts.as_table().unwrap() {
+                    let found = catalogue.get(section).and_then(|s| s.get(key));
+                    let found =
+                        found.unwrap_or_else(|| panic!("{code}: [{section}] {key} missing"));
+                    match (english, found) {
+                        (toml::Value::String(en), toml::Value::String(other)) => {
+                            if !(section == "common" && key == "footer_note") {
+                                assert_eq!(
+                                    placeholders(en),
+                                    placeholders(other),
+                                    "{code}: [{section}] {key}"
+                                );
+                            }
+                        }
+                        (toml::Value::Array(en), toml::Value::Array(other)) => {
+                            assert_eq!(en.len(), other.len(), "{code}: [{section}] {key}")
+                        }
+                        _ => panic!("{code}: [{section}] {key} has another type"),
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -297,6 +349,15 @@ mod tests {
         assert_eq!(date("fr", day), "9 novembre 2026");
         assert_eq!(hours("fr", 1), "1 heure");
         assert_eq!(hours("nl", 24), "24 uur");
+        assert_eq!(money("de", dec!(1234.5), "EUR"), "1.234,50\u{a0}€");
+        assert_eq!(money("pl", dec!(1234.5), "EUR"), "1\u{a0}234,50\u{a0}€");
+        assert_eq!(date("de", day), "9. November 2026");
+        assert_eq!(date("es", day), "9 de noviembre de 2026");
+        assert_eq!(date("pl", day), "9 listopada 2026");
+        assert_eq!(
+            text("tr", "order_document", "title_summary"),
+            "Sipariş özeti"
+        );
     }
 
     #[test]
