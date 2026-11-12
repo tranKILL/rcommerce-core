@@ -694,7 +694,7 @@ fn require_product_write(auth: &JwtAuth) -> Result<(), rcommerce_core::Error> {
     if auth.can_write(Resource::Products) {
         Ok(())
     } else {
-        Err(rcommerce_core::Error::unauthorized("Admin access required"))
+        Err(rcommerce_core::Error::forbidden("Admin access required"))
     }
 }
 
@@ -853,7 +853,7 @@ fn require_admin(auth: &JwtAuth) -> Result<(), rcommerce_core::Error> {
     if auth.is_admin() {
         Ok(())
     } else {
-        Err(rcommerce_core::Error::unauthorized("Admin access required"))
+        Err(rcommerce_core::Error::forbidden("Admin access required"))
     }
 }
 

@@ -2739,7 +2739,8 @@ async fn test_staff_roles_reach_other_accounts_orders_and_profiles() {
         admin_api_call(&app, &token, Method::GET, &profile, None)
             .await
             .0,
-        401
+        403,
+        "signed in but not allowed: 403, not 401 (which apps read as a lost session)"
     );
 
     let role =
@@ -3841,7 +3842,7 @@ async fn test_customer_email_language() {
             .send()
     };
     let by_header = format!("lang_{}@example.com", Uuid::new_v4());
-    let response = register(&by_header, None, "de-DE;q=0.9, nl-BE;q=0.8")
+    let response = register(&by_header, None, "ja-JP;q=0.9, nl-BE;q=0.8")
         .await
         .unwrap();
     assert_eq!(response.status(), 201);
@@ -4095,7 +4096,7 @@ async fn test_staff_product_and_customer_lists() {
         .any(|c| c["email"] == customer.email));
     assert_eq!(found["meta"]["per_page"], 5);
     let (status, _) = call_json(&app, &customer_token, "/customers?q=a", None).await;
-    assert!(status == 401 || status == 403, "{status}");
+    assert_eq!(status, 403, "signed in but not staff");
     app.cleanup().await.ok();
 }
 

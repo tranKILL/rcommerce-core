@@ -1084,9 +1084,15 @@ pub(crate) async fn send_order_confirmation_email(
         branding,
     };
 
-    let notification =
+    let mut notification =
         rcommerce_core::notification::EmailNotificationFactory::order_confirmation(params)?;
-
+    super::email_helpers::attach_order_pdf(
+        &mut notification,
+        invoice_order.as_ref(),
+        branding,
+        &locale,
+        order_id,
+    );
     notification_service.send(&notification).await?;
     Ok(())
 }

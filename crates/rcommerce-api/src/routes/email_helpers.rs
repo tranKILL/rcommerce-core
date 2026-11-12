@@ -77,6 +77,38 @@ pub async fn order_email_locale(pool: &sqlx::PgPool, order_id: Uuid, default: &s
     i18n::pick_locale([placed.as_deref(), preferred.as_deref(), Some(default)])
 }
 
+/// Attach the order's PDF (invoice, or order summary when the store issues
+/// legal invoices) in `locale`; the e-mail still goes out when the PDF fails
+pub fn attach_order_pdf(
+    notification: &mut rcommerce_core::notification::Notification,
+    order: Option<&(
+        rcommerce_core::models::Order,
+        Vec<rcommerce_core::order::OrderItem>,
+    )>,
+    branding: &rcommerce_core::BrandingConfig,
+    locale: &str,
+    order_id: Uuid,
+) {
+    let Some((order, items)) = order else {
+        warn!("Failed to load order {} for its PDF attachment", order_id);
+        return;
+    };
+    let data = super::invoice::invoice_data_from_order(order, items, branding, locale);
+    match rcommerce_core::invoice::generate_invoice_pdf(&data) {
+        Ok(pdf) => notification
+            .attachments
+            .push(rcommerce_core::notification::EmailAttachment {
+                filename: data.file_name(),
+                content_type: "application/pdf".to_string(),
+                content: pdf,
+            }),
+        Err(e) => warn!(
+            "Failed to generate the PDF of order {}: {}",
+            order.order_number, e
+        ),
+    }
+}
+
 /// Shop operator address (configured notification sender), falling back to
 /// the store's branding support email
 pub fn shop_email(state: &AppState) -> String {
@@ -521,7 +553,8 @@ pub fn build_admin_order_notification(
             .map(|c| i18n::text(&locale, "common", "discount_code").replace("{code}", c))
             .unwrap_or_else(|| i18n::text(&locale, "common", "discount"));
         let discount_row = format!(
-            "<tr><td style=\"padding:4px 0;font-size:13px;color:#666666;\">{label}</td><td align=\"right\" style=\"padding:4px 0;font-size:13px;color:#059669;\">-{}</td></tr>",
+            "<tr><td style=\"padding:4px 0;font-size:13px;color:#666666;\">{}</td><td align=\"right\" style=\"padding:4px 0;font-size:13px;color:#059669;\">-{}</td></tr>",
+            rcommerce_core::notification::templates::escape_html(&label),
             money(order.discount_total)
         );
         vars.insert("discount_row", discount_row);

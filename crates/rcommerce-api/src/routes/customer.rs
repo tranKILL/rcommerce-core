@@ -25,7 +25,7 @@ pub async fn list_customers(
     Query(query): Query<super::staff_lists::CustomerQuery>,
 ) -> Result<Json<serde_json::Value>, Error> {
     if !staff_can(&state, &auth, Resource::Customers, Action::Read).await {
-        return Err(Error::unauthorized("Admin access required"));
+        return Err(Error::forbidden("Admin access required"));
     }
     Ok(Json(
         super::staff_lists::customer_page(&state, &query).await?,
@@ -142,7 +142,7 @@ pub async fn get_customer(
     // Users can only access their own profile; admins and customers:read staff any
     if auth.customer_id != id && !staff_can(&state, &auth, Resource::Customers, Action::Read).await
     {
-        return Err(Error::unauthorized("Access denied"));
+        return Err(Error::forbidden("Access denied"));
     }
 
     let customer_data = state.customer_service.get_customer(id).await?;

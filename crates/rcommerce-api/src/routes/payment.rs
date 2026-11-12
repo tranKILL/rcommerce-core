@@ -1908,36 +1908,13 @@ async fn send_order_confirmation_email(
     };
 
     let mut notification = EmailNotificationFactory::order_confirmation(params)?;
-
-    // Attach the invoice PDF; never block the confirmation email on PDF failure.
-    if let Some((order, items)) = invoice_order {
-        let invoice_data =
-            super::invoice::invoice_data_from_order(&order, &items, branding, &locale);
-        match rcommerce_core::invoice::generate_invoice_pdf(&invoice_data) {
-            Ok(pdf) => {
-                notification
-                    .attachments
-                    .push(rcommerce_core::notification::EmailAttachment {
-                        filename: invoice_data.file_name(),
-                        content_type: "application/pdf".to_string(),
-                        content: pdf,
-                    });
-            }
-            Err(e) => {
-                tracing::error!(
-                    "Failed to generate invoice PDF for order {}: {}",
-                    order.order_number,
-                    e
-                );
-            }
-        }
-    } else {
-        tracing::error!(
-            "Failed to load order {} for invoice PDF attachment",
-            order_id
-        );
-    }
-
+    super::email_helpers::attach_order_pdf(
+        &mut notification,
+        invoice_order.as_ref(),
+        branding,
+        &locale,
+        order_id,
+    );
     notification_service.send(&notification).await?;
     Ok(())
 }
