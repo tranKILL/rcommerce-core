@@ -71,123 +71,51 @@ impl PostgresProductRepository {
         Ok(product)
     }
 
+    /// Update the fields `request` carries; a nullable field sent as `null`
+    /// is cleared
     pub async fn update_with_request(
         &self,
         id: Uuid,
         request: UpdateProductRequest,
     ) -> Result<Product> {
-        let mut sets = Vec::new();
-        let mut param_count = 0;
-
-        // Track which fields are present
-        let has_title = request.title.is_some();
-        let has_slug = request.slug.is_some();
-        let has_description = request.description.is_some();
-        let has_sku = request.sku.is_some();
-        let has_price = request.price.is_some();
-        let has_compare_at_price = request.compare_at_price.is_some();
-        let has_is_active = request.is_active.is_some();
-        let has_weight = request.weight.is_some();
-        let has_weight_unit = request.weight_unit.is_some();
-        let has_inventory_quantity = request.inventory_quantity.is_some();
-        let has_gtin = request.gtin.is_some();
-
-        if has_title {
-            param_count += 1;
-            sets.push(format!("title = ${}", param_count));
+        let mut query: QueryBuilder<Postgres> =
+            QueryBuilder::new("UPDATE products SET updated_at = NOW()");
+        let mut fields = 0;
+        macro_rules! set {
+            ($column:literal, $value:expr) => {
+                if let Some(value) = $value {
+                    query.push(concat!(", ", $column, " = ")).push_bind(value);
+                    fields += 1;
+                }
+            };
         }
-        if has_slug {
-            param_count += 1;
-            sets.push(format!("slug = ${}", param_count));
-        }
-        if has_description {
-            param_count += 1;
-            sets.push(format!("description = ${}", param_count));
-        }
-        if has_sku {
-            param_count += 1;
-            sets.push(format!("sku = ${}", param_count));
-        }
-        if has_gtin {
-            param_count += 1;
-            sets.push(format!("gtin = ${}", param_count));
-        }
-        if has_price {
-            param_count += 1;
-            sets.push(format!("price = ${}", param_count));
-        }
-        if has_compare_at_price {
-            param_count += 1;
-            sets.push(format!("compare_at_price = ${}", param_count));
-        }
-        if has_is_active {
-            param_count += 1;
-            sets.push(format!("is_active = ${}", param_count));
-        }
-        if has_weight {
-            param_count += 1;
-            sets.push(format!("weight = ${}", param_count));
-        }
-        if has_weight_unit {
-            param_count += 1;
-            sets.push(format!("weight_unit = ${}", param_count));
-        }
-        if has_inventory_quantity {
-            param_count += 1;
-            sets.push(format!("inventory_quantity = ${}", param_count));
-        }
-
-        if sets.is_empty() {
+        set!("title", request.title);
+        set!("slug", request.slug);
+        set!("description", request.description);
+        set!("sku", request.sku);
+        set!("gtin", request.gtin);
+        set!("price", request.price);
+        set!("compare_at_price", request.compare_at_price);
+        set!("cost_price", request.cost_price);
+        set!("is_active", request.is_active);
+        set!("is_featured", request.is_featured);
+        set!("requires_shipping", request.requires_shipping);
+        set!("weight", request.weight);
+        set!("weight_unit", request.weight_unit);
+        set!("inventory_quantity", request.inventory_quantity);
+        set!("seo_title", request.seo_title);
+        set!("seo_description", request.seo_description);
+        if fields == 0 {
             return Err(crate::Error::Validation("No fields to update".to_string()));
         }
-
-        let id_idx = param_count + 1;
-        let query = format!(
-            "UPDATE products SET {}, updated_at = NOW() WHERE id = ${} RETURNING *",
-            sets.join(", "),
-            id_idx
-        );
-
-        // Build query with explicit binds
-        let mut query_builder = sqlx::query_as::<_, Product>(&query);
-
-        if let Some(title) = request.title {
-            query_builder = query_builder.bind(title);
-        }
-        if let Some(slug) = request.slug {
-            query_builder = query_builder.bind(slug);
-        }
-        if let Some(description) = request.description {
-            query_builder = query_builder.bind(description);
-        }
-        if let Some(sku) = request.sku {
-            query_builder = query_builder.bind(sku);
-        }
-        if let Some(gtin) = request.gtin {
-            query_builder = query_builder.bind(gtin);
-        }
-        if let Some(price) = request.price {
-            query_builder = query_builder.bind(price);
-        }
-        if let Some(compare_at_price) = request.compare_at_price {
-            query_builder = query_builder.bind(compare_at_price);
-        }
-        if let Some(is_active) = request.is_active {
-            query_builder = query_builder.bind(is_active);
-        }
-        if let Some(weight) = request.weight {
-            query_builder = query_builder.bind(weight);
-        }
-        if let Some(weight_unit) = request.weight_unit {
-            query_builder = query_builder.bind(weight_unit);
-        }
-        if let Some(inventory_quantity) = request.inventory_quantity {
-            query_builder = query_builder.bind(inventory_quantity);
-        }
-        query_builder = query_builder.bind(id);
-
-        let product = query_builder.fetch_one(self.db.pool()).await?;
-
+        query
+            .push(" WHERE id = ")
+            .push_bind(id)
+            .push(" RETURNING *");
+        let product = query
+            .build_query_as::<Product>()
+            .fetch_one(self.db.pool())
+            .await?;
         Ok(product)
     }
 

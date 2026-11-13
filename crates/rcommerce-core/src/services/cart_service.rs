@@ -134,6 +134,7 @@ impl CartService {
             shipping_method: None,
             notes: None,
             promotions: Default::default(),
+            catalogue_promotions: Default::default(),
             loyalty_points: 0,
             created_at: Utc::now(),
             updated_at: Utc::now(),

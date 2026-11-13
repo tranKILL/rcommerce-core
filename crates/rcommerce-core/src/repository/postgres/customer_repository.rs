@@ -177,6 +177,8 @@ impl PostgresCustomerRepository {
         customer_id: Uuid,
         address: crate::models::Address,
     ) -> Result<crate::models::Address> {
+        let mut tx = self.db.pool().begin().await?;
+        clear_other_defaults(&mut tx, customer_id, None, &address).await?;
         let created = sqlx::query_as::<_, crate::models::Address>(
             r#"
             INSERT INTO addresses (
@@ -201,8 +203,9 @@ impl PostgresCustomerRepository {
         .bind(address.zip)
         .bind(address.is_default_shipping)
         .bind(address.is_default_billing)
-        .fetch_one(self.db.pool())
+        .fetch_one(&mut *tx)
         .await?;
+        tx.commit().await?;
 
         Ok(created)
     }
@@ -212,6 +215,8 @@ impl PostgresCustomerRepository {
         customer_id: Uuid,
         address: crate::models::Address,
     ) -> Result<crate::models::Address> {
+        let mut tx = self.db.pool().begin().await?;
+        clear_other_defaults(&mut tx, customer_id, Some(address.id), &address).await?;
         let updated = sqlx::query_as::<_, crate::models::Address>(
             r#"
             UPDATE addresses SET
@@ -246,8 +251,9 @@ impl PostgresCustomerRepository {
         .bind(address.is_default_billing)
         .bind(address.id)
         .bind(customer_id)
-        .fetch_one(self.db.pool())
+        .fetch_one(&mut *tx)
         .await?;
+        tx.commit().await?;
 
         Ok(updated)
     }
@@ -261,6 +267,33 @@ impl PostgresCustomerRepository {
 
         Ok(result.rows_affected() > 0)
     }
+}
+
+/// A customer has one default delivery address and one default billing
+/// address: making `address` a default takes that flag off their other
+/// addresses (`keep`: the address being saved)
+async fn clear_other_defaults(
+    conn: &mut sqlx::PgConnection,
+    customer_id: Uuid,
+    keep: Option<Uuid>,
+    address: &crate::models::Address,
+) -> Result<()> {
+    if !address.is_default_shipping && !address.is_default_billing {
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE addresses SET is_default_shipping = is_default_shipping AND NOT $3, \
+             is_default_billing = is_default_billing AND NOT $4, updated_at = NOW() \
+         WHERE customer_id = $1 AND id IS DISTINCT FROM $2 \
+           AND ((is_default_shipping AND $3) OR (is_default_billing AND $4))",
+    )
+    .bind(customer_id)
+    .bind(keep)
+    .bind(address.is_default_shipping)
+    .bind(address.is_default_billing)
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 #[async_trait]

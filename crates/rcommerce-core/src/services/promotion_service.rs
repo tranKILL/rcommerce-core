@@ -44,7 +44,13 @@ use crate::{Error, Result};
 /// Kinds that lower a catalogue price
 pub const CATALOGUE_KINDS: [&str; 3] = ["percent_off", "amount_off", "fixed_price"];
 /// Kinds that act on the cart
-pub const CART_KINDS: [&str; 4] = ["buy_x_get_y", "spend_tiers", "free_delivery", "gift"];
+pub const CART_KINDS: [&str; 5] = [
+    "buy_x_get_y",
+    "spend_tiers",
+    "order_amount_off",
+    "free_delivery",
+    "gift",
+];
 
 /// A spending tier: `percent` off from `min_amount`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,7 +92,9 @@ pub struct Promotion {
 }
 
 /// A decimal that may be absent, sent as a JSON number or as text
-pub(crate) fn optional_number<'de, D>(deserializer: D) -> std::result::Result<Option<Decimal>, D::Error>
+pub(crate) fn optional_number<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Decimal>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -158,7 +166,9 @@ fn invalid(message: &str) -> Error {
 fn check_percent(value: Option<Decimal>) -> Result<()> {
     match value {
         Some(v) if v > Decimal::ZERO && v <= Decimal::ONE_HUNDRED => Ok(()),
-        _ => Err(invalid("value must be a percentage above 0 and at most 100")),
+        _ => Err(invalid(
+            "value must be a percentage above 0 and at most 100",
+        )),
     }
 }
 
@@ -177,11 +187,14 @@ fn check_kind(p: &NewPromotion) -> Result<()> {
             _ => Err(invalid("buy_quantity and get_quantity must be at least 1")),
         },
         "spend_tiers" => check_tiers(p.tiers.as_deref()),
+        "order_amount_off" if at_least(p.value, Decimal::new(1, 2)) => Ok(()),
+        "order_amount_off" => Err(invalid("value must be an amount of at least 0.01")),
         "free_delivery" => Ok(()),
         "gift" if p.gift_product_id.is_some() && p.gift_quantity >= 1 => Ok(()),
         "gift" => Err(invalid("gift needs gift_product_id and a gift_quantity of at least 1")),
         _ => Err(invalid(
-            "kind must be percent_off, amount_off, fixed_price, buy_x_get_y, spend_tiers, free_delivery or gift",
+            "kind must be percent_off, amount_off, fixed_price, buy_x_get_y, spend_tiers, order_amount_off, \
+             free_delivery or gift",
         )),
     }
 }
@@ -340,7 +353,15 @@ pub fn catalogue_price<'a>(
     let candidates: Vec<&Promotion> = promotions
         .iter()
         .filter(|p| CATALOGUE_KINDS.contains(&p.kind.as_str()))
-        .filter(|p| targets(&p.scope, p.target_id, item.product_id, item.variant_id, item.categories))
+        .filter(|p| {
+            targets(
+                &p.scope,
+                p.target_id,
+                item.product_id,
+                item.variant_id,
+                item.categories,
+            )
+        })
         .filter(|p| conditions_met(p, item.quantity, amount_of(p)))
         .collect();
     let mut options: Vec<(Decimal, Vec<&Promotion>)> = candidates
@@ -348,11 +369,21 @@ pub fn catalogue_price<'a>(
         .filter(|p| !p.combinable)
         .map(|p| (promo_price(p, item.base), vec![*p]))
         .collect();
-    let mut chain: Vec<&Promotion> = candidates.iter().copied().filter(|p| p.combinable).collect();
+    let mut chain: Vec<&Promotion> = candidates
+        .iter()
+        .copied()
+        .filter(|p| p.combinable)
+        .collect();
     if !chain.is_empty() {
         // a fixed price first, then percentages, then amounts off
-        chain.sort_by_key(|p| ["fixed_price", "percent_off", "amount_off"].iter().position(|k| *k == p.kind));
-        let stacked = chain.iter().fold(item.negotiated, |price, p| promo_price(p, price));
+        chain.sort_by_key(|p| {
+            ["fixed_price", "percent_off", "amount_off"]
+                .iter()
+                .position(|k| *k == p.kind)
+        });
+        let stacked = chain
+            .iter()
+            .fold(item.negotiated, |price, p| promo_price(p, price));
         options.push((stacked, chain));
     }
     options
@@ -377,7 +408,11 @@ pub struct Buyer {
 /// The promotions in force now that reach `buyer`: their audience, usage
 /// limits not reached, first-order ones only for a buyer without an order
 pub async fn live_promotions(conn: &mut PgConnection, buyer: &Buyer) -> Result<Vec<Promotion>> {
-    let audiences: &[&str] = if buyer.pro { &["pro", "both"] } else { &["customer", "both"] };
+    let audiences: &[&str] = if buyer.pro {
+        &["pro", "both"]
+    } else {
+        &["customer", "both"]
+    };
     let known = "($2::uuid IS NOT NULL OR $3::text IS NOT NULL)";
     let same = "(x.customer_id = $2 OR (x.{email} IS NOT NULL AND lower(x.{email}) = lower($3)))";
     let sql = format!(
@@ -397,28 +432,6 @@ pub async fn live_promotions(conn: &mut PgConnection, buyer: &Buyer) -> Result<V
         .bind(&buyer.email)
         .fetch_all(conn)
         .await?)
-}
-
-/// Record that an order used promotions (for usage limits)
-pub async fn record_uses(
-    conn: &mut PgConnection,
-    order_id: Uuid,
-    customer_id: Option<Uuid>,
-    email: &str,
-    promotions: &[Uuid],
-) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO promotion_uses (promotion_id, order_id, customer_id, email) \
-         SELECT p, $2, $3, $4 FROM UNNEST($1::uuid[]) p \
-         WHERE EXISTS (SELECT 1 FROM promotions WHERE id = p) ON CONFLICT DO NOTHING",
-    )
-    .bind(promotions)
-    .bind(order_id)
-    .bind(customer_id)
-    .bind(email)
-    .execute(conn)
-    .await?;
-    Ok(())
 }
 
 /// A cancelled or refunded order gives its promotion uses back
@@ -531,7 +544,17 @@ pub async fn product_offers(
     let started: Vec<(Uuid, Option<Uuid>, DateTime<Utc>)> = found
         .iter()
         .filter(|(_, o)| o.price.is_some())
-        .map(|(id, o)| (*id, None, o.promotions.iter().filter_map(|p| p.starts_at).max().unwrap_or_else(Utc::now)))
+        .map(|(id, o)| {
+            (
+                *id,
+                None,
+                o.promotions
+                    .iter()
+                    .filter_map(|p| p.starts_at)
+                    .max()
+                    .unwrap_or_else(Utc::now),
+            )
+        })
         .collect();
     let references = reference_prices(&mut *conn, &started).await?;
     for (product, offers) in found.iter_mut() {
@@ -541,8 +564,20 @@ pub async fn product_offers(
 }
 
 /// One product's reduced price and offers among `promotions`
-fn offers_for(promotions: &[Promotion], product: Uuid, categories: &HashSet<Uuid>, base: Decimal) -> ProductOffers {
-    let item = CatalogueItem { product_id: product, variant_id: None, categories, quantity: 1, base, negotiated: base };
+fn offers_for(
+    promotions: &[Promotion],
+    product: Uuid,
+    categories: &HashSet<Uuid>,
+    base: Decimal,
+) -> ProductOffers {
+    let item = CatalogueItem {
+        product_id: product,
+        variant_id: None,
+        categories,
+        quantity: 1,
+        base,
+        negotiated: base,
+    };
     let mut result = ProductOffers::default();
     if let Some((price, used)) = catalogue_price(promotions, &item, None) {
         result.price = Some(price);
@@ -611,22 +646,36 @@ impl CartOutcome {
 }
 
 /// The lines `p` targets and may be added to
-fn eligible<'a>(p: &'a Promotion, lines: &'a [CartLineView]) -> impl Iterator<Item = &'a CartLineView> {
+fn eligible<'a>(
+    p: &'a Promotion,
+    lines: &'a [CartLineView],
+) -> impl Iterator<Item = &'a CartLineView> {
     lines.iter().filter(move |l| {
-        targets(&p.scope, p.target_id, l.product_id, l.variant_id, &l.categories)
-            && can_add(p, &l.promotions)
+        targets(
+            &p.scope,
+            p.target_id,
+            l.product_id,
+            l.variant_id,
+            &l.categories,
+        ) && can_add(p, &l.promotions)
     })
 }
 
 /// What a line still costs after the discounts so far
 fn left(line: &CartLineView, out: &CartOutcome) -> Decimal {
     line.unit_price * Decimal::from(line.quantity)
-        - out.line_discounts.get(&line.id).copied().unwrap_or_default()
+        - out
+            .line_discounts
+            .get(&line.id)
+            .copied()
+            .unwrap_or_default()
 }
 
 /// Amount and quantity of the lines `p` may apply to
 fn eligible_totals(p: &Promotion, lines: &[CartLineView], out: &CartOutcome) -> (Decimal, i32) {
-    eligible(p, lines).fold((Decimal::ZERO, 0), |(a, q), l| (a + left(l, out), q + l.quantity))
+    eligible(p, lines).fold((Decimal::ZERO, 0), |(a, q), l| {
+        (a + left(l, out), q + l.quantity)
+    })
 }
 
 /// What buy X get Y saves on a line
@@ -644,7 +693,13 @@ fn mark(lines: &mut [CartLineView], line: Uuid, p: &Promotion) {
 }
 
 fn applied(p: &Promotion, discount: Decimal) -> CartPromotion {
-    CartPromotion { id: p.id, name: p.name.clone(), kind: p.kind.clone(), discount, points: None }
+    CartPromotion {
+        id: p.id,
+        name: p.name.clone(),
+        kind: p.kind.clone(),
+        discount,
+        points: None,
+    }
 }
 
 /// The best buy X get Y on each line
@@ -666,19 +721,35 @@ fn apply_buy_x_get_y(promotions: &[&Promotion], lines: &mut [CartLineView], out:
         mark(lines, line, p);
         by_promotion.entry(p.id).or_insert((Decimal::ZERO, p)).0 += saved;
     }
-    let mut found: Vec<CartPromotion> = by_promotion.into_values().map(|(s, p)| applied(p, s)).collect();
+    let mut found: Vec<CartPromotion> = by_promotion
+        .into_values()
+        .map(|(s, p)| applied(p, s))
+        .collect();
     found.sort_by_key(|c| c.id);
     out.applied.extend(found);
 }
 
 /// The discount of the best tier `p` reaches, with the amount it is taken from
-fn tier_discount(p: &Promotion, lines: &[CartLineView], out: &CartOutcome) -> Option<(Decimal, Decimal)> {
+fn tier_discount(
+    p: &Promotion,
+    lines: &[CartLineView],
+    out: &CartOutcome,
+) -> Option<(Decimal, Decimal)> {
     let (amount, quantity) = eligible_totals(p, lines, out);
     if amount <= Decimal::ZERO || !conditions_met(p, quantity, Some(amount)) {
         return None;
     }
-    let percent = p.tiers.as_ref()?.iter().filter(|t| t.min_amount <= amount).map(|t| t.percent).max()?;
-    Some((amount, (amount * percent / Decimal::ONE_HUNDRED).round_dp(2)))
+    let percent = p
+        .tiers
+        .as_ref()?
+        .iter()
+        .filter(|t| t.min_amount <= amount)
+        .map(|t| t.percent)
+        .max()?;
+    Some((
+        amount,
+        (amount * percent / Decimal::ONE_HUNDRED).round_dp(2),
+    ))
 }
 
 /// The best spending tier among spend_tiers promotions, spread over its lines
@@ -691,20 +762,62 @@ fn apply_spend_tiers(promotions: &[&Promotion], lines: &mut [CartLineView], out:
     let Some((p, amount, discount)) = best else {
         return;
     };
+    spread(p, discount, amount, lines, out);
+    out.applied.push(applied(p, discount));
+}
+
+/// Spread `discount` over `p`'s lines by what they still cost (`amount` in all)
+fn spread(
+    p: &Promotion,
+    discount: Decimal,
+    amount: Decimal,
+    lines: &mut [CartLineView],
+    out: &mut CartOutcome,
+) {
     let shares: Vec<(Uuid, Decimal)> = eligible(p, lines).map(|l| (l.id, left(l, out))).collect();
     let mut rest = discount;
     for (i, (line, cost)) in shares.iter().enumerate() {
-        let share = if i + 1 == shares.len() { rest } else { (discount * cost / amount).round_dp(2) };
+        let share = if i + 1 == shares.len() {
+            rest
+        } else {
+            (discount * cost / amount).round_dp(2)
+        };
         rest -= share;
         *out.line_discounts.entry(*line).or_default() += share;
         mark(lines, *line, p);
     }
-    out.applied.push(applied(p, discount));
+}
+
+/// Fixed amounts off the order, once each, largest first: each on the lines
+/// it may still apply to, never more than they cost
+fn apply_order_amounts(
+    promotions: &[&Promotion],
+    lines: &mut [CartLineView],
+    out: &mut CartOutcome,
+) {
+    let mut amounts: Vec<&Promotion> = promotions
+        .iter()
+        .copied()
+        .filter(|p| p.kind == "order_amount_off")
+        .collect();
+    amounts.sort_by_key(|p| std::cmp::Reverse(p.value));
+    for p in amounts {
+        let (amount, quantity) = eligible_totals(p, lines, out);
+        if amount <= Decimal::ZERO || !conditions_met(p, quantity, Some(amount)) {
+            continue;
+        }
+        let discount = p.value.unwrap_or_default().min(amount);
+        spread(p, discount, amount, lines, out);
+        out.applied.push(applied(p, discount));
+    }
 }
 
 /// Free delivery and gifts once their conditions hold
 fn apply_thresholds(promotions: &[&Promotion], lines: &[CartLineView], out: &mut CartOutcome) {
-    for p in promotions.iter().filter(|p| matches!(p.kind.as_str(), "free_delivery" | "gift")) {
+    for p in promotions
+        .iter()
+        .filter(|p| matches!(p.kind.as_str(), "free_delivery" | "gift"))
+    {
         let (amount, quantity) = eligible_totals(p, lines, out);
         if quantity == 0 || !conditions_met(p, quantity, Some(amount)) {
             continue;
@@ -720,7 +833,7 @@ fn apply_thresholds(promotions: &[&Promotion], lines: &[CartLineView], out: &mut
 
 /// What the cart promotions among `promotions` do to `lines` (gift lines
 /// excluded by the caller): buy X get Y first, then spending tiers on what is
-/// left, then free delivery and gifts
+/// left, then fixed amounts off the order, then free delivery and gifts
 pub fn evaluate_cart(promotions: &[Promotion], lines: &[CartLineView]) -> CartOutcome {
     let cart: Vec<&Promotion> = promotions
         .iter()
@@ -730,6 +843,7 @@ pub fn evaluate_cart(promotions: &[Promotion], lines: &[CartLineView]) -> CartOu
     let mut out = CartOutcome::default();
     apply_buy_x_get_y(&cart, &mut lines, &mut out);
     apply_spend_tiers(&cart, &mut lines, &mut out);
+    apply_order_amounts(&cart, &mut lines, &mut out);
     apply_thresholds(&cart, &lines, &mut out);
     out
 }
@@ -792,7 +906,10 @@ impl PromotionService {
     pub async fn list(&self, query: &PromotionQuery) -> Result<(Vec<PromotionWithUses>, i64)> {
         let per_page = query.per_page.unwrap_or(50).clamp(1, 100);
         let page = query.page.unwrap_or(1).max(1);
-        let q = query.q.as_deref().map(|q| format!("%{}%", q.trim().replace(['%', '_'], "")));
+        let q = query
+            .q
+            .as_deref()
+            .map(|q| format!("%{}%", q.trim().replace(['%', '_'], "")));
         let filter = format!(
             "WHERE ($1::text IS NULL OR p.name ILIKE $1) AND ($2::text IS NULL OR p.kind = $2) AND {}",
             state_filter(query.state.as_deref())?
@@ -924,7 +1041,11 @@ mod tests {
     }
 
     fn valued(kind: &str, value: Decimal, combinable: bool) -> Promotion {
-        Promotion { value: Some(value), combinable, ..promotion(kind) }
+        Promotion {
+            value: Some(value),
+            combinable,
+            ..promotion(kind)
+        }
     }
 
     fn line(quantity: i32, unit_price: Decimal) -> CartLineView {
@@ -939,8 +1060,20 @@ mod tests {
         }
     }
 
-    fn item(categories: &HashSet<Uuid>, quantity: i32, base: Decimal, negotiated: Decimal) -> CatalogueItem<'_> {
-        CatalogueItem { product_id: Uuid::new_v4(), variant_id: None, categories, quantity, base, negotiated }
+    fn item(
+        categories: &HashSet<Uuid>,
+        quantity: i32,
+        base: Decimal,
+        negotiated: Decimal,
+    ) -> CatalogueItem<'_> {
+        CatalogueItem {
+            product_id: Uuid::new_v4(),
+            variant_id: None,
+            categories,
+            quantity,
+            base,
+            negotiated,
+        }
     }
 
     #[test]
@@ -949,13 +1082,23 @@ mod tests {
         let ten = valued("percent_off", dec!(10), false);
         let five = valued("amount_off", dec!(5), false);
         let all = [ten.clone(), five.clone()];
-        let (price, used) = catalogue_price(&all, &item(&none, 1, dec!(64), dec!(64)), None).unwrap();
-        assert_eq!((price, used[0].id), (dec!(57.60), ten.id), "not added up: the best one");
-        let stack = [valued("percent_off", dec!(10), true), valued("amount_off", dec!(5), true)];
-        let (price, used) = catalogue_price(&stack, &item(&none, 1, dec!(64), dec!(64)), None).unwrap();
+        let (price, used) =
+            catalogue_price(&all, &item(&none, 1, dec!(64), dec!(64)), None).unwrap();
+        assert_eq!(
+            (price, used[0].id),
+            (dec!(57.60), ten.id),
+            "not added up: the best one"
+        );
+        let stack = [
+            valued("percent_off", dec!(10), true),
+            valued("amount_off", dec!(5), true),
+        ];
+        let (price, used) =
+            catalogue_price(&stack, &item(&none, 1, dec!(64), dec!(64)), None).unwrap();
         assert_eq!((price, used.len()), (dec!(52.60), 2), "-10 % then -5 €");
         // combinable ones stack on a negotiated price; a lower negotiated price wins
-        let (price, _) = catalogue_price(&stack, &item(&none, 1, dec!(64), dec!(60)), None).unwrap();
+        let (price, _) =
+            catalogue_price(&stack, &item(&none, 1, dec!(64), dec!(60)), None).unwrap();
         assert_eq!(price, dec!(49));
         assert!(catalogue_price(&all, &item(&none, 1, dec!(64), dec!(50)), None).is_none());
     }
@@ -972,7 +1115,8 @@ mod tests {
         let (price, _) = catalogue_price(&all, &item(&none, 3, dec!(10), dec!(10)), None).unwrap();
         assert_eq!(price, dec!(9), "the amount is unknown on a listing");
         let amounts = HashMap::from([(from_100.id, dec!(120))]);
-        let (price, _) = catalogue_price(&all, &item(&none, 3, dec!(10), dec!(10)), Some(&amounts)).unwrap();
+        let (price, _) =
+            catalogue_price(&all, &item(&none, 3, dec!(10), dec!(10)), Some(&amounts)).unwrap();
         assert_eq!(price, dec!(8), "in a cart of 120 €");
     }
 
@@ -980,42 +1124,76 @@ mod tests {
     fn buy_x_get_y_frees_whole_groups_only() {
         let mut three_plus_one = promotion("buy_x_get_y");
         (three_plus_one.buy_quantity, three_plus_one.get_quantity) = (Some(3), Some(1));
-        assert_eq!(buy_x_get_y_discount(&three_plus_one, &line(7, dec!(10))), dec!(10));
-        assert_eq!(buy_x_get_y_discount(&three_plus_one, &line(8, dec!(10))), dec!(20));
+        assert_eq!(
+            buy_x_get_y_discount(&three_plus_one, &line(7, dec!(10))),
+            dec!(10)
+        );
+        assert_eq!(
+            buy_x_get_y_discount(&three_plus_one, &line(8, dec!(10))),
+            dec!(20)
+        );
         let mut second_half = promotion("buy_x_get_y");
-        (second_half.buy_quantity, second_half.get_quantity, second_half.value) =
-            (Some(1), Some(1), Some(dec!(50)));
-        assert_eq!(buy_x_get_y_discount(&second_half, &line(3, dec!(8))), dec!(4));
+        (
+            second_half.buy_quantity,
+            second_half.get_quantity,
+            second_half.value,
+        ) = (Some(1), Some(1), Some(dec!(50)));
+        assert_eq!(
+            buy_x_get_y_discount(&second_half, &line(3, dec!(8))),
+            dec!(4)
+        );
     }
 
     #[test]
     fn cart_promotions_add_up_only_when_combinable() {
         let tiers = Some(Json(vec![
-            SpendTier { min_amount: dec!(50), percent: dec!(5) },
-            SpendTier { min_amount: dec!(100), percent: dec!(10) },
+            SpendTier {
+                min_amount: dec!(50),
+                percent: dec!(5),
+            },
+            SpendTier {
+                min_amount: dec!(100),
+                percent: dec!(10),
+            },
         ]));
         let mut one_plus_one = promotion("buy_x_get_y");
         (one_plus_one.buy_quantity, one_plus_one.get_quantity) = (Some(1), Some(1));
         let lines = [line(2, dec!(60))];
         // not combinable: the tier skips the line buy X get Y took
-        let spend = Promotion { tiers: tiers.clone(), ..promotion("spend_tiers") };
+        let spend = Promotion {
+            tiers: tiers.clone(),
+            ..promotion("spend_tiers")
+        };
         let out = evaluate_cart(&[spend, one_plus_one.clone()], &lines);
         assert_eq!(out.discount(), dec!(60));
         // both combinable: 120 - 60 free = 60 left, the 5 % tier
-        let spend = Promotion { tiers, combinable: true, ..promotion("spend_tiers") };
-        let one_plus_one = Promotion { combinable: true, ..one_plus_one };
+        let spend = Promotion {
+            tiers,
+            combinable: true,
+            ..promotion("spend_tiers")
+        };
+        let one_plus_one = Promotion {
+            combinable: true,
+            ..one_plus_one
+        };
         let out = evaluate_cart(&[spend, one_plus_one], &lines);
         assert_eq!(out.discount(), dec!(63));
         // a line priced by a non-combinable catalogue promotion takes nothing more
         let mut reduced = line(2, dec!(60));
         reduced.promotions.push((Uuid::new_v4(), false));
-        let gift = Promotion { gift_product_id: Some(Uuid::new_v4()), ..promotion("gift") };
+        let gift = Promotion {
+            gift_product_id: Some(Uuid::new_v4()),
+            ..promotion("gift")
+        };
         assert!(evaluate_cart(&[gift], &[reduced]).gifts.is_empty());
     }
 
     #[test]
     fn thresholds_unlock_free_delivery_and_gifts() {
-        let delivery = Promotion { min_amount: Some(dec!(80)), ..promotion("free_delivery") };
+        let delivery = Promotion {
+            min_amount: Some(dec!(80)),
+            ..promotion("free_delivery")
+        };
         assert!(!evaluate_cart(&[delivery.clone()], &[line(1, dec!(50))]).free_delivery);
         let out = evaluate_cart(&[delivery], &[line(2, dec!(50))]);
         assert!(out.free_delivery && out.applied.len() == 1);
@@ -1026,7 +1204,10 @@ mod tests {
             gift_quantity: 2,
             ..promotion("gift")
         };
-        assert_eq!(evaluate_cart(&[gift], &[line(12, dec!(1))]).gifts[0].1, gift_product);
+        assert_eq!(
+            evaluate_cart(&[gift], &[line(12, dec!(1))]).gifts[0].1,
+            gift_product
+        );
     }
 
     #[test]
@@ -1054,13 +1235,38 @@ mod tests {
             is_active: true,
         };
         assert!(check(&new("percent_off")).is_err());
-        assert!(check(&NewPromotion { value: Some(dec!(20)), ..new("percent_off") }).is_ok());
-        assert!(check(&NewPromotion { value: Some(dec!(120)), ..new("percent_off") }).is_err());
-        let two_plus_one = NewPromotion { buy_quantity: Some(2), get_quantity: Some(1), ..new("buy_x_get_y") };
+        assert!(check(&NewPromotion {
+            value: Some(dec!(20)),
+            ..new("percent_off")
+        })
+        .is_ok());
+        assert!(check(&NewPromotion {
+            value: Some(dec!(120)),
+            ..new("percent_off")
+        })
+        .is_err());
+        let two_plus_one = NewPromotion {
+            buy_quantity: Some(2),
+            get_quantity: Some(1),
+            ..new("buy_x_get_y")
+        };
         assert!(check(&two_plus_one).is_ok());
-        assert!(check(&NewPromotion { scope: "product".into(), ..new("free_delivery") }).is_err());
-        assert!(check(&NewPromotion { audience: "vip".into(), value: Some(dec!(5)), ..new("amount_off") }).is_err());
-        assert!(check(&NewPromotion { max_uses: Some(0), ..new("free_delivery") }).is_err());
+        assert!(check(&NewPromotion {
+            scope: "product".into(),
+            ..new("free_delivery")
+        })
+        .is_err());
+        assert!(check(&NewPromotion {
+            audience: "vip".into(),
+            value: Some(dec!(5)),
+            ..new("amount_off")
+        })
+        .is_err());
+        assert!(check(&NewPromotion {
+            max_uses: Some(0),
+            ..new("free_delivery")
+        })
+        .is_err());
         assert!(check(&new("gift")).is_err());
     }
 }

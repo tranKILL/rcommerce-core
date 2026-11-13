@@ -45,7 +45,10 @@ async fn create(
     Ok((axum::http::StatusCode::CREATED, Json(promotion)))
 }
 
-async fn get_one(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<Promotion>, Error> {
+async fn get_one(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Promotion>, Error> {
     Ok(Json(service(&state).get(id).await?))
 }
 
@@ -57,7 +60,10 @@ async fn replace(
     Ok(Json(service(&state).save(Some(id), new).await?))
 }
 
-async fn remove(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<axum::http::StatusCode, Error> {
+async fn remove(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<axum::http::StatusCode, Error> {
     service(&state).delete(id).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
@@ -79,6 +85,9 @@ async fn set_active(
 pub fn admin_router() -> Router<AppState> {
     Router::new()
         .route("/admin/promotions", get(list).post(create))
-        .route("/admin/promotions/:id", get(get_one).put(replace).delete(remove))
+        .route(
+            "/admin/promotions/:id",
+            get(get_one).put(replace).delete(remove),
+        )
         .route("/admin/promotions/:id/active", post(set_active))
 }

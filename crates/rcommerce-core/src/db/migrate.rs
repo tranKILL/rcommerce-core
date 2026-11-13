@@ -289,6 +289,16 @@ impl Migrator {
                 "order_events_loyalty_card",
                 include_str!("../../migrations/038_order_events_loyalty_card.sql"),
             ),
+            (
+                39,
+                "pricing_history",
+                include_str!("../../migrations/039_pricing_history.sql"),
+            ),
+            (
+                40,
+                "promotion_kinds_display",
+                include_str!("../../migrations/040_promotion_kinds_display.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

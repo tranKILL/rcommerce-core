@@ -296,6 +296,16 @@ pub struct CreateProductRequest {
     pub bundle_components: Option<Vec<CreateBundleComponentRequest>>,
 }
 
+/// A field that may be cleared: absent leaves it unchanged (`None`), `null`
+/// clears it (`Some(None)`)
+fn clearable<'de, D, T>(deserializer: D) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 /// Update product request
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct UpdateProductRequest {
@@ -305,15 +315,19 @@ pub struct UpdateProductRequest {
     #[validate(length(min = 1, max = 255))]
     pub slug: Option<String>,
 
+    #[serde(default, deserialize_with = "clearable")]
     pub description: Option<Option<String>>,
 
     #[validate(length(max = 100))]
+    #[serde(default, deserialize_with = "clearable")]
     pub sku: Option<Option<String>>,
 
     pub price: Option<Decimal>,
 
+    #[serde(default, deserialize_with = "clearable")]
     pub compare_at_price: Option<Option<Decimal>>,
 
+    #[serde(default, deserialize_with = "clearable")]
     pub cost_price: Option<Option<Decimal>>,
 
     pub currency: Option<Currency>,
@@ -327,8 +341,10 @@ pub struct UpdateProductRequest {
 
     pub continues_selling_when_out_of_stock: Option<bool>,
 
+    #[serde(default, deserialize_with = "clearable")]
     pub weight: Option<Option<Decimal>>,
 
+    #[serde(default, deserialize_with = "clearable")]
     pub weight_unit: Option<Option<WeightUnit>>,
 
     pub requires_shipping: Option<bool>,
@@ -337,10 +353,13 @@ pub struct UpdateProductRequest {
 
     pub is_featured: Option<bool>,
 
+    #[serde(default, deserialize_with = "clearable")]
     pub seo_title: Option<Option<String>>,
 
+    #[serde(default, deserialize_with = "clearable")]
     pub seo_description: Option<Option<String>>,
 
+    #[serde(default, deserialize_with = "clearable")]
     pub gtin: Option<Option<String>>,
 
     pub product_type: Option<ProductType>,

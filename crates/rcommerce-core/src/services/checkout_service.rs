@@ -31,6 +31,27 @@ fn free_delivery(cart: &Cart) -> bool {
     cart.promotions.0.iter().any(|p| p.kind == "free_delivery")
 }
 
+/// (cart line, order line) pairs: lines matched by product, variant and
+/// quantity in order of appearance
+fn match_order_lines(
+    items: &[CartItem],
+    order_items: &[crate::order::OrderItem],
+) -> Vec<(Uuid, Uuid)> {
+    let mut pairs: Vec<(Uuid, Uuid)> = Vec::new();
+    for cart_item in items {
+        let found = order_items.iter().find(|oi| {
+            !pairs.iter().any(|(_, used)| *used == oi.id)
+                && oi.product_id == cart_item.product_id
+                && oi.variant_id == cart_item.variant_id
+                && oi.quantity == cart_item.quantity
+        });
+        if let Some(oi) = found {
+            pairs.push((cart_item.id, oi.id));
+        }
+    }
+    pairs
+}
+
 /// Checkout service that orchestrates the complete checkout flow
 pub struct CheckoutService {
     cart_service: Arc<CartService>,
@@ -376,7 +397,12 @@ impl CheckoutService {
         // Get available shipping rates
         let package = self.estimate_package(&items).await?;
         let shipping_rates = self
-            .get_shipping_rates(&request.shipping_address, &package, cart.currency, free_delivery(&cart))
+            .get_shipping_rates(
+                &request.shipping_address,
+                &package,
+                cart.currency,
+                free_delivery(&cart),
+            )
             .await?;
 
         // Default to the cheapest available rate (updated when customer selects rate)
@@ -492,7 +518,12 @@ impl CheckoutService {
 
         // Get available shipping rates (server-estimated package, same as initiate)
         let shipping_rates = self
-            .get_shipping_rates(&shipping_address, &package, cart.currency, free_delivery(&cart))
+            .get_shipping_rates(
+                &shipping_address,
+                &package,
+                cart.currency,
+                free_delivery(&cart),
+            )
             .await?;
 
         let summary = CheckoutSummary {
@@ -769,7 +800,8 @@ impl CheckoutService {
         if !cart.promotions.0.is_empty() {
             order_metadata["promotions"] = serde_json::json!(cart.promotions.0);
         }
-        let redeemed = crate::services::promotion_service::CartPromotion::redeemed(&cart.promotions.0);
+        let redeemed =
+            crate::services::promotion_service::CartPromotion::redeemed(&cart.promotions.0);
         if redeemed > 0 {
             order_metadata["loyalty_points"] = serde_json::json!(redeemed);
         }
@@ -822,28 +854,26 @@ impl CheckoutService {
             .order_service
             .create_order(create_order_request)
             .await?;
-        self.record_promotions_and_points(&cart, &items, &order, request.customer_id, &request.customer_email)
-            .await?;
-
-        // Record tax transaction for reporting. The calculation's line item ids
-        // are cart item ids; map them to the real order item ids by matching
-        // product/variant/quantity in order of appearance. Reporting-only: a
-        // failure here must not fail checkout after the order was created.
+        // The order line of each cart line, for the price history and the
+        // tax record
         let order_detail = self.order_service.get_order(order.id).await?;
-        if let Some(detail) = &order_detail {
-            let mut item_id_map: Vec<(Uuid, Uuid)> = Vec::new();
-            let mut used: Vec<Uuid> = Vec::new();
-            for cart_item in &items {
-                if let Some(oi) = detail.items.iter().find(|oi| {
-                    !used.contains(&oi.id)
-                        && oi.product_id == cart_item.product_id
-                        && oi.variant_id == cart_item.variant_id
-                        && oi.quantity == cart_item.quantity
-                }) {
-                    used.push(oi.id);
-                    item_id_map.push((cart_item.id, oi.id));
-                }
-            }
+        let item_id_map = order_detail
+            .as_ref()
+            .map(|detail| match_order_lines(&items, &detail.items))
+            .unwrap_or_default();
+        let placed = crate::services::pricing_history::PlacedOrder {
+            order_id: order.id,
+            customer_id: request.customer_id,
+            email: &request.customer_email,
+            cart: &cart,
+            items: &items,
+            lines: &item_id_map,
+        };
+        self.record_promotions_and_points(&placed).await?;
+
+        // Record tax transaction for reporting. Reporting-only: a failure here
+        // must not fail checkout after the order was created.
+        if order_detail.is_some() {
             if let Err(e) = self
                 .tax_service
                 .record_tax_transaction(order.id, &tax_result.calculation, &item_id_map)
@@ -1368,33 +1398,34 @@ impl CheckoutService {
         }
     }
 
-    /// After an order is created from `cart`: the promotions it used (usage
-    /// limits) and the loyalty points it redeems (refused when the balance
-    /// no longer covers them: the order is then cancelled)
+    /// After an order is placed: its line prices and the promotions it used
+    /// (price history, usage limits), and the loyalty points it redeems
+    /// (refused when the balance no longer covers them: the order is then
+    /// cancelled)
     async fn record_promotions_and_points(
         &self,
-        cart: &Cart,
-        items: &[CartItem],
-        order: &crate::order::Order,
-        customer: Option<Uuid>,
-        email: &str,
+        placed: &crate::services::pricing_history::PlacedOrder<'_>,
     ) -> Result<()> {
-        let mut used: Vec<Uuid> = items.iter().flat_map(|i| i.promotion_ids.iter().copied()).collect();
-        used.extend(cart.promotions.0.iter().map(|p| p.id).filter(|id| !id.is_nil()));
-        used.sort();
-        used.dedup();
         let pool = self.order_service.database().pool();
         let mut conn = pool.acquire().await?;
-        if !used.is_empty() {
-            crate::services::promotion_service::record_uses(&mut conn, order.id, customer, email, &used).await?;
-        }
-        let points = crate::services::promotion_service::CartPromotion::redeemed(&cart.promotions.0);
-        if let (Some(customer), true) = (customer, points > 0) {
+        crate::services::pricing_history::record_order(&mut conn, placed).await?;
+        let points =
+            crate::services::promotion_service::CartPromotion::redeemed(&placed.cart.promotions.0);
+        if let (Some(customer), true) = (placed.customer_id, points > 0) {
             let mut tx = pool.begin().await?;
-            let redeemed = crate::services::loyalty_service::redeem_for_order(&mut tx, customer, order.id, points).await;
+            let redeemed = crate::services::loyalty_service::redeem_for_order(
+                &mut tx,
+                customer,
+                placed.order_id,
+                points,
+            )
+            .await;
             if let Err(e) = redeemed {
                 drop(tx);
-                let _ = self.order_service.cancel_order(order.id, "Loyalty points no longer available".into()).await;
+                let _ = self
+                    .order_service
+                    .cancel_order(placed.order_id, "Loyalty points no longer available".into())
+                    .await;
                 return Err(e);
             }
             tx.commit().await?;

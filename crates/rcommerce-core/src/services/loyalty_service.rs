@@ -65,7 +65,10 @@ impl LoyaltySettings {
             return (0, Decimal::ZERO);
         }
         let points = points as i32;
-        (points, (Decimal::from(points) * self.point_value).round_dp(2))
+        (
+            points,
+            (Decimal::from(points) * self.point_value).round_dp(2),
+        )
     }
 }
 
@@ -74,9 +77,15 @@ impl LoyaltySettings {
 pub struct SettingsUpdate {
     pub enabled: Option<bool>,
     pub audience: Option<String>,
-    #[serde(default, deserialize_with = "crate::services::promotion_service::optional_number")]
+    #[serde(
+        default,
+        deserialize_with = "crate::services::promotion_service::optional_number"
+    )]
     pub points_per_euro: Option<Decimal>,
-    #[serde(default, deserialize_with = "crate::services::promotion_service::optional_number")]
+    #[serde(
+        default,
+        deserialize_with = "crate::services::promotion_service::optional_number"
+    )]
     pub point_value: Option<Decimal>,
     pub min_redeem: Option<i32>,
     /// `0` means never
@@ -136,21 +145,37 @@ async fn last_activity(conn: &mut PgConnection, customer: Uuid) -> Result<Option
 
 /// A customer's balance, after letting points lapse when they were inactive
 /// for longer than the settings allow
-pub async fn balance(conn: &mut PgConnection, customer: Uuid, settings: &LoyaltySettings) -> Result<i64> {
+pub async fn balance(
+    conn: &mut PgConnection,
+    customer: Uuid,
+    settings: &LoyaltySettings,
+) -> Result<i64> {
     let points: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(points), 0)::bigint FROM loyalty_entries WHERE customer_id = $1",
     )
     .bind(customer)
     .fetch_one(&mut *conn)
     .await?;
-    let lapsed = match (settings.expiry_months, last_activity(&mut *conn, customer).await?) {
+    let lapsed = match (
+        settings.expiry_months,
+        last_activity(&mut *conn, customer).await?,
+    ) {
         (Some(months), Some(last)) => last
             .checked_add_months(Months::new(months.max(1) as u32))
             .is_some_and(|until| until < Utc::now()),
         _ => false,
     };
     if lapsed && points > 0 {
-        add_entry(&mut *conn, customer, -(points as i32), "expire", None, None, None).await?;
+        add_entry(
+            &mut *conn,
+            customer,
+            -(points as i32),
+            "expire",
+            None,
+            None,
+            None,
+        )
+        .await?;
         return Ok(0);
     }
     Ok(points.max(0))
@@ -192,14 +217,21 @@ async fn lock_customer(conn: &mut PgConnection, customer: Uuid) -> Result<()> {
 
 /// Take redeemed points for an order placed from a cart (inside the order's
 /// transaction); fails when the balance no longer covers them
-pub async fn redeem_for_order(conn: &mut PgConnection, customer: Uuid, order: Uuid, points: i32) -> Result<()> {
+pub async fn redeem_for_order(
+    conn: &mut PgConnection,
+    customer: Uuid,
+    order: Uuid,
+    points: i32,
+) -> Result<()> {
     if points <= 0 {
         return Ok(());
     }
     lock_customer(&mut *conn, customer).await?;
     let settings = settings(&mut *conn).await?;
     if balance(&mut *conn, customer, &settings).await? < i64::from(points) {
-        return Err(Error::validation("Not enough loyalty points for this order"));
+        return Err(Error::validation(
+            "Not enough loyalty points for this order",
+        ));
     }
     add_entry(conn, customer, -points, "redeem", Some(order), None, None).await?;
     Ok(())
@@ -246,7 +278,10 @@ pub async fn card_number(conn: &mut PgConnection, customer: Uuid) -> Result<Stri
 }
 
 /// The customer a card number belongs to: id, name, e-mail
-pub async fn find_card(conn: &mut PgConnection, card: &str) -> Result<Option<(Uuid, String, String)>> {
+pub async fn find_card(
+    conn: &mut PgConnection,
+    card: &str,
+) -> Result<Option<(Uuid, String, String)>> {
     Ok(sqlx::query_as(
         "SELECT id, btrim(first_name || ' ' || last_name), email FROM customers WHERE loyalty_card = $1",
     )
@@ -257,7 +292,11 @@ pub async fn find_card(conn: &mut PgConnection, card: &str) -> Result<Option<(Uu
 
 /// Whether a customer is a trade customer (see PricingContext::pro)
 async fn is_pro(conn: &mut PgConnection, customer: Uuid) -> Result<bool> {
-    Ok(crate::services::price_list_service::pricing_context(conn, customer).await?.pro)
+    Ok(
+        crate::services::price_list_service::pricing_context(conn, customer)
+            .await?
+            .pro,
+    )
 }
 
 /// Loyalty points for staff, customers and orders
@@ -302,8 +341,13 @@ impl LoyaltyService {
         let settings = settings(&mut conn).await?;
         let enabled = settings.reaches(is_pro(&mut conn, customer).await?);
         let points = balance(&mut conn, customer, &settings).await?;
-        let expires_at = match (settings.expiry_months, last_activity(&mut conn, customer).await?) {
-            (Some(months), Some(last)) if points > 0 => last.checked_add_months(Months::new(months as u32)),
+        let expires_at = match (
+            settings.expiry_months,
+            last_activity(&mut conn, customer).await?,
+        ) {
+            (Some(months), Some(last)) if points > 0 => {
+                last.checked_add_months(Months::new(months as u32))
+            }
             _ => None,
         };
         let card = card_number(&mut conn, customer).await?;
@@ -329,17 +373,36 @@ impl LoyaltyService {
     }
 
     /// Staff add (or remove, with negative points) points with a note
-    pub async fn adjust(&self, customer: Uuid, points: i32, note: &str, staff: Uuid) -> Result<LoyaltyAccount> {
+    pub async fn adjust(
+        &self,
+        customer: Uuid,
+        points: i32,
+        note: &str,
+        staff: Uuid,
+    ) -> Result<LoyaltyAccount> {
         if points == 0 || note.trim().is_empty() {
-            return Err(Error::validation("points must not be 0 and a note is required"));
+            return Err(Error::validation(
+                "points must not be 0 and a note is required",
+            ));
         }
         let mut tx = self.pool.begin().await?;
         lock_customer(&mut tx, customer).await?;
         let settings = settings(&mut tx).await?;
         if points < 0 && balance(&mut tx, customer, &settings).await? + i64::from(points) < 0 {
-            return Err(Error::validation("The customer does not have that many points"));
+            return Err(Error::validation(
+                "The customer does not have that many points",
+            ));
         }
-        add_entry(&mut tx, customer, points, "adjust", None, Some(note.trim()), Some(staff)).await?;
+        add_entry(
+            &mut tx,
+            customer,
+            points,
+            "adjust",
+            None,
+            Some(note.trim()),
+            Some(staff),
+        )
+        .await?;
         tx.commit().await?;
         self.account(customer, 20).await
     }
@@ -348,11 +411,12 @@ impl LoyaltyService {
     /// (zero when the programme is off or does not reach the customer)
     pub async fn award_for_order(&self, order: Uuid) -> Result<i32> {
         let mut tx = self.pool.begin().await?;
-        let row: Option<(Option<Uuid>, Decimal, Decimal)> =
-            sqlx::query_as("SELECT customer_id, subtotal, discount_total FROM orders WHERE id = $1")
-                .bind(order)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let row: Option<(Option<Uuid>, Decimal, Decimal)> = sqlx::query_as(
+            "SELECT customer_id, subtotal, discount_total FROM orders WHERE id = $1",
+        )
+        .bind(order)
+        .fetch_optional(&mut *tx)
+        .await?;
         let Some((Some(customer), subtotal, discount)) = row else {
             return Ok(0);
         };
@@ -434,9 +498,15 @@ mod tests {
         assert_eq!(s.points_for(dec!(129.99)), 129);
         assert_eq!(s.points_for(dec!(-5)), 0);
         assert!(s.reaches(false) && !s.reaches(true));
-        let off = LoyaltySettings { enabled: false, ..settings() };
+        let off = LoyaltySettings {
+            enabled: false,
+            ..settings()
+        };
         assert!(!off.reaches(false));
-        let both = LoyaltySettings { audience: "both".into(), ..settings() };
+        let both = LoyaltySettings {
+            audience: "both".into(),
+            ..settings()
+        };
         assert!(both.reaches(true));
     }
 
@@ -445,8 +515,16 @@ mod tests {
         let s = settings();
         assert_eq!(s.redeemable(300, 1000, dec!(100)), (300, dec!(15)));
         assert_eq!(s.redeemable(300, 250, dec!(100)), (250, dec!(12.50)));
-        assert_eq!(s.redeemable(300, 1000, dec!(6)), (120, dec!(6)), "never more than the cart");
-        assert_eq!(s.redeemable(50, 1000, dec!(100)), (0, dec!(0)), "below the minimum");
+        assert_eq!(
+            s.redeemable(300, 1000, dec!(6)),
+            (120, dec!(6)),
+            "never more than the cart"
+        );
+        assert_eq!(
+            s.redeemable(50, 1000, dec!(100)),
+            (0, dec!(0)),
+            "below the minimum"
+        );
     }
 
     #[test]
@@ -460,8 +538,21 @@ mod tests {
 
     #[test]
     fn settings_changes_are_checked() {
-        assert!(check_update(&SettingsUpdate { audience: Some("vip".into()), ..Default::default() }).is_err());
-        assert!(check_update(&SettingsUpdate { point_value: Some(dec!(0)), ..Default::default() }).is_err());
-        assert!(check_update(&SettingsUpdate { enabled: Some(true), expiry_months: Some(0), ..Default::default() }).is_ok());
+        assert!(check_update(&SettingsUpdate {
+            audience: Some("vip".into()),
+            ..Default::default()
+        })
+        .is_err());
+        assert!(check_update(&SettingsUpdate {
+            point_value: Some(dec!(0)),
+            ..Default::default()
+        })
+        .is_err());
+        assert!(check_update(&SettingsUpdate {
+            enabled: Some(true),
+            expiry_months: Some(0),
+            ..Default::default()
+        })
+        .is_ok());
     }
 }

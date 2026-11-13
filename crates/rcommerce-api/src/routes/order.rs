@@ -911,7 +911,10 @@ pub async fn refund_order(
     let order_before = fetch_order(&state, id).await?;
     let refund_amount = amount.unwrap_or(order_before.total);
 
-    state.order_service.refund_order(id, amount, reason.clone()).await?;
+    state
+        .order_service
+        .refund_order(id, amount, reason.clone())
+        .await?;
     rcommerce_core::services::order_events::record_quietly(
         state.db.pool(),
         id,
@@ -1348,7 +1351,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/orders/:id", get(get_order))
         .route("/orders/:id/invoice", get(get_invoice))
-        .route("/orders/:id/events", get(super::order_history::order_events))
+        .route(
+            "/orders/:id/events",
+            get(super::order_history::order_events),
+        )
         .route("/orders/:id/cancel", post(cancel_order))
         .route("/orders/:id/refund", post(refund_order))
         .route("/orders/:id/fulfillments", post(create_fulfillment))

@@ -13,8 +13,8 @@ use rcommerce_core::{Action, Error, Resource};
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::middleware::JwtAuth;
 use crate::middleware::staff_access::staff_can;
+use crate::middleware::JwtAuth;
 use crate::state::AppState;
 
 /// GET /orders/:id/events - the order's history, oldest first: for its
@@ -48,7 +48,10 @@ pub(crate) fn actor(auth: &JwtAuth, owner: Option<Uuid>) -> Actor {
 
 /// After a collection or delivery: loyalty points, then the invoice
 pub(crate) async fn after_handover(state: &AppState, id: Uuid) {
-    if let Err(e) = LoyaltyService::new(state.db.pool().clone()).award_for_order(id).await {
+    if let Err(e) = LoyaltyService::new(state.db.pool().clone())
+        .award_for_order(id)
+        .await
+    {
         warn!("Failed to award the loyalty points of order {id}: {e}");
     }
     super::invoices::issue_after_handover(state, id).await;
@@ -57,7 +60,10 @@ pub(crate) async fn after_handover(state: &AppState, id: Uuid) {
 /// After a cancellation or refund: points earned taken back, points used
 /// given back, promotion uses released
 pub(crate) async fn after_cancel(state: &AppState, id: Uuid) {
-    if let Err(e) = LoyaltyService::new(state.db.pool().clone()).undo_for_order(id).await {
+    if let Err(e) = LoyaltyService::new(state.db.pool().clone())
+        .undo_for_order(id)
+        .await
+    {
         warn!("Failed to undo the loyalty points of order {id}: {e}");
     }
     let released = match state.db.pool().acquire().await {

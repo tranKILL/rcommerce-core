@@ -17,7 +17,8 @@ use uuid::Uuid;
 
 use crate::services::company_service::PricingContext;
 use crate::services::promotion_service::{
-    catalogue_price, live_promotions, AppliedPromotion, Buyer, CatalogueItem, Promotion,
+    catalogue_price, live_promotions, AppliedPromotion, Buyer, CartPromotion, CatalogueItem,
+    Promotion,
 };
 use crate::{Error, Result};
 
@@ -159,6 +160,9 @@ pub struct ResolvedPrice {
     pub tiers: Vec<PriceTier>,
     /// The catalogue promotions behind `price` (empty without one)
     pub promotions: Vec<AppliedPromotion>,
+    /// The price before catalogue promotions (kept in the price history)
+    #[serde(skip)]
+    pub negotiated_price: Decimal,
 }
 
 /// An applicable rule, joined with what it targets
@@ -240,6 +244,7 @@ fn resolve_item(item: &PriceItem, rules: &[LiveRule], categories: &HashSet<Uuid>
         price_list_id,
         tiers,
         promotions: Vec::new(),
+        negotiated_price: price,
     }
 }
 
@@ -479,6 +484,46 @@ pub struct RepricedCart {
     pub promotions: Vec<Promotion>,
     /// Each product's categories with their ancestors (when a scope needs them)
     pub paths: HashMap<Uuid, HashSet<Uuid>>,
+    /// What each catalogue promotion takes off the lines (in their prices)
+    pub catalogue_savings: Vec<CartPromotion>,
+}
+
+/// What catalogue promotions take off `lines`, per promotion, against their
+/// negotiated prices (see `pricing_history::chain_savings`)
+fn catalogue_savings(
+    lines: &[&CartLine],
+    prices: &[ResolvedPrice],
+    promotions: &[Promotion],
+) -> Vec<CartPromotion> {
+    let by_id: HashMap<Uuid, &Promotion> = promotions.iter().map(|p| (p.id, p)).collect();
+    let mut totals: Vec<CartPromotion> = Vec::new();
+    for (line, price) in lines.iter().zip(prices) {
+        let applied: Vec<&Promotion> = price
+            .promotions
+            .iter()
+            .filter_map(|a| by_id.get(&a.id).copied())
+            .collect();
+        let shares = crate::services::pricing_history::chain_savings(
+            &applied,
+            price.negotiated_price,
+            price.price,
+            line.quantity,
+        );
+        for (id, saving) in shares {
+            match totals.iter_mut().find(|t| t.id == id) {
+                Some(total) => total.discount += saving,
+                None => totals.push(CartPromotion {
+                    id,
+                    name: by_id[&id].name.clone(),
+                    kind: by_id[&id].kind.clone(),
+                    discount: saving,
+                    points: None,
+                }),
+            }
+        }
+    }
+    totals.retain(|t| t.discount > Decimal::ZERO);
+    totals
 }
 
 /// Per catalogue promotion with a minimum amount: the cart's total, at
@@ -498,7 +543,11 @@ fn targeted_amounts(
                 .filter(|i| {
                     let categories = paths.get(&i.product_id).unwrap_or(&none);
                     crate::services::promotion_service::targets(
-                        &p.scope, p.target_id, i.product_id, i.variant_id, categories,
+                        &p.scope,
+                        p.target_id,
+                        i.product_id,
+                        i.variant_id,
+                        categories,
                     )
                 })
                 .map(|i| i.base_price * Decimal::from(i.quantity))
@@ -518,13 +567,14 @@ async fn write_line_prices(
         let promotions: Vec<Uuid> = price.promotions.iter().map(|p| p.id).collect();
         sqlx::query(
             "UPDATE cart_items SET unit_price = $2, subtotal = $2 * quantity, price_list_id = $3, \
-             original_price = $4, promotion_ids = $5, updated_at = NOW() WHERE id = $1",
+             original_price = $4, promotion_ids = $5, negotiated_price = $6, updated_at = NOW() WHERE id = $1",
         )
         .bind(line.id)
         .bind(price.price)
         .bind(price.price_list_id)
         .bind(price.base_price)
         .bind(&promotions)
+        .bind(price.negotiated_price)
         .execute(&mut *conn)
         .await?;
     }
@@ -557,13 +607,25 @@ pub async fn reprice_cart_lines(
     .await?;
     let products: Vec<Uuid> = lines.iter().map(|l| l.product_id).collect();
     let variants: Vec<Uuid> = lines.iter().filter_map(|l| l.variant_id).collect();
-    let (product_prices, variant_prices) = catalogue_prices(&mut *conn, &products, &variants).await?;
+    let (product_prices, variant_prices) =
+        catalogue_prices(&mut *conn, &products, &variants).await?;
     let (priced, items) = price_items(&lines, &product_prices, &variant_prices);
-    let paths = paths_if_needed(&mut *conn, &items, promotions.iter().any(|p| p.scope == "category")).await?;
+    let paths = paths_if_needed(
+        &mut *conn,
+        &items,
+        promotions.iter().any(|p| p.scope == "category"),
+    )
+    .await?;
     let amounts = targeted_amounts(&promotions, &items, &paths);
     let prices = resolve_with(&mut *conn, context, &items, &promotions, Some(&amounts)).await?;
+    let catalogue_savings = catalogue_savings(&priced, &prices, &promotions);
     write_line_prices(&mut *conn, &priced, prices).await?;
-    Ok(RepricedCart { context, promotions, paths })
+    Ok(RepricedCart {
+        context,
+        promotions,
+        paths,
+        catalogue_savings,
+    })
 }
 
 fn check_rule(rule: &NewPriceRule) -> Result<()> {

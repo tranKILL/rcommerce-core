@@ -467,25 +467,35 @@ impl PostgresCartMutation {
         let discount_total = outcome.discount() + coupon + loyalty;
         sqlx::query(
             "UPDATE carts SET subtotal = $2, discount_total = $3, tax_total = 0, total = $4, \
-             promotions = $5, updated_at = NOW() WHERE id = $1",
+             promotions = $5, catalogue_promotions = $6, updated_at = NOW() WHERE id = $1",
         )
         .bind(cart_id)
         .bind(subtotal)
         .bind(discount_total)
         .bind(subtotal - discount_total + cart.shipping_total)
         .bind(sqlx::types::Json(&applied))
+        .bind(sqlx::types::Json(&repriced.catalogue_savings))
         .execute(&mut **tx)
         .await?;
         Ok(())
     }
 
     /// What the cart's coupon takes off
-    async fn coupon_discount(&self, cart: &Cart, subtotal: Decimal, items: &[CartItem]) -> Result<Decimal> {
+    async fn coupon_discount(
+        &self,
+        cart: &Cart,
+        subtotal: Decimal,
+        items: &[CartItem],
+    ) -> Result<Decimal> {
         let Some(code) = &cart.coupon_code else {
             return Ok(Decimal::ZERO);
         };
         match self.coupon_repo.find_by_code(code).await? {
-            Some(coupon) => self.coupon_service.calculate_discount(&coupon, subtotal, items).await,
+            Some(coupon) => {
+                self.coupon_service
+                    .calculate_discount(&coupon, subtotal, items)
+                    .await
+            }
             None => Ok(Decimal::ZERO),
         }
     }
@@ -503,7 +513,11 @@ fn gift_promotion(item: &CartItem) -> Option<Uuid> {
 
 /// Cart promotions on the regular lines (not bundles, not gifts)
 fn evaluate_promotions(repriced: &RepricedCart, items: &[CartItem]) -> CartOutcome {
-    let combinable: HashMap<Uuid, bool> = repriced.promotions.iter().map(|p| (p.id, p.combinable)).collect();
+    let combinable: HashMap<Uuid, bool> = repriced
+        .promotions
+        .iter()
+        .map(|p| (p.id, p.combinable))
+        .collect();
     let lines: Vec<CartLineView> = items
         .iter()
         .filter(|i| !is_bundle_parent(i) && !is_bundle_component(i) && gift_promotion(i).is_none())
@@ -513,7 +527,11 @@ fn evaluate_promotions(repriced: &RepricedCart, items: &[CartItem]) -> CartOutco
             variant_id: i.variant_id,
             quantity: i.quantity,
             unit_price: i.unit_price,
-            categories: repriced.paths.get(&i.product_id).cloned().unwrap_or_default(),
+            categories: repriced
+                .paths
+                .get(&i.product_id)
+                .cloned()
+                .unwrap_or_default(),
             promotions: i
                 .promotion_ids
                 .iter()
@@ -576,15 +594,25 @@ async fn sync_gifts(
 ) -> Result<bool> {
     let mut changed = false;
     for item in items {
-        let wanted = gift_promotion(item)
-            .is_some_and(|p| gifts.iter().any(|g| *g == (p, item.product_id, item.quantity)));
+        let wanted = gift_promotion(item).is_some_and(|p| {
+            gifts
+                .iter()
+                .any(|g| *g == (p, item.product_id, item.quantity))
+        });
         if gift_promotion(item).is_some() && !wanted {
-            sqlx::query("DELETE FROM cart_items WHERE id = $1").bind(item.id).execute(&mut **tx).await?;
+            sqlx::query("DELETE FROM cart_items WHERE id = $1")
+                .bind(item.id)
+                .execute(&mut **tx)
+                .await?;
             changed = true;
         }
     }
     for (promotion, product, quantity) in gifts {
-        let present = items.iter().any(|i| gift_promotion(i) == Some(*promotion) && i.product_id == *product && i.quantity == *quantity);
+        let present = items.iter().any(|i| {
+            gift_promotion(i) == Some(*promotion)
+                && i.product_id == *product
+                && i.quantity == *quantity
+        });
         if present {
             continue;
         }
@@ -623,11 +651,21 @@ async fn allocate_discounts(
     outcome: &CartOutcome,
     shared: Decimal,
 ) -> Result<()> {
-    let own = |item: &CartItem| outcome.line_discounts.get(&item.id).copied().unwrap_or_default();
+    let own = |item: &CartItem| {
+        outcome
+            .line_discounts
+            .get(&item.id)
+            .copied()
+            .unwrap_or_default()
+    };
     let regular: Vec<&CartItem> = items.iter().filter(|i| !is_bundle_component(i)).collect();
     let base: Decimal = regular.iter().map(|i| i.subtotal - own(i)).sum();
     for item in regular {
-        let ratio = if base > Decimal::ZERO { (item.subtotal - own(item)) / base } else { Decimal::ZERO };
+        let ratio = if base > Decimal::ZERO {
+            (item.subtotal - own(item)) / base
+        } else {
+            Decimal::ZERO
+        };
         let discount = own(item) + (shared * ratio).round_dp(2);
         sqlx::query("UPDATE cart_items SET discount_amount = $2, total = $3, updated_at = NOW() WHERE id = $1")
             .bind(item.id)

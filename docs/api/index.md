@@ -23,6 +23,7 @@ R Commerce provides a complete API-first ecommerce platform with:
 | [statistics.md](statistics.md) | Statistics and analytics API |
 | [staff-roles.md](staff-roles.md) | Staff roles: partial admin access for back-office accounts |
 | [10-staff-dashboard.md](10-staff-dashboard.md) | Staff dashboard, own rights, sorting staff lists |
+| [11-price-history.md](11-price-history.md) | Price and promotion history per product, customer and promotion |
 
 ## API Endpoints
 

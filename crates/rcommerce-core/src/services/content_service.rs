@@ -30,11 +30,15 @@ const MAX_FIELD: usize = 2000;
 
 fn check_key(key: &str) -> Result<()> {
     let ok = (1..=50).contains(&key.len())
-        && key.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
     if ok {
         Ok(())
     } else {
-        Err(Error::validation("key must be 1 to 50 lowercase letters, digits or _"))
+        Err(Error::validation(
+            "key must be 1 to 50 lowercase letters, digits or _",
+        ))
     }
 }
 
@@ -45,7 +49,9 @@ fn clean(fields: &Fields) -> Result<Fields> {
     for (name, text) in fields {
         check_key(name)?;
         if text.chars().count() > MAX_FIELD {
-            return Err(Error::validation(format!("{name} is longer than {MAX_FIELD} characters")));
+            return Err(Error::validation(format!(
+                "{name} is longer than {MAX_FIELD} characters"
+            )));
         }
         if !text.trim().is_empty() {
             kept.insert(name.clone(), text.trim().to_string());
@@ -77,7 +83,12 @@ impl ContentService {
             .fetch_optional(&self.pool)
             .await?;
             if let Some((content, updated_at)) = row {
-                return Ok(Some(ContentBlock { key: key.into(), locale, content: content.0, updated_at }));
+                return Ok(Some(ContentBlock {
+                    key: key.into(),
+                    locale,
+                    content: content.0,
+                    updated_at,
+                }));
             }
         }
         Ok(None)
@@ -96,11 +107,17 @@ impl ContentService {
 
     /// Replace block `key` in the languages given (a language with only
     /// empty fields loses its block)
-    pub async fn save(&self, key: &str, languages: &BTreeMap<String, Fields>, staff: Uuid) -> Result<BTreeMap<String, Fields>> {
+    pub async fn save(
+        &self,
+        key: &str,
+        languages: &BTreeMap<String, Fields>,
+        staff: Uuid,
+    ) -> Result<BTreeMap<String, Fields>> {
         check_key(key)?;
         let mut tx = self.pool.begin().await?;
         for (locale, fields) in languages {
-            let locale = normalize_locale(locale).ok_or_else(|| Error::validation(format!("unknown language {locale}")))?;
+            let locale = normalize_locale(locale)
+                .ok_or_else(|| Error::validation(format!("unknown language {locale}")))?;
             let fields = clean(fields)?;
             if fields.is_empty() {
                 sqlx::query("DELETE FROM content_blocks WHERE key = $1 AND locale = $2")
@@ -135,9 +152,15 @@ mod tests {
     fn keys_and_fields_are_checked_and_trimmed() {
         assert!(check_key("home_hero").is_ok());
         assert!(check_key("Home Hero").is_err());
-        let fields = Fields::from([("title".into(), "  Tout pour construire ".into()), ("text".into(), " ".into())]);
+        let fields = Fields::from([
+            ("title".into(), "  Tout pour construire ".into()),
+            ("text".into(), " ".into()),
+        ]);
         let kept = clean(&fields).unwrap();
-        assert_eq!(kept.get("title").map(String::as_str), Some("Tout pour construire"));
+        assert_eq!(
+            kept.get("title").map(String::as_str),
+            Some("Tout pour construire")
+        );
         assert!(!kept.contains_key("text"), "empty fields are dropped");
         let long = Fields::from([("text".into(), "x".repeat(2001))]);
         assert!(clean(&long).is_err());

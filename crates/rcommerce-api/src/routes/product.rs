@@ -4,8 +4,8 @@ use axum::{
     routing::{get, post, put},
     Extension, Json, Router,
 };
-use serde::Deserialize;
 use rcommerce_core::services::promotion_service::{self, ProductOffers};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::middleware::JwtAuth;
@@ -194,7 +194,8 @@ pub(crate) async fn retail_offers(
     products: &[(Uuid, rust_decimal::Decimal)],
 ) -> rcommerce_core::Result<HashMap<Uuid, ProductOffers>> {
     let mut conn = state.db.pool().acquire().await?;
-    promotion_service::product_offers(&mut conn, &promotion_service::Buyer::default(), products).await
+    promotion_service::product_offers(&mut conn, &promotion_service::Buyer::default(), products)
+        .await
 }
 
 impl ProductCards {
@@ -208,7 +209,8 @@ impl ProductCards {
                 None => Ok(HashMap::new()),
             }
         };
-        let priced: Vec<(Uuid, rust_decimal::Decimal)> = products.iter().map(|p| (p.id, p.price)).collect();
+        let priced: Vec<(Uuid, rust_decimal::Decimal)> =
+            products.iter().map(|p| (p.id, p.price)).collect();
         let (images, categories, reviews, bundle_stock, translations, offers) = tokio::join!(
             state.product_service.repository.find_first_images(&ids),
             cat_repo.categories_for_products(&ids, locale),
@@ -535,10 +537,12 @@ pub async fn get_product(
     if is_admin {
         body["product"]["cost_price"] = serde_json::json!(cost_price);
     }
-    let offers = retail_offers(&state, &[(p.id, p.price)]).await.unwrap_or_else(|e| {
-        tracing::warn!("Failed to load the promotions of product {}: {}", p.id, e);
-        HashMap::new()
-    });
+    let offers = retail_offers(&state, &[(p.id, p.price)])
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("Failed to load the promotions of product {}: {}", p.id, e);
+            HashMap::new()
+        });
     body["product"]["promotion"] = serde_json::json!(offers.get(&p.id));
     Ok(Json(body))
 }
@@ -870,35 +874,36 @@ fn path_locale(locale: &str) -> Result<String, rcommerce_core::Error> {
     })
 }
 
-fn require_admin(auth: &JwtAuth) -> Result<(), rcommerce_core::Error> {
-    if auth.is_admin() {
+/// Reading translations: admins, and staff who read products
+fn require_product_read(auth: &JwtAuth) -> Result<(), rcommerce_core::Error> {
+    if auth.can_read(Resource::Products) {
         Ok(())
     } else {
         Err(rcommerce_core::Error::forbidden("Admin access required"))
     }
 }
 
-/// List a product's translations (admin)
+/// List a product's translations (admins, and staff who read products)
 pub async fn list_product_translations(
     State(state): State<AppState>,
     Extension(auth): Extension<JwtAuth>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, rcommerce_core::Error> {
-    require_admin(&auth)?;
+    require_product_read(&auth)?;
     let translations = CatalogI18nRepository::new(state.db.pool().clone())
         .all_product_translations(id)
         .await?;
     Ok(Json(serde_json::json!({ "translations": translations })))
 }
 
-/// Create or replace a product translation (admin)
+/// Create or replace a product translation (admins, and staff with `products:write`)
 pub async fn put_product_translation(
     State(state): State<AppState>,
     Extension(auth): Extension<JwtAuth>,
     Path((id, locale)): Path<(Uuid, String)>,
     Json(input): Json<TranslationInput>,
 ) -> Result<Json<ProductTranslation>, rcommerce_core::Error> {
-    require_admin(&auth)?;
+    require_product_write(&auth)?;
     input.validate()?;
     let translation = ProductTranslation {
         product_id: id,
@@ -916,13 +921,13 @@ pub async fn put_product_translation(
     Ok(Json(saved))
 }
 
-/// Delete a product translation (admin)
+/// Delete a product translation (admins, and staff with `products:write`)
 pub async fn delete_product_translation(
     State(state): State<AppState>,
     Extension(auth): Extension<JwtAuth>,
     Path((id, locale)): Path<(Uuid, String)>,
 ) -> Result<StatusCode, rcommerce_core::Error> {
-    require_admin(&auth)?;
+    require_product_write(&auth)?;
     let deleted = CatalogI18nRepository::new(state.db.pool().clone())
         .delete_product_translation(id, &path_locale(&locale)?)
         .await?;
@@ -934,14 +939,14 @@ pub async fn delete_product_translation(
     }
 }
 
-/// Create or replace a category translation (admin)
+/// Create or replace a category translation (admins, and staff with `products:write`)
 pub async fn put_category_translation(
     State(state): State<AppState>,
     Extension(auth): Extension<JwtAuth>,
     Path((id, locale)): Path<(Uuid, String)>,
     Json(input): Json<TranslationInput>,
 ) -> Result<Json<CategoryTranslation>, rcommerce_core::Error> {
-    require_admin(&auth)?;
+    require_product_write(&auth)?;
     input.validate()?;
     let translation = CategoryTranslation {
         category_id: id,
@@ -958,13 +963,13 @@ pub async fn put_category_translation(
     Ok(Json(saved))
 }
 
-/// Delete a category translation (admin)
+/// Delete a category translation (admins, and staff with `products:write`)
 pub async fn delete_category_translation(
     State(state): State<AppState>,
     Extension(auth): Extension<JwtAuth>,
     Path((id, locale)): Path<(Uuid, String)>,
 ) -> Result<StatusCode, rcommerce_core::Error> {
-    require_admin(&auth)?;
+    require_product_write(&auth)?;
     let deleted = CatalogI18nRepository::new(state.db.pool().clone())
         .delete_category_translation(id, &path_locale(&locale)?)
         .await?;

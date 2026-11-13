@@ -61,7 +61,9 @@ async fn redeem_on_cart(
     }
     state.cart_service.refresh_prices(cart).await?;
     let cart = state.cart_service.get_cart_with_items(cart).await?;
-    Ok(Json(serde_json::json!({ "cart": cart.cart, "items": cart.items })))
+    Ok(Json(
+        serde_json::json!({ "cart": cart.cart, "items": cart.items }),
+    ))
 }
 
 async fn settings(State(state): State<AppState>) -> Result<Json<LoyaltySettings>, Error> {
@@ -94,16 +96,25 @@ async fn adjust(
     Path(customer): Path<Uuid>,
     Json(body): Json<Adjust>,
 ) -> Result<Json<LoyaltyAccount>, Error> {
-    Ok(Json(service(&state).adjust(customer, body.points, &body.note, auth.customer_id).await?))
+    Ok(Json(
+        service(&state)
+            .adjust(customer, body.points, &body.note, auth.customer_id)
+            .await?,
+    ))
 }
 
-async fn card_owner(State(state): State<AppState>, Path(card): Path<String>) -> Result<Json<serde_json::Value>, Error> {
+async fn card_owner(
+    State(state): State<AppState>,
+    Path(card): Path<String>,
+) -> Result<Json<serde_json::Value>, Error> {
     let mut conn = state.db.pool().acquire().await?;
     let (id, name, email) = loyalty_service::find_card(&mut conn, &card)
         .await?
         .ok_or_else(|| Error::not_found("No customer has this card"))?;
     let account = service(&state).account(id, 20).await?;
-    Ok(Json(serde_json::json!({ "customer_id": id, "name": name, "email": email, "account": account })))
+    Ok(Json(
+        serde_json::json!({ "customer_id": id, "name": name, "email": email, "account": account }),
+    ))
 }
 
 /// Customer routes (signed in)
@@ -116,7 +127,10 @@ pub fn protected_router() -> Router<AppState> {
 /// Staff routes (settings: `settings`, the rest: `customers`)
 pub fn admin_router() -> Router<AppState> {
     Router::new()
-        .route("/admin/loyalty/settings", get(settings).put(update_settings))
+        .route(
+            "/admin/loyalty/settings",
+            get(settings).put(update_settings),
+        )
         .route("/admin/loyalty/customers/:id", get(customer_points))
         .route("/admin/loyalty/customers/:id/adjust", post(adjust))
         .route("/admin/loyalty/cards/:card", get(card_owner))

@@ -42,7 +42,10 @@ async fn public_block(
     Path(key): Path<String>,
     Query(query): Query<LangQuery>,
 ) -> Result<Json<ContentBlock>, Error> {
-    let locales = [query.lang.as_deref().unwrap_or(&state.email_locale), state.email_locale.as_str()];
+    let locales = [
+        query.lang.as_deref().unwrap_or(&state.email_locale),
+        state.email_locale.as_str(),
+    ];
     service(&state)
         .get(&key, &locales)
         .await?
@@ -64,7 +67,9 @@ async fn save_block(
     Path(key): Path<String>,
     Json(body): Json<Languages>,
 ) -> Result<Json<Languages>, Error> {
-    let languages = service(&state).save(&key, &body.languages, auth.customer_id).await?;
+    let languages = service(&state)
+        .save(&key, &body.languages, auth.customer_id)
+        .await?;
     Ok(Json(Languages { languages }))
 }
 

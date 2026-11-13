@@ -75,7 +75,13 @@ pub async fn record(
 }
 
 /// The same, on a pool; a failure is logged, never fatal to the step itself
-pub async fn record_quietly(pool: &PgPool, order: Uuid, kind: &str, actor: Actor, detail: serde_json::Value) {
+pub async fn record_quietly(
+    pool: &PgPool,
+    order: Uuid,
+    kind: &str,
+    actor: Actor,
+    detail: serde_json::Value,
+) {
     let result = match pool.acquire().await {
         Ok(mut conn) => record(&mut conn, order, kind, actor, detail).await,
         Err(e) => Err(e.into()),

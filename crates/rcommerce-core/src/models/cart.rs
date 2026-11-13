@@ -56,6 +56,11 @@ pub struct Cart {
     /// and the loyalty redemption, with what each takes off
     #[sqlx(default)]
     pub promotions: sqlx::types::Json<Vec<crate::services::promotion_service::CartPromotion>>,
+    /// What catalogue promotions take off the lines, per promotion: already
+    /// in the line prices, shown with the totals
+    #[sqlx(default)]
+    pub catalogue_promotions:
+        sqlx::types::Json<Vec<crate::services::promotion_service::CartPromotion>>,
     /// Loyalty points the customer asked to redeem (those used: the
     /// `loyalty` line of `promotions`)
     #[sqlx(default)]

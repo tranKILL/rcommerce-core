@@ -4981,21 +4981,49 @@ async fn test_content_blocks_per_language() {
         "en": {"title": "Everything to build", "text": "Collect in one hour"},
         "nl": {"title": "Alles om te bouwen", "text": " "},
     }});
-    let (status, _) = send_json(&app, reqwest::Method::PUT, &token, &path, Some(body.clone())).await;
+    let (status, _) = send_json(
+        &app,
+        reqwest::Method::PUT,
+        &token,
+        &path,
+        Some(body.clone()),
+    )
+    .await;
     assert_eq!(status, 403, "customers cannot edit");
     let (status, saved) = send_json(&app, reqwest::Method::PUT, &admin, &path, Some(body)).await;
     assert_eq!(status, 200, "{saved}");
-    assert_eq!(saved["languages"]["nl"], serde_json::json!({"title": "Alles om te bouwen"}));
+    assert_eq!(
+        saved["languages"]["nl"],
+        serde_json::json!({"title": "Alles om te bouwen"})
+    );
 
-    let public = |lang: &str| app.http_client.get(format!("{}/api/v1/content/{key}?lang={lang}", app.base_url())).send();
+    let public = |lang: &str| {
+        app.http_client
+            .get(format!(
+                "{}/api/v1/content/{key}?lang={lang}",
+                app.base_url()
+            ))
+            .send()
+    };
     let nl: serde_json::Value = public("nl-BE").await.unwrap().json().await.unwrap();
-    assert_eq!((nl["locale"].as_str(), nl["content"]["title"].as_str()), (Some("nl"), Some("Alles om te bouwen")));
+    assert_eq!(
+        (nl["locale"].as_str(), nl["content"]["title"].as_str()),
+        (Some("nl"), Some("Alles om te bouwen"))
+    );
     let pl: serde_json::Value = public("pl").await.unwrap().json().await.unwrap();
-    assert_eq!(pl["locale"], "en", "falls back to the default language: {pl}");
+    assert_eq!(
+        pl["locale"], "en",
+        "falls back to the default language: {pl}"
+    );
 
-    let clear = serde_json::json!({"languages": {"en": {"title": "", "text": ""}, "nl": {"title": ""}}});
+    let clear =
+        serde_json::json!({"languages": {"en": {"title": "", "text": ""}, "nl": {"title": ""}}});
     send_json(&app, reqwest::Method::PUT, &admin, &path, Some(clear)).await;
-    assert_eq!(public("nl").await.unwrap().status(), 404, "no block left: built-in texts");
+    assert_eq!(
+        public("nl").await.unwrap().status(),
+        404,
+        "no block left: built-in texts"
+    );
     app.cleanup().await.ok();
 }
 
@@ -5022,7 +5050,14 @@ async fn guest_cart_with(app: &TestApp, product: Uuid, quantity: i32) -> Uuid {
 
 async fn guest_cart(app: &TestApp, cart_id: Uuid) -> serde_json::Value {
     let url = format!("{}/api/v1/carts/{}", app.base_url(), cart_id);
-    app.http_client.get(url).send().await.unwrap().json().await.unwrap()
+    app.http_client
+        .get(url)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
 }
 
 fn money(value: &serde_json::Value) -> Decimal {
@@ -5046,12 +5081,28 @@ async fn test_catalogue_promotions_reach_their_audience() {
     let retail_id = new_promotion(&app, &admin, retail.clone()).await;
 
     let url = format!("{}/api/v1/products/{product}", app.base_url());
-    let page: serde_json::Value = app.http_client.get(&url).send().await.unwrap().json().await.unwrap();
+    let page: serde_json::Value = app
+        .http_client
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let promotion = &page["product"]["promotion"];
     assert_eq!(money(&promotion["price"]), Decimal::new(4000, 2), "{page}");
-    assert_eq!(money(&promotion["reference_price"]), Decimal::new(5000, 2), "lowest of the last 30 days");
+    assert_eq!(
+        money(&promotion["reference_price"]),
+        Decimal::new(5000, 2),
+        "lowest of the last 30 days"
+    );
     let cart = guest_cart(&app, guest_cart_with(&app, product, 1).await).await;
-    assert_eq!(money(&cart["items"][0]["unit_price"]), Decimal::new(4000, 2), "{cart}");
+    assert_eq!(
+        money(&cart["items"][0]["unit_price"]),
+        Decimal::new(4000, 2),
+        "{cart}"
+    );
 
     let (pro, password) = app.create_test_customer().await.unwrap();
     let pro_token = app.login(&pro.email, &password).await.unwrap();
@@ -5060,17 +5111,28 @@ async fn test_catalogue_promotions_reach_their_audience() {
     assert_eq!(status, 201);
     let prices = format!("/customers/me/prices?product_ids={product}");
     let (_, mine) = call_json(&app, &pro_token, &prices, None).await;
-    assert_eq!(money(&mine["prices"][0]["price"]), Decimal::new(5000, 2), "retail promotion: not for trade");
+    assert_eq!(
+        money(&mine["prices"][0]["price"]),
+        Decimal::new(5000, 2),
+        "retail promotion: not for trade"
+    );
     let trade = serde_json::json!({"name": "Trade days", "kind": "amount_off", "value": 5,
         "audience": "pro", "scope": "product", "target_id": product});
     let pro_id = new_promotion(&app, &admin, trade).await;
     let (_, mine) = call_json(&app, &pro_token, &prices, None).await;
-    assert_eq!(money(&mine["prices"][0]["price"]), Decimal::new(4500, 2), "{mine}");
+    assert_eq!(
+        money(&mine["prices"][0]["price"]),
+        Decimal::new(4500, 2),
+        "{mine}"
+    );
 
     let (status, _) = call_json(&app, &pro_token, "/admin/promotions", Some(retail)).await;
     assert_eq!(status, 403);
     let (_, listed) = call_json(&app, &admin, "/admin/promotions?state=live&sort=name", None).await;
-    assert!(listed["promotions"].as_array().unwrap().len() >= 2, "{listed}");
+    assert!(
+        listed["promotions"].as_array().unwrap().len() >= 2,
+        "{listed}"
+    );
     for id in [retail_id, pro_id] {
         let path = format!("/admin/promotions/{id}");
         let (status, _) = send_json(&app, reqwest::Method::DELETE, &admin, &path, None).await;
@@ -5096,8 +5158,10 @@ async fn test_cart_promotions_add_up_when_combinable() {
     let bxgy_body = serde_json::json!({"name": "2 + 1", "kind": "buy_x_get_y",
         "buy_quantity": 2, "get_quantity": 1, "combinable": true});
     let bxgy = new_promotion(&app, &admin, target(bxgy_body)).await;
-    let tiers_body = target(serde_json::json!({"name": "Spend more", "kind": "spend_tiers",
-        "combinable": true, "tiers": [{"min_amount": 15, "percent": 10}]}));
+    let tiers_body = target(
+        serde_json::json!({"name": "Spend more", "kind": "spend_tiers",
+        "combinable": true, "tiers": [{"min_amount": 15, "percent": 10}]}),
+    );
     let tiers = new_promotion(&app, &admin, tiers_body.clone()).await;
     let gift_body = serde_json::json!({"name": "Free gloves", "kind": "gift",
         "gift_product_id": gift, "min_amount": 15, "combinable": true});
@@ -5105,21 +5169,40 @@ async fn test_cart_promotions_add_up_when_combinable() {
 
     let cart = guest_cart(&app, guest_cart_with(&app, product, 3).await).await;
     // 30 - 10 (third free) = 20, then 10 % = 2
-    assert_eq!(money(&cart["cart"]["discount_total"]), Decimal::new(1200, 2), "{cart}");
-    assert_eq!(cart["cart"]["promotions"].as_array().unwrap().len(), 3, "{cart}");
+    assert_eq!(
+        money(&cart["cart"]["discount_total"]),
+        Decimal::new(1200, 2),
+        "{cart}"
+    );
+    assert_eq!(
+        cart["cart"]["promotions"].as_array().unwrap().len(),
+        3,
+        "{cart}"
+    );
     let items = cart["items"].as_array().unwrap();
     let gift_line = items.iter().find(|i| i["product_id"] == gift.to_string());
-    assert_eq!(money(&gift_line.expect("gift line")["unit_price"]), Decimal::ZERO);
+    assert_eq!(
+        money(&gift_line.expect("gift line")["unit_price"]),
+        Decimal::ZERO
+    );
 
     let mut alone = tiers_body;
     alone["combinable"] = false.into();
     let path = format!("/admin/promotions/{tiers}");
     send_json(&app, reqwest::Method::PUT, &admin, &path, Some(alone)).await;
     let cart = guest_cart(&app, guest_cart_with(&app, product, 3).await).await;
-    assert_eq!(money(&cart["cart"]["discount_total"]), Decimal::new(1000, 2), "the tier keeps away: {cart}");
+    assert_eq!(
+        money(&cart["cart"]["discount_total"]),
+        Decimal::new(1000, 2),
+        "the tier keeps away: {cart}"
+    );
 
     let small = guest_cart(&app, guest_cart_with(&app, product, 1).await).await;
-    assert_eq!(small["items"].as_array().unwrap().len(), 1, "no gift under 15: {small}");
+    assert_eq!(
+        small["items"].as_array().unwrap().len(),
+        1,
+        "no gift under 15: {small}"
+    );
     for id in [bxgy, tiers, gift_id] {
         let path = format!("/admin/promotions/{id}");
         send_json(&app, reqwest::Method::DELETE, &admin, &path, None).await;
@@ -5147,11 +5230,25 @@ async fn test_loyalty_points_earned_redeemed_and_given_back() {
     let app = TestApp::new().await.expect("Failed to create test app");
     let admin = app.admin_token().await.expect("Failed to create admin");
     let on = serde_json::json!({"enabled": true, "points_per_euro": 10, "point_value": 0.01, "min_redeem": 50});
-    let (status, _) = send_json(&app, reqwest::Method::PUT, &admin, "/admin/loyalty/settings", Some(on)).await;
+    let (status, _) = send_json(
+        &app,
+        reqwest::Method::PUT,
+        &admin,
+        "/admin/loyalty/settings",
+        Some(on),
+    )
+    .await;
     assert_eq!(status, 200);
     let location = create_pickup_location(&app, &admin).await;
-    let product = app.create_test_product("Loyal bricks", Decimal::new(1000, 2), 0).await.unwrap();
-    app.app_state.inventory_service.receive_stock(product, location, 10, None).await.unwrap();
+    let product = app
+        .create_test_product("Loyal bricks", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 10, None)
+        .await
+        .unwrap();
     let (customer, password) = app.create_test_customer().await.unwrap();
     let token = app.login(&customer.email, &password).await.unwrap();
     let (_, mine) = call_json(&app, &token, "/customers/me/loyalty", None).await;
@@ -5170,23 +5267,30 @@ async fn test_loyalty_points_earned_redeemed_and_given_back() {
     let cart_id = cart["cart"]["id"].as_str().unwrap().to_string();
     let use_points = serde_json::json!({"points": 100});
     let path = format!("/carts/{cart_id}/loyalty");
-    let (status, cart) = send_json(&app, reqwest::Method::PUT, &token, &path, Some(use_points)).await;
+    let (status, cart) =
+        send_json(&app, reqwest::Method::PUT, &token, &path, Some(use_points)).await;
     assert_eq!(status, 200, "{cart}");
     let second = customer_pickup_order(&app, &token, &customer.email, location, product).await;
     let (_, mine) = call_json(&app, &token, "/customers/me/loyalty", None).await;
     assert_eq!(mine["points"], 100, "redeemed: {mine}");
     let (_, placed) = call_json(&app, &token, &format!("/orders/{second}"), None).await;
-    assert_eq!(money(&placed["discount_total"]), Decimal::ONE, "100 points x 0.01: {placed}");
+    assert_eq!(
+        money(&placed["discount_total"]),
+        Decimal::ONE,
+        "100 points x 0.01: {placed}"
+    );
     // staff cancel it (a paid order's own cancellation refunds through the gateway)
     let cancel = format!("/orders/{second}/status");
     let body = serde_json::json!({"status": "cancelled"});
     let (status, _) = send_json(&app, reqwest::Method::PUT, &admin, &cancel, Some(body)).await;
     assert_eq!(status, 200);
-    let refunded: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM loyalty_entries WHERE order_id = $1::uuid AND kind = 'refund'")
-        .bind(&second)
-        .fetch_one(&app.db_pool)
-        .await
-        .unwrap();
+    let refunded: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM loyalty_entries WHERE order_id = $1::uuid AND kind = 'refund'",
+    )
+    .bind(&second)
+    .fetch_one(&app.db_pool)
+    .await
+    .unwrap();
     assert_eq!(refunded, 1);
     let (_, mine) = call_json(&app, &token, "/customers/me/loyalty", None).await;
     assert_eq!(mine["points"], 200, "given back: {mine}");
@@ -5198,7 +5302,14 @@ async fn test_loyalty_points_earned_redeemed_and_given_back() {
     let (_, account) = call_json(&app, &admin, &path, Some(adjust)).await;
     assert_eq!(account["points"], 180, "{account}");
     let off = serde_json::json!({"enabled": false});
-    send_json(&app, reqwest::Method::PUT, &admin, "/admin/loyalty/settings", Some(off)).await;
+    send_json(
+        &app,
+        reqwest::Method::PUT,
+        &admin,
+        "/admin/loyalty/settings",
+        Some(off),
+    )
+    .await;
     let (_, mine) = call_json(&app, &token, "/customers/me/loyalty", None).await;
     assert_eq!(mine["enabled"], false);
     app.cleanup().await.ok();
@@ -5212,8 +5323,15 @@ async fn test_order_history_by_whom_and_when() {
     let app = TestApp::new().await.expect("Failed to create test app");
     let admin = app.admin_token().await.expect("Failed to create admin");
     let location = create_pickup_location(&app, &admin).await;
-    let product = app.create_test_product("Tracked bricks", Decimal::new(1000, 2), 0).await.unwrap();
-    app.app_state.inventory_service.receive_stock(product, location, 10, None).await.unwrap();
+    let product = app
+        .create_test_product("Tracked bricks", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 10, None)
+        .await
+        .unwrap();
     let (customer, password) = app.create_test_customer().await.unwrap();
     let token = app.login(&customer.email, &password).await.unwrap();
     let order = customer_pickup_order(&app, &token, &customer.email, location, product).await;
@@ -5224,21 +5342,330 @@ async fn test_order_history_by_whom_and_when() {
     let events = staff_view["events"].as_array().unwrap();
     let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
     assert_eq!(kinds.first(), Some(&"placed"), "{staff_view}");
-    assert!(kinds.contains(&"ready") && kinds.ends_with(&["collected"]), "{kinds:?}");
+    assert!(
+        kinds.contains(&"ready") && kinds.ends_with(&["collected"]),
+        "{kinds:?}"
+    );
     let collected = events.iter().find(|e| e["kind"] == "collected").unwrap();
     assert_eq!(collected["detail"]["collected_by"], "J. Mason");
     assert_eq!(collected["actor_role"], "staff");
-    assert!(collected["actor_name"].is_string(), "staff see who: {collected}");
+    assert!(
+        collected["actor_name"].is_string(),
+        "staff see who: {collected}"
+    );
     assert_eq!(events[0]["actor_role"], "customer");
 
     let (_, customer_view) = call_json(&app, &token, &path, None).await;
     let seen = customer_view["events"].as_array().unwrap();
     let collected = seen.iter().find(|e| e["kind"] == "collected").unwrap();
-    assert!(collected["actor_name"].is_null(), "no staff names for customers: {collected}");
+    assert!(
+        collected["actor_name"].is_null(),
+        "no staff names for customers: {collected}"
+    );
     assert_eq!(collected["detail"]["collected_by"], "J. Mason");
     let (other, other_password) = app.create_test_customer().await.unwrap();
     let other_token = app.login(&other.email, &other_password).await.unwrap();
     let (status, _) = call_json(&app, &other_token, &path, None).await;
     assert_eq!(status, 403);
+    app.cleanup().await.ok();
+}
+
+/// An order with a negotiated price and a promotion is in the product's and
+/// the customer's price history with where the price came from; a changed
+/// rule keeps its old value for the old period; a promotion's uses survive
+/// its deletion; customers see none of it
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_price_and_promotion_history() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    let product = app
+        .create_test_product("History bricks", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 10, None)
+        .await
+        .unwrap();
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let sign_up =
+        serde_json::json!({"vat_number": fresh_belgian_vat(), "name": "History Builders"});
+    let (_, body) = call_json(&app, &token, "/companies", Some(sign_up)).await;
+    let company = body["company"]["id"].as_str().unwrap().to_string();
+    let list = new_price_list(
+        &app,
+        &admin,
+        serde_json::json!({"name": "History list", "company_id": company}),
+    )
+    .await;
+    let rules = format!("/admin/price-lists/{list}/rules");
+    let rule = serde_json::json!({"scope": "product", "target_id": product, "adjustment": "fixed", "value": "8.00"});
+    let (_, added) = call_json(&app, &admin, &rules, Some(rule)).await;
+    let rule_id = added["rule"]["id"].as_str().unwrap().to_string();
+    let promotion = serde_json::json!({"name": "History week", "kind": "percent_off", "value": 10,
+        "audience": "both", "combinable": true, "scope": "product", "target_id": product});
+    let promotion = new_promotion(&app, &admin, promotion).await;
+    let order = customer_pickup_order(&app, &token, &customer.email, location, product).await;
+
+    let path = format!("/admin/products/{product}/price-history");
+    let (status, history) = call_json(&app, &admin, &path, None).await;
+    assert_eq!(status, 200, "{history}");
+    let line = &history["charged"][0];
+    assert_eq!(line["order_id"], order.as_str(), "{history}");
+    let prices = ["base_price", "negotiated_price", "unit_price"].map(|k| money(&line[k]));
+    assert_eq!(
+        prices,
+        [
+            Decimal::new(1000, 2),
+            Decimal::new(800, 2),
+            Decimal::new(720, 2)
+        ],
+        "{line}"
+    );
+    assert_eq!(line["price_list_name"], "History list");
+    assert_eq!(line["promotions"][0]["name"], "History week");
+    assert_eq!(
+        money(&line["promotions"][0]["saving"]),
+        Decimal::new(160, 2),
+        "0.80 x 2: {line}"
+    );
+    assert_eq!(line["company_name"], "History Builders");
+    assert!(history["promotions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["id"] == promotion.as_str()));
+    assert_eq!(
+        money(&history["catalogue"][0]["price"]),
+        Decimal::new(1000, 2)
+    );
+
+    // the rule changes: the old value stays for its period
+    send_json(
+        &app,
+        reqwest::Method::DELETE,
+        &admin,
+        &format!("{rules}/{rule_id}"),
+        None,
+    )
+    .await;
+    let lower = serde_json::json!({"scope": "product", "target_id": product, "adjustment": "fixed", "value": "7.50"});
+    call_json(&app, &admin, &rules, Some(lower)).await;
+    let mine = format!("{path}?customer={}", customer.id);
+    let (_, history) = call_json(&app, &admin, &mine, None).await;
+    let periods = history["negotiated"].as_array().unwrap();
+    assert_eq!(periods.len(), 2, "{history}");
+    assert!(
+        periods[0]["valid_to"].is_null() && money(&periods[0]["price"]) == Decimal::new(750, 2),
+        "{periods:?}"
+    );
+    assert!(
+        periods[1]["valid_to"].is_string() && money(&periods[1]["value"]) == Decimal::new(800, 2)
+    );
+
+    let path = format!("/admin/customers/{}/price-history", customer.id);
+    let (status, theirs) = call_json(&app, &admin, &path, None).await;
+    assert_eq!(status, 200, "{theirs}");
+    assert_eq!(theirs["company_name"], "History Builders");
+    assert_eq!(
+        money(&theirs["lines"][0]["net_unit_price"]),
+        Decimal::new(720, 2),
+        "{theirs}"
+    );
+    let rule = &theirs["negotiated"][0];
+    assert_eq!(
+        (rule["target_name"].as_str(), money(&rule["value"])),
+        (Some("History bricks"), Decimal::new(750, 2))
+    );
+
+    let uses = format!("/admin/promotions/{promotion}/uses");
+    send_json(
+        &app,
+        reqwest::Method::DELETE,
+        &admin,
+        &format!("/admin/promotions/{promotion}"),
+        None,
+    )
+    .await;
+    let (status, used) = call_json(&app, &admin, &uses, None).await;
+    assert_eq!(status, 200, "{used}");
+    assert_eq!(
+        (used["orders"].as_i64(), money(&used["discount"])),
+        (Some(1), Decimal::new(160, 2)),
+        "{used}"
+    );
+    assert_eq!(used["uses"][0]["order_id"], order.as_str());
+    assert_eq!(used["name"], "History week", "kept after deletion");
+
+    for path in [
+        format!("/admin/products/{product}/price-history"),
+        path,
+        uses,
+    ] {
+        assert_eq!(call_json(&app, &token, &path, None).await.0, 403, "{path}");
+    }
+    app.cleanup().await.ok();
+}
+
+/// A fixed amount off the order comes off once, not per unit, and only
+/// above its minimum; the cart lists what catalogue promotions take off its
+/// lines (already in their prices) for its totals
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_order_amount_off_and_catalogue_savings_in_the_cart() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (product, _) = product_in_category(&app, Decimal::new(1000, 2)).await;
+    // both combinable: a non-combinable promotion never adds up with another
+    let sale = serde_json::json!({"name": "OSB week", "kind": "percent_off", "value": 15,
+        "combinable": true, "scope": "product", "target_id": product});
+    let sale = new_promotion(&app, &admin, sale).await;
+    let voucher = serde_json::json!({"name": "2 euros off", "kind": "order_amount_off", "value": 2,
+        "min_amount": 10, "combinable": true, "scope": "product", "target_id": product});
+    let voucher = new_promotion(&app, &admin, voucher).await;
+
+    let cart = guest_cart(&app, guest_cart_with(&app, product, 2).await).await;
+    // 2 x 8.50 = 17.00, then 2.00 once
+    assert_eq!(
+        money(&cart["cart"]["subtotal"]),
+        Decimal::new(1700, 2),
+        "{cart}"
+    );
+    assert_eq!(
+        money(&cart["cart"]["discount_total"]),
+        Decimal::new(200, 2),
+        "once, not per unit: {cart}"
+    );
+    let shown = &cart["cart"]["catalogue_promotions"];
+    assert_eq!(
+        (shown[0]["name"].as_str(), money(&shown[0]["discount"])),
+        (Some("OSB week"), Decimal::new(300, 2)),
+        "{cart}"
+    );
+    let small = guest_cart(&app, guest_cart_with(&app, product, 1).await).await;
+    assert_eq!(
+        money(&small["cart"]["discount_total"]),
+        Decimal::ZERO,
+        "8.50 is under the minimum: {small}"
+    );
+
+    let bad = serde_json::json!({"name": "Nothing off", "kind": "order_amount_off", "value": 0});
+    assert_eq!(
+        call_json(&app, &admin, "/admin/promotions", Some(bad))
+            .await
+            .0,
+        400
+    );
+    for id in [sale, voucher] {
+        send_json(
+            &app,
+            reqwest::Method::DELETE,
+            &admin,
+            &format!("/admin/promotions/{id}"),
+            None,
+        )
+        .await;
+    }
+    app.cleanup().await.ok();
+}
+
+/// A customer has one default delivery address and one default billing
+/// address: making another one the default takes the flag off the first
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_one_default_address_of_each_kind() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let address = |street: &str, shipping: bool, billing: bool| {
+        serde_json::json!({"first_name": "Ada", "last_name": "Home", "phone": "+32 71 00 00 00",
+            "address1": street, "city": "Namur", "country": "BE", "zip": "5000",
+            "is_default_shipping": shipping, "is_default_billing": billing})
+    };
+    let (status, first) = call_json(
+        &app,
+        &token,
+        "/customers/me/addresses",
+        Some(address("Rue 1", true, true)),
+    )
+    .await;
+    assert_eq!(status, 201, "{first}");
+    let (_, second) = call_json(
+        &app,
+        &token,
+        "/customers/me/addresses",
+        Some(address("Rue 2", true, false)),
+    )
+    .await;
+    let defaults = |list: &serde_json::Value, flag: &str| -> Vec<String> {
+        let rows = list["addresses"].as_array().unwrap();
+        rows.iter()
+            .filter(|a| a[flag] == true)
+            .map(|a| a["address1"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (_, list) = call_json(&app, &token, "/customers/me/addresses", None).await;
+    assert_eq!(defaults(&list, "is_default_shipping"), ["Rue 2"], "{list}");
+    assert_eq!(
+        defaults(&list, "is_default_billing"),
+        ["Rue 1"],
+        "billing stays: {list}"
+    );
+
+    let path = format!("/customers/me/addresses/{}", first["id"].as_str().unwrap());
+    send_json(
+        &app,
+        reqwest::Method::PUT,
+        &token,
+        &path,
+        Some(address("Rue 1", true, true)),
+    )
+    .await;
+    let (_, list) = call_json(&app, &token, "/customers/me/addresses", None).await;
+    assert_eq!(defaults(&list, "is_default_shipping"), ["Rue 1"], "{list}");
+    assert_ne!(second["id"], first["id"]);
+    app.cleanup().await.ok();
+}
+
+/// Staff edit every product field the back-office shows, featured flag, cost
+/// price and SEO included; `null` clears a field, an absent one stays
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_product_edit_sets_and_clears_fields() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let product = app
+        .create_test_product("Editable bricks", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    let path = format!("/products/{product}");
+    let edit = serde_json::json!({"title": "Red bricks", "description": "Solid", "is_featured": true,
+        "cost_price": "4.20", "seo_title": "Red bricks for walls", "gtin": "5412345678908"});
+    let (status, body) = send_json(&app, reqwest::Method::PUT, &admin, &path, Some(edit)).await;
+    assert_eq!(status, 200, "{body}");
+    let (_, page) = call_json(&app, &admin, &path, None).await;
+    let p = &page["product"];
+    assert_eq!(
+        (p["title"].as_str(), p["is_featured"].as_bool()),
+        (Some("Red bricks"), Some(true)),
+        "{page}"
+    );
+    assert_eq!(
+        (money(&p["cost_price"]), p["seo_title"].as_str()),
+        (Decimal::new(420, 2), Some("Red bricks for walls"))
+    );
+
+    let clear = serde_json::json!({"description": null, "is_featured": false});
+    send_json(&app, reqwest::Method::PUT, &admin, &path, Some(clear)).await;
+    let (_, page) = call_json(&app, &admin, &path, None).await;
+    let p = &page["product"];
+    assert!(
+        p["description"].is_null() && p["is_featured"] == false,
+        "{page}"
+    );
+    assert_eq!(p["seo_title"], "Red bricks for walls", "absent: unchanged");
     app.cleanup().await.ok();
 }
