@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod api_key_scopes;
 pub mod auth_service;
 pub mod auth_session;

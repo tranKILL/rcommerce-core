@@ -198,6 +198,13 @@ pub async fn record_order(conn: &mut PgConnection, placed: &PlacedOrder<'_>) -> 
         Some(customer) => pricing_context(&mut *conn, customer).await?.company_id,
         None => None,
     };
+    if company.is_some() {
+        sqlx::query("UPDATE orders SET company_id = $2 WHERE id = $1")
+            .bind(placed.order_id)
+            .bind(company)
+            .execute(&mut *conn)
+            .await?;
+    }
     let mut savings: HashMap<Uuid, Decimal> = HashMap::new();
     for (cart_line, order_line) in placed.lines {
         let Some(item) = placed

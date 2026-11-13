@@ -5669,3 +5669,328 @@ async fn test_product_edit_sets_and_clears_fields() {
     assert_eq!(p["seo_title"], "Red bricks for walls", "absent: unchanged");
     app.cleanup().await.ok();
 }
+
+/// Noon on the first day of the month `back` months before this one,
+/// Brussels time (the test store's time zone)
+async fn month_start(pool: &Pool<Postgres>, back: i32) -> chrono::DateTime<chrono::Utc> {
+    sqlx::query_scalar(
+        "SELECT (date_trunc('month', NOW() AT TIME ZONE 'Europe/Brussels') \
+                 - make_interval(months => $1) + INTERVAL '12 hours') AT TIME ZONE 'Europe/Brussels'",
+    )
+    .bind(back)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Who placed a dated test order, and for which business account
+struct Buyer<'a> {
+    customer: Uuid,
+    email: &'a str,
+    company: Option<Uuid>,
+}
+
+/// A completed order of `quantity` × `product` worth `excl` excl. VAT (21 %),
+/// fulfilled by `location` and placed `at`; returns the order line's id
+async fn dated_order(
+    pool: &Pool<Postgres>,
+    buyer: &Buyer<'_>,
+    location: Uuid,
+    at: chrono::DateTime<chrono::Utc>,
+    (product, quantity, excl): (Uuid, i32, Decimal),
+) -> Uuid {
+    let number = format!("AN-{}", &Uuid::new_v4().simple().to_string()[..12]);
+    sqlx::query_scalar(
+        "WITH o AS ( \
+           INSERT INTO orders (order_number, customer_id, customer_email, company_id, subtotal, \
+                               tax_total, total, status, payment_status, metadata, created_at) \
+           VALUES ($1, $2, $3, $4, $5, $5 * 0.21, $5 * 1.21, 'completed', 'paid', \
+                   jsonb_build_object('fulfillment_location_id', $6::text), $7) \
+           RETURNING id) \
+         INSERT INTO order_items (order_id, product_id, title, quantity, price, subtotal, total) \
+         SELECT o.id, $8, 'Analytics tiles', $9, $5 / $9, $5, $5 * 1.21 FROM o RETURNING id",
+    )
+    .bind(number)
+    .bind(buyer.customer)
+    .bind(buyer.email)
+    .bind(buyer.company)
+    .bind(excl)
+    .bind(location.to_string())
+    .bind(at)
+    .bind(product)
+    .bind(quantity)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// A product in a new top-level category (through a sub-category); returns
+/// the product and the top-level category
+async fn product_in_categories(app: &TestApp) -> (Uuid, Uuid) {
+    let pool = &app.db_pool;
+    let product = app
+        .create_test_product("Analytics tiles", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    let tag = Uuid::new_v4().simple().to_string();
+    let category = |name: &str, parent: Option<Uuid>| {
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO product_categories (name, slug, parent_id) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(format!("{name} {}", &tag[..6]))
+        .bind(format!("{}-{tag}", name.to_lowercase()))
+        .bind(parent)
+        .fetch_one(pool)
+    };
+    let roof = category("Roof", None).await.unwrap();
+    let tiles = category("Tiles", Some(roof)).await.unwrap();
+    sqlx::query("INSERT INTO product_category_relations (product_id, category_id) VALUES ($1, $2)")
+        .bind(product)
+        .bind(tiles)
+        .execute(pool)
+        .await
+        .unwrap();
+    (product, roof)
+}
+
+/// A business account with `customer` as its owner
+async fn company_for(pool: &Pool<Postgres>, customer: Uuid) -> Uuid {
+    let vat = format!("BE0{}", &Uuid::new_v4().as_u128().to_string()[..9]);
+    let company: Uuid = sqlx::query_scalar(
+        "INSERT INTO companies (name, vat_number, country) VALUES ('Analytics Builders', $1, 'BE') \
+         RETURNING id",
+    )
+    .bind(vat)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO company_members (company_id, customer_id, role) VALUES ($1, $2, 'owner')",
+    )
+    .bind(company)
+    .bind(customer)
+    .execute(pool)
+    .await
+    .unwrap();
+    company
+}
+
+/// A promotion that started a month ago, used on the order of `line` with a
+/// saving of 5 (recorded as the checkout does)
+async fn used_promotion(pool: &Pool<Postgres>, line: Uuid, customer: Uuid) -> Uuid {
+    let starts = month_start(pool, 1).await - chrono::Duration::hours(12);
+    let promotion: Uuid = sqlx::query_scalar(
+        "INSERT INTO promotions (name, kind, value, starts_at) \
+         VALUES ('Analytics week', 'percent_off', 10, $1) RETURNING id",
+    )
+    .bind(starts)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "WITH line AS (SELECT id, order_id, product_id, quantity, price FROM order_items WHERE id = $1), \
+         priced AS ( \
+           INSERT INTO order_line_pricing (order_item_id, order_id, product_id, customer_id, quantity, \
+                                           base_price, negotiated_price, unit_price, cost_price, promotions) \
+           SELECT id, order_id, product_id, $3, quantity, price, price, price, 6, \
+                  jsonb_build_array(jsonb_build_object('id', $2::text, 'name', 'Analytics week', \
+                                                       'kind', 'percent_off', 'saving', '5')) \
+           FROM line RETURNING order_id) \
+         INSERT INTO promotion_uses (promotion_id, order_id, customer_id, name, kind, discount) \
+         SELECT $2, order_id, $3, 'Analytics week', 'percent_off', 5 FROM priced",
+    )
+    .bind(line)
+    .bind(promotion)
+    .bind(customer)
+    .execute(pool)
+    .await
+    .unwrap();
+    promotion
+}
+
+/// Status, content type and body of a GET as `token`
+async fn get_text(app: &TestApp, token: &str, path: &str) -> (reqwest::StatusCode, String, String) {
+    let url = format!("{}/api/v1{path}", app.base_url());
+    let response = app
+        .http_client
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let kind = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    (status, kind, response.text().await.unwrap())
+}
+
+/// Two years of orders at one branch: 100 a month the first year and 110 the
+/// second for a retail customer, one trade order last month with a promotion
+/// and a known cost. Finance adds them up per month and audience, projects
+/// this month from last year (×1.1), and computes the margin; marketing finds
+/// the category, the customers, the company and the promotion; another
+/// branch's sale last year in the coming weeks asks for a restock. Staff
+/// without `reports` are refused.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_finance_and_marketing_reports() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let pool = &app.db_pool;
+    let (branch, other_branch) = (
+        create_pickup_location(&app, &admin).await,
+        create_pickup_location(&app, &admin).await,
+    );
+    let (product, roof) = product_in_categories(&app).await;
+    let (retail, _) = app.create_test_customer().await.unwrap();
+    let (trade, password) = app.create_test_customer().await.unwrap();
+    let company = company_for(pool, trade.id).await;
+    let buyer = Buyer {
+        customer: retail.id,
+        email: &retail.email,
+        company: None,
+    };
+    for back in 1..=24 {
+        let excl = Decimal::from(if back <= 12 { 110 } else { 100 });
+        let at = month_start(pool, back).await;
+        dated_order(pool, &buyer, branch, at, (product, 10, excl)).await;
+    }
+    let trader = Buyer {
+        customer: trade.id,
+        email: &trade.email,
+        company: Some(company),
+    };
+    let at = month_start(pool, 1).await + chrono::Duration::hours(1);
+    let line = dated_order(pool, &trader, branch, at, (product, 20, Decimal::from(200))).await;
+    let promotion = used_promotion(pool, line, trade.id).await;
+    let last_year: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT NOW() - INTERVAL '1 year' + INTERVAL '7 days'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    dated_order(
+        pool,
+        &buyer,
+        other_branch,
+        last_year,
+        (product, 50, Decimal::from(500)),
+    )
+    .await;
+    app.app_state
+        .inventory_service
+        .receive_stock(product, other_branch, 5, None)
+        .await
+        .unwrap();
+
+    check_finance(&app, &admin, branch).await;
+    check_marketing(&app, &admin, branch, (roof, company, promotion)).await;
+    let path = format!("/admin/analytics/marketing?location_id={other_branch}");
+    let (_, report) = call_json(&app, &admin, &path, None).await;
+    let restock = &report["restock"][0];
+    assert_eq!(restock["product_id"], product.to_string(), "{report}");
+    assert_eq!(restock["last_year_coming"], 50);
+    assert_eq!(restock["expected"], 50);
+    assert_eq!(restock["available"], 5);
+    assert_eq!(restock["suggested"], 45);
+
+    let token = app.login(&trade.email, &password).await.unwrap();
+    let (status, _) = call_json(&app, &token, "/admin/analytics/finance", None).await;
+    assert_eq!(status, 403);
+    assign_role(&app, &admin, trade.id, serde_json::json!(["reports:read"])).await;
+    let (status, _) = call_json(&app, &token, "/admin/analytics/marketing", None).await;
+    assert_eq!(status, 200);
+    app.cleanup().await.ok();
+}
+
+/// Finance at `branch`: totals per audience, last month's margin, the
+/// projection and the same days last year; the monthly CSV
+async fn check_finance(app: &TestApp, admin: &str, branch: Uuid) {
+    let from: chrono::NaiveDate = month_start(&app.db_pool, 24).await.date_naive();
+    let base = format!("/admin/analytics/finance?location_id={branch}&from={from}");
+    let (status, all) = call_json(app, admin, &base, None).await;
+    assert_eq!(status, 200, "{all}");
+    let months = all["months"].as_array().unwrap();
+    assert_eq!(months.len(), 25, "24 complete months and this one");
+    assert_eq!(all["total"]["orders"], 25);
+    assert_eq!(money(&all["total"]["sales"]), Decimal::from(2720));
+    let last = &months[23];
+    assert_eq!(money(&last["sales"]), Decimal::from(310), "{last}");
+    assert_eq!(money(&last["costed"]), Decimal::from(200), "{last}");
+    assert_eq!(money(&last["cost"]), Decimal::from(120), "20 × 6: {last}");
+    assert_eq!(money(&last["margin"]), Decimal::from(80), "{last}");
+    assert_eq!(money(&last["goods"]), Decimal::from(310), "{last}");
+
+    let (_, retail) = call_json(app, admin, &format!("{base}&audience=retail"), None).await;
+    assert_eq!(money(&retail["total"]["sales"]), Decimal::from(2520));
+    let projected = &retail["projection"][0];
+    assert_eq!(projected["method"], "last_year", "{retail}");
+    assert_eq!(money(&projected["sales"]), Decimal::from(121), "110 × 1.1");
+    assert_eq!(retail["month_to_date"]["last_year"]["orders"], 1);
+    assert_eq!(retail["month_to_date"]["current"]["orders"], 0);
+    let (_, trade) = call_json(app, admin, &format!("{base}&audience=trade"), None).await;
+    assert_eq!(trade["total"]["orders"], 1);
+    assert_eq!(money(&trade["total"]["vat"]), Decimal::from(42));
+
+    let csv = format!("/admin/analytics/finance.csv?location_id={branch}&from={from}");
+    let (status, kind, body) = get_text(app, admin, &csv).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(kind.starts_with("text/csv"), "{kind}");
+    let lines: Vec<&str> = body.trim_start_matches('\u{feff}').lines().collect();
+    assert_eq!(lines.len(), 26, "header and 25 months");
+    assert!(
+        lines[0].starts_with("month,orders,sales_excl_vat"),
+        "{}",
+        lines[0]
+    );
+}
+
+/// Marketing at `branch`: seasonality of the category, customers, company,
+/// baskets, new and returning customers, the promotion; CSV sections
+async fn check_marketing(app: &TestApp, admin: &str, branch: Uuid, ids: (Uuid, Uuid, Uuid)) {
+    let (roof, company, promotion) = ids;
+    let from: chrono::NaiveDate = month_start(&app.db_pool, 24).await.date_naive();
+    let base = format!("/admin/analytics/marketing?location_id={branch}&from={from}");
+    let (status, report) = call_json(app, admin, &base, None).await;
+    assert_eq!(status, 200, "{report}");
+    let season = &report["seasonality"][0];
+    assert_eq!(season["category_id"], roof.to_string(), "{report}");
+    assert_eq!(money(&season["sales"]), Decimal::from(2720));
+    assert_eq!(season["index"].as_array().unwrap().len(), 12);
+    assert_eq!(report["top_customers"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        money(&report["top_customers"][0]["sales"]),
+        Decimal::from(2520)
+    );
+    assert_eq!(
+        report["top_companies"][0]["company_id"],
+        company.to_string()
+    );
+    assert_eq!(report["top_companies"][0]["buyers"], 1);
+    let baskets = report["baskets"].as_array().unwrap();
+    assert_eq!(baskets[0]["audience"], "retail");
+    assert_eq!(money(&baskets[0]["average"]), Decimal::from(105));
+    assert_eq!(baskets[1]["orders"], 1);
+    let months = report["customer_months"].as_array().unwrap();
+    assert_eq!(months[0]["new_customers"], 1, "{}", months[0]);
+    assert_eq!(months[1]["returning_customers"], 1, "{}", months[1]);
+    let used = &report["promotions"][0];
+    assert_eq!(used["promotion_id"], promotion.to_string(), "{report}");
+    assert_eq!(money(&used["discount"]), Decimal::from(5));
+    assert_eq!(used["orders"], 1);
+    assert!(!used["daily_during"].is_null(), "{used}");
+    let loyalty = &report["loyalty"];
+    let liability = Decimal::from(loyalty["outstanding"].as_i64().unwrap().max(0))
+        * money(&loyalty["point_value"]);
+    assert_eq!(money(&loyalty["liability"]), liability.round_dp(2));
+
+    let csv = format!("/admin/analytics/marketing.csv?location_id={branch}&from={from}");
+    let (status, _, body) = get_text(app, admin, &format!("{csv}&section=seasonality")).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains(",jan,feb,"), "{body}");
+    let (status, _, _) = get_text(app, admin, &format!("{csv}&section=secrets")).await;
+    assert_eq!(status, 400);
+}

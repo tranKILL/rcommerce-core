@@ -299,6 +299,11 @@ impl Migrator {
                 "promotion_kinds_display",
                 include_str!("../../migrations/040_promotion_kinds_display.sql"),
             ),
+            (
+                41,
+                "order_company",
+                include_str!("../../migrations/041_order_company.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

@@ -1135,6 +1135,10 @@ async fn create_app_state(config: &Config) -> Result<AppState> {
         app_state.db.pool().clone(),
         &config.invoicing.timezone,
     );
+    app_state.analytics = rcommerce_core::services::analytics::AnalyticsService::new(
+        app_state.db.pool().clone(),
+        &config.invoicing.timezone,
+    );
     app_state.branding.pdf_logo = pdf_logo(config);
     app_state.branding.address_lines = config.invoicing.seller.address_lines();
     app_state.branding.issues_invoices = config.invoicing.enabled;

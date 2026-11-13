@@ -1,5 +1,6 @@
 pub mod accounting;
 pub mod admin;
+pub mod analytics;
 pub mod auth;
 pub mod cart;
 pub mod catalogue;

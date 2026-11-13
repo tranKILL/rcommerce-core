@@ -17,6 +17,7 @@ use crate::{middleware::JwtAuth, state::AppState};
 const ADMIN_AREAS: &[(&str, Resource)] = &[
     ("/admin/statistics", Resource::Reports),
     ("/admin/stats", Resource::Reports),
+    ("/admin/analytics", Resource::Reports),
     ("/admin/orders", Resource::Orders),
     ("/admin/products", Resource::Products),
     ("/products", Resource::Products),

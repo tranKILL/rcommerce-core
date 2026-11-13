@@ -178,6 +178,8 @@ pub struct AppState {
     pub peppol: Option<Arc<rcommerce_core::peppol::PeppolService>>,
     /// Figures of the back-office home
     pub dashboard: rcommerce_core::services::dashboard_service::DashboardService,
+    /// Finance and marketing reports
+    pub analytics: rcommerce_core::services::analytics::AnalyticsService,
     /// Accounting export configuration (store code/name, site URL)
     pub accounting: rcommerce_core::config::AccountingConfig,
     /// Store base currency for new carts (ISO code, e.g. "USD", "AUD")
@@ -361,6 +363,10 @@ impl AppState {
             ),
             peppol: None,
             dashboard: rcommerce_core::services::dashboard_service::DashboardService::new(
+                pool.clone(),
+                "Europe/Brussels",
+            ),
+            analytics: rcommerce_core::services::analytics::AnalyticsService::new(
                 pool.clone(),
                 "Europe/Brussels",
             ),
