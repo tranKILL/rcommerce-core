@@ -77,6 +77,16 @@ pub async fn delete_role(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Every dashboard widget: its id, the resource a role must read, its sizes
+/// and default size, and whether it shows by default
+///
+/// GET /api/v1/admin/staff/widgets
+pub async fn list_widgets() -> JsonResult {
+    Ok(Json(serde_json::json!({
+        "widgets": rcommerce_core::services::dashboard_widgets::catalogue()
+    })))
+}
+
 /// List the accounts holding staff roles
 ///
 /// GET /api/v1/admin/staff/members
@@ -110,6 +120,7 @@ pub fn router() -> Router<AppState> {
             "/admin/staff/roles/:id",
             put(update_role).delete(delete_role),
         )
+        .route("/admin/staff/widgets", get(list_widgets))
         .route("/admin/staff/members", get(list_members))
         .route(
             "/admin/staff/members/:customer_id/roles",

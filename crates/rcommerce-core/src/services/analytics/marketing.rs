@@ -195,23 +195,85 @@ struct ProductDemand {
     recent: i64,
 }
 
+/// The sections of the marketing report to compute (the others stay empty)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MarketingParts {
+    pub seasonality: bool,
+    pub restock: bool,
+    /// Best customers and business accounts
+    pub top: bool,
+    /// New and returning customers, baskets and channels
+    pub customers: bool,
+    pub promotions: bool,
+    pub loyalty: bool,
+}
+
+impl MarketingParts {
+    /// Every section
+    pub const ALL: MarketingParts = MarketingParts {
+        seasonality: true,
+        restock: true,
+        top: true,
+        customers: true,
+        promotions: true,
+        loyalty: true,
+    };
+
+    /// Whether any section is asked for
+    pub fn any(&self) -> bool {
+        *self != MarketingParts::default()
+    }
+}
+
 impl AnalyticsService {
     /// The marketing report for the filter's period
     pub async fn marketing(&self, filter: &ReportFilter) -> Result<MarketingReport> {
+        self.marketing_parts(filter, MarketingParts::ALL).await
+    }
+
+    /// Some sections of the marketing report, the others left empty (for the
+    /// dashboard, which shows only the widgets a staff member picked)
+    pub async fn marketing_parts(
+        &self,
+        filter: &ReportFilter,
+        parts: MarketingParts,
+    ) -> Result<MarketingReport> {
         let (from, to) = self.period(filter);
-        Ok(MarketingReport {
+        let mut report = MarketingReport {
             from,
             to,
-            seasonality: self.seasonality(filter).await?,
-            restock: self.restock(filter).await?,
-            top_customers: self.top_customers(filter, from, to).await?,
-            top_companies: self.top_companies(filter, from, to).await?,
-            customer_months: self.customer_months(filter, from, to).await?,
-            baskets: self.baskets(filter, from, to).await?,
-            channels: self.channels(filter, from, to).await?,
-            promotions: self.promotions(filter, from, to).await?,
-            loyalty: self.loyalty(from, to).await?,
-        })
+            seasonality: Vec::new(),
+            restock: Vec::new(),
+            top_customers: Vec::new(),
+            top_companies: Vec::new(),
+            customer_months: Vec::new(),
+            baskets: Vec::new(),
+            channels: Vec::new(),
+            promotions: Vec::new(),
+            loyalty: LoyaltyFigures::default(),
+        };
+        if parts.seasonality {
+            report.seasonality = self.seasonality(filter).await?;
+        }
+        if parts.restock {
+            report.restock = self.restock(filter).await?;
+        }
+        if parts.top {
+            report.top_customers = self.top_customers(filter, from, to).await?;
+            report.top_companies = self.top_companies(filter, from, to).await?;
+        }
+        if parts.customers {
+            report.customer_months = self.customer_months(filter, from, to).await?;
+            report.baskets = self.baskets(filter, from, to).await?;
+            report.channels = self.channels(filter, from, to).await?;
+        }
+        if parts.promotions {
+            report.promotions = self.promotions(filter, from, to).await?;
+        }
+        if parts.loyalty {
+            report.loyalty = self.loyalty(from, to).await?;
+        }
+        Ok(report)
     }
 
     /// Seasonal profile of each top-level category over the 24 complete

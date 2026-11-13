@@ -5994,3 +5994,235 @@ async fn check_marketing(app: &TestApp, admin: &str, branch: Uuid, ids: (Uuid, U
     let (status, _, _) = get_text(app, admin, &format!("{csv}&section=secrets")).await;
     assert_eq!(status, 400);
 }
+
+/// Create a role from `role` (name added) and give it to `staff`; its id
+async fn role_for(app: &TestApp, admin: &str, staff: Uuid, mut role: serde_json::Value) -> String {
+    use reqwest::Method;
+    role["name"] = serde_json::json!(format!("Role {}", Uuid::new_v4()));
+    let (status, body) =
+        admin_api_call(app, admin, Method::POST, "/admin/staff/roles", Some(role)).await;
+    assert_eq!(status, 201, "{body}");
+    let id = body["role"]["id"].as_str().unwrap().to_string();
+    let assign = serde_json::json!({"role_ids": [id]});
+    let path = format!("/admin/staff/members/{staff}/roles");
+    let (status, body) = admin_api_call(app, admin, Method::PUT, &path, Some(assign)).await;
+    assert_eq!(status, 200, "{body}");
+    id
+}
+
+/// Widget ids of a layout response, in order
+fn layout_ids(body: &serde_json::Value) -> Vec<String> {
+    body["layout"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["widget"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// A role narrows the menu and the widgets it shows, never what its
+/// permissions allow: a role without `reports` neither gets nor is offered
+/// finance widgets. Each staff member saves their own layout, which survives
+/// signing out, and can go back to the role's default. Only global admins see
+/// the widget list and change roles.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_role_menus_widgets_and_personal_layouts() {
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (status, widgets) =
+        admin_api_call(&app, &admin, Method::GET, "/admin/staff/widgets", None).await;
+    assert_eq!(status, 200, "{widgets}");
+    let finance = widgets["widgets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == "finance");
+    assert_eq!(finance.unwrap()["resource"], "reports");
+
+    let (staff, password) = app.create_test_customer().await.unwrap();
+    let role = serde_json::json!({"permissions": ["orders:write", "inventory:read"],
+        "menu": ["orders", "counter", "stock"], "max_discount_percent": 5});
+    let role_id = role_for(&app, &admin, staff.id, role).await;
+    let token = app.login(&staff.email, &password).await.unwrap();
+    let (_, me) = admin_api_call(&app, &token, Method::GET, "/admin/staff/me", None).await;
+    assert_eq!(
+        me["menu"],
+        serde_json::json!(["orders", "counter", "stock"])
+    );
+    assert_eq!(
+        me["widgets"],
+        serde_json::json!(["orders", "stock", "invoices"])
+    );
+    assert_eq!(
+        me["max_discount_percent"]
+            .as_str()
+            .map(|v| v.parse::<f64>().unwrap()),
+        Some(5.0)
+    );
+    let (status, board) = admin_api_call(
+        &app,
+        &token,
+        Method::GET,
+        "/admin/dashboard?widgets=finance,orders",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{board}");
+    assert!(
+        board["finance"].is_null() && board["marketing"].is_null(),
+        "{board}"
+    );
+    assert!(
+        board["orders"].is_object() && board["stock"].is_null(),
+        "{board}"
+    );
+
+    let mine = "/admin/staff/me/dashboard";
+    let (status, layout) = admin_api_call(&app, &token, Method::GET, mine, None).await;
+    assert_eq!(status, 200, "{layout}");
+    assert_eq!(layout["customised"], false);
+    assert_eq!(layout_ids(&layout), ["orders", "stock", "invoices"]);
+    assert_eq!(
+        layout["layout"][0]["sizes"],
+        serde_json::json!(["small", "medium", "large"])
+    );
+    for refused in [
+        serde_json::json!({"layout": [{"widget": "finance", "size": "medium"}]}),
+        serde_json::json!({"layout": [{"widget": "orders", "size": "huge"}]}),
+        serde_json::json!({"layout": [{"widget": "stock", "size": "small"}, {"widget": "stock", "size": "large"}]}),
+    ] {
+        let (status, body) = admin_api_call(&app, &token, Method::PUT, mine, Some(refused)).await;
+        assert!(status == 400 || status == 422, "{status} {body}");
+    }
+    let arranged = serde_json::json!({"layout": [
+        {"widget": "stock", "size": "small", "hidden": true},
+        {"widget": "orders", "size": "medium"}]});
+    let (status, saved) = admin_api_call(&app, &token, Method::PUT, mine, Some(arranged)).await;
+    assert_eq!(status, 200, "{saved}");
+    assert_eq!(layout_ids(&saved), ["stock", "orders", "invoices"]);
+    assert_eq!(
+        (
+            saved["layout"][0]["size"].as_str(),
+            saved["layout"][0]["hidden"].as_bool()
+        ),
+        (Some("small"), Some(true))
+    );
+
+    // signed out and in again: the layout is still theirs
+    let token = app.login(&staff.email, &password).await.unwrap();
+    let (_, again) = admin_api_call(&app, &token, Method::GET, mine, None).await;
+    assert_eq!(again["customised"], true);
+    assert_eq!(again["layout"], saved["layout"]);
+    for (method, path) in [
+        (Method::GET, "/admin/staff/widgets"),
+        (Method::GET, "/admin/staff/roles"),
+    ] {
+        let (status, _) = admin_api_call(&app, &token, method, path, None).await;
+        assert_eq!(status, 403, "{path}");
+    }
+    let role_path = format!("/admin/staff/roles/{role_id}");
+    let widen =
+        serde_json::json!({"permissions": ["reports:read", "orders:write", "inventory:read"]});
+    let (status, _) = admin_api_call(&app, &token, Method::PUT, &role_path, Some(widen)).await;
+    assert_eq!(status, 403, "staff cannot widen their own role");
+    let (status, _) = admin_api_call(&app, &token, Method::DELETE, mine, None).await;
+    assert_eq!(status, 204);
+    let (_, reset) = admin_api_call(&app, &token, Method::GET, mine, None).await;
+    assert_eq!(reset["customised"], false);
+    assert_eq!(layout_ids(&reset), ["orders", "stock", "invoices"]);
+
+    // the admin narrows the role: its holders' menu and widgets follow
+    let narrow = serde_json::json!({"menu": ["orders"], "widgets": ["stock"]});
+    let (status, body) = admin_api_call(&app, &admin, Method::PUT, &role_path, Some(narrow)).await;
+    assert_eq!(status, 200, "{body}");
+    let (_, me) = admin_api_call(&app, &token, Method::GET, "/admin/staff/me", None).await;
+    assert_eq!(
+        (me["menu"].clone(), me["widgets"].clone()),
+        (serde_json::json!(["orders"]), serde_json::json!(["stock"]))
+    );
+    let (_, board) = admin_api_call(&app, &token, Method::GET, "/admin/dashboard", None).await;
+    assert!(
+        board["orders"].is_null() && board["stock"].is_object(),
+        "{board}"
+    );
+    let clear = serde_json::json!({"menu": null, "widgets": null, "max_discount_percent": null});
+    let (status, body) = admin_api_call(&app, &admin, Method::PUT, &role_path, Some(clear)).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body["role"]["menu"].is_null() && body["role"]["max_discount_percent"].is_null(),
+        "{body}"
+    );
+    let (_, me) = admin_api_call(&app, &token, Method::GET, "/admin/staff/me", None).await;
+    assert!(me["menu"].is_null(), "{me}");
+    assert_eq!(
+        me["max_discount_percent"]
+            .as_str()
+            .map(|v| v.parse::<f64>().unwrap()),
+        Some(0.0)
+    );
+
+    for bad in [
+        serde_json::json!({"name": "Bad widgets", "widgets": ["nope"]}),
+        serde_json::json!({"name": "Bad menu", "menu": ["Bad Entry"]}),
+        serde_json::json!({"name": "Bad cap", "max_discount_percent": 150}),
+    ] {
+        let (status, body) =
+            admin_api_call(&app, &admin, Method::POST, "/admin/staff/roles", Some(bad)).await;
+        assert_eq!(status, 400, "{body}");
+    }
+    app.cleanup().await.ok();
+}
+
+/// A manager's analytics widgets are computed on the dashboard, only those
+/// asked for and offered
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_dashboard_analytics_widgets() {
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (staff, password) = app.create_test_customer().await.unwrap();
+    let role = serde_json::json!({"permissions": ["reports:read"],
+        "widgets": ["finance", "seasonality"], "max_discount_percent": "12.5"});
+    role_for(&app, &admin, staff.id, role).await;
+    let token = app.login(&staff.email, &password).await.unwrap();
+    let path = "/admin/dashboard?widgets=finance,seasonality,top_customers,sales";
+    let (status, board) = admin_api_call(&app, &token, Method::GET, path, None).await;
+    assert_eq!(status, 200, "{board}");
+    assert!(board["finance"]["month_to_date"].is_object(), "{board}");
+    // the last 12 months, projected when there is history (none in a fresh database)
+    assert_eq!(
+        board["finance"]["months"].as_array().unwrap().len(),
+        12,
+        "{board}"
+    );
+    assert!(board["finance"]["projection"].is_array(), "{board}");
+    assert!(board["marketing"]["seasonality"].is_array(), "{board}");
+    assert_eq!(
+        board["marketing"]["top_customers"],
+        serde_json::json!([]),
+        "not offered: {board}"
+    );
+    assert!(board["sales"].is_null(), "not in the role's list: {board}");
+    let (_, me) = admin_api_call(&app, &token, Method::GET, "/admin/staff/me", None).await;
+    assert_eq!(
+        me["max_discount_percent"]
+            .as_str()
+            .map(|v| v.parse::<f64>().unwrap()),
+        Some(12.5)
+    );
+    let (_, layout) =
+        admin_api_call(&app, &token, Method::GET, "/admin/staff/me/dashboard", None).await;
+    assert_eq!(layout_ids(&layout), ["finance", "seasonality"]);
+    assert!(
+        layout["layout"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["hidden"] == false),
+        "{layout}"
+    );
+    app.cleanup().await.ok();
+}

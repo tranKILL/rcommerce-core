@@ -31,9 +31,10 @@ A role lists permissions in the API key scope format, `<resource>:<action>`:
 | `/admin/price-lists/...` | `products` |
 | `/admin/invoices/...` | `orders` |
 
-`GET /admin/dashboard` and `GET /admin/staff/me` are open to any staff member,
-whatever their roles; the dashboard shows each part only to roles that can
-read it (see [10-staff-dashboard.md](10-staff-dashboard.md)).
+`GET /admin/dashboard`, `GET /admin/staff/me` and the caller's own layout
+(`GET`, `PUT` and `DELETE /admin/staff/me/dashboard`) are open to any staff
+member, whatever their roles; the dashboard shows each part only to roles that
+can read it (see [10-staff-dashboard.md](10-staff-dashboard.md)).
 
 Other routes stay reserved to global admins: `/admin/api-keys` and
 the staff management routes below. A new admin route is closed to staff until
@@ -64,14 +65,27 @@ These routes are for global admins only.
 | Method and path | Body | Answer |
 |---|---|---|
 | `GET /admin/staff/roles` | | `{"roles": [...]}` |
-| `POST /admin/staff/roles` | `{"name", "description"?, "permissions": [...]}` | 201 `{"role": {...}}` |
-| `PUT /admin/staff/roles/:id` | any of `name`, `description`, `permissions` | `{"role": {...}}` |
+| `POST /admin/staff/roles` | `{"name", "description"?, "permissions": [...], "menu"?, "widgets"?, "max_discount_percent"?}` | 201 `{"role": {...}}` |
+| `PUT /admin/staff/roles/:id` | any of `name`, `description`, `permissions`, `menu`, `widgets`, `max_discount_percent` (`null` clears the last three) | `{"role": {...}}` |
+| `GET /admin/staff/widgets` | | `{"widgets": [{"id", "resource", "sizes", "size", "shown"}]}` |
 | `DELETE /admin/staff/roles/:id` | | 204; the role's assignments go with it |
 | `GET /admin/staff/members` | | `{"members": [{"customer_id", "email", "role_ids"}]}` |
 | `PUT /admin/staff/members/:customer_id/roles` | `{"role_ids": [...]}` | `{"customer_id", "role_ids"}`; replaces the account's roles, `[]` removes them |
 
-Errors: 400 for an invalid permission or a duplicate role name, 404 for an
-unknown role or account.
+What a role shows, without changing what it may do:
+
+- `menu`: the back-office menu entries shown to its holders. The ids belong to
+  the app (1 to 40 characters among `a-z`, `0-9`, `_` and `-`). `null` (the
+  default) shows every entry its permissions allow. A holder of several roles
+  sees the entries of all of them, and everything if one of them is `null`.
+- `widgets`: the dashboard widgets it offers, in their default order, from
+  `GET /admin/staff/widgets`. `null` (the default) offers every widget its
+  permissions read. A listed widget the role cannot read is still not offered.
+- `max_discount_percent`: the largest manual discount its holders may give at
+  the till, 0 to 100, as a number or text. `null`: none.
+
+Errors: 400 for an invalid permission, menu entry, widget or cap, or a
+duplicate role name; 404 for an unknown role or account.
 
 ## Example
 

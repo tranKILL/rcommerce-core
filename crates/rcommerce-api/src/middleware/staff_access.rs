@@ -44,9 +44,15 @@ const READ_ONLY_POSTS: &[&str] = &["/coupons/validate"];
 /// the caller's own rights
 const ANY_STAFF: &[&str] = &["/admin/dashboard", "/admin/staff/me"];
 
+/// The caller's own dashboard layout, which any staff member may read, save
+/// and reset
+const OWN_LAYOUT: &str = "/admin/staff/me/dashboard";
+
 /// Whether any staff member may call this route, whatever their roles
 pub fn open_to_any_staff(method: &Method, path: &str) -> bool {
-    *method == Method::GET && ANY_STAFF.contains(&path)
+    (*method == Method::GET && ANY_STAFF.contains(&path))
+        || (path == OWN_LAYOUT
+            && (*method == Method::GET || *method == Method::PUT || *method == Method::DELETE))
 }
 
 /// The resource and action a staff role needs for an admin route, or `None`
@@ -151,6 +157,15 @@ mod tests {
         assert!(open_to_any_staff(&Method::GET, "/admin/staff/me"));
         assert!(!open_to_any_staff(&Method::POST, "/admin/staff/me"));
         assert!(!open_to_any_staff(&Method::GET, "/admin/staff/roles"));
+        for method in [Method::GET, Method::PUT, Method::DELETE] {
+            assert!(open_to_any_staff(&method, "/admin/staff/me/dashboard"));
+        }
+        assert!(!open_to_any_staff(
+            &Method::POST,
+            "/admin/staff/me/dashboard"
+        ));
+        assert!(!open_to_any_staff(&Method::GET, "/admin/staff/widgets"));
+        assert!(!open_to_any_staff(&Method::PUT, "/admin/staff/roles/x"));
     }
 
     #[test]

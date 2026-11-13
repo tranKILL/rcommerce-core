@@ -12,6 +12,7 @@ pub mod content_service;
 pub mod coupon_service;
 pub mod customer_service;
 pub mod dashboard_service;
+pub mod dashboard_widgets;
 pub mod digital_product_service;
 pub mod dunning_service;
 pub mod location_service;
@@ -53,7 +54,7 @@ pub use newsletter_service::NewsletterService;
 pub use order_service::OrderService;
 pub use product_service::ProductService;
 pub use review_service::ReviewService;
-pub use staff_service::StaffService;
+pub use staff_service::{StaffService, StaffView};
 pub use statistics_service::{FullDashboardData, SalesReport, StatisticsService};
 pub use subscription_service::{
     next_billing_at, BillingReport, CreateSubscriptionFromOrder, SubscriptionService,

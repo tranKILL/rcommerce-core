@@ -22,7 +22,7 @@ R Commerce provides a complete API-first ecommerce platform with:
 | [05-store-locations-api.md](05-store-locations-api.md) | Branches and pickup points: opening hours, open now, pickup time |
 | [statistics.md](statistics.md) | Statistics and analytics API |
 | [staff-roles.md](staff-roles.md) | Staff roles: partial admin access for back-office accounts |
-| [10-staff-dashboard.md](10-staff-dashboard.md) | Staff dashboard, own rights, sorting staff lists |
+| [10-staff-dashboard.md](10-staff-dashboard.md) | Staff dashboard, own rights, widgets and personal layouts, sorting staff lists |
 | [11-price-history.md](11-price-history.md) | Price and promotion history per product, customer and promotion |
 | [12-finance-and-marketing.md](12-finance-and-marketing.md) | Finance and marketing reports, projection, CSV exports |
 

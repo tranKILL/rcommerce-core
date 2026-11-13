@@ -304,6 +304,11 @@ impl Migrator {
                 "order_company",
                 include_str!("../../migrations/041_order_company.sql"),
             ),
+            (
+                42,
+                "staff_layouts",
+                include_str!("../../migrations/042_staff_layouts.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

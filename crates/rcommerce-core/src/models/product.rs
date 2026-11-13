@@ -298,7 +298,9 @@ pub struct CreateProductRequest {
 
 /// A field that may be cleared: absent leaves it unchanged (`None`), `null`
 /// clears it (`Some(None)`)
-fn clearable<'de, D, T>(deserializer: D) -> std::result::Result<Option<Option<T>>, D::Error>
+pub(crate) fn clearable<'de, D, T>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,
