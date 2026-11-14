@@ -71,7 +71,7 @@ pub struct StaffMember {
 }
 
 /// A percentage sent as a JSON number or as text; null: none
-fn percent<'de, D>(deserializer: D) -> std::result::Result<Option<Decimal>, D::Error>
+pub(crate) fn percent<'de, D>(deserializer: D) -> std::result::Result<Option<Decimal>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

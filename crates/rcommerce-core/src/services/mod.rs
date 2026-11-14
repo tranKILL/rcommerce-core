@@ -20,6 +20,7 @@ pub mod loyalty_service;
 pub mod newsletter_service;
 pub mod order_events;
 pub mod order_service;
+pub mod pos;
 pub mod price_list_service;
 pub mod pricing_history;
 pub mod product_service;

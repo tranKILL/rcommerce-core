@@ -6226,3 +6226,408 @@ async fn test_dashboard_analytics_widgets() {
     );
     app.cleanup().await.ok();
 }
+
+/// A decimal field of a JSON answer, as a number
+fn amount(value: &serde_json::Value) -> f64 {
+    value
+        .as_str()
+        .map(|v| v.parse().unwrap())
+        .or_else(|| value.as_f64())
+        .unwrap_or_else(|| panic!("not an amount: {value}"))
+}
+
+/// A cashier opens a till at a branch, puts cash in and takes some out, then
+/// counts the drawer at closing: the Z report adds up and numbers the
+/// session. Codes typed or scanned at the till find a product (GTIN or SKU,
+/// with the branch's stock), a loyalty card's holder and an order. The
+/// simulated terminal approves, declines, and cancels a pending payment.
+/// Staff without the `pos` permission are refused.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_till_session_lookup_and_terminal() {
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    let (cashier, password) = app.create_test_customer().await.unwrap();
+    let till_role = serde_json::json!({"permissions": ["pos:write", "orders:write",
+        "products:read", "customers:read", "inventory:read"]});
+    role_for(&app, &admin, cashier.id, till_role).await;
+    let token = app.login(&cashier.email, &password).await.unwrap();
+    let (clerk, clerk_password) = app.create_test_customer().await.unwrap();
+    role_for(
+        &app,
+        &admin,
+        clerk.id,
+        serde_json::json!({"permissions": ["orders:write"]}),
+    )
+    .await;
+    let clerk_token = app.login(&clerk.email, &clerk_password).await.unwrap();
+    let (status, _) = admin_api_call(
+        &app,
+        &clerk_token,
+        Method::GET,
+        "/admin/pos/sessions/current",
+        None,
+    )
+    .await;
+    assert_eq!(status, 403, "orders:write is not the till");
+
+    let open = serde_json::json!({"location_id": location, "opening_float": "100"});
+    let (status, session) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/sessions",
+        Some(open.clone()),
+    )
+    .await;
+    assert_eq!(status, 201, "{session}");
+    let id = session["id"].as_str().unwrap().to_string();
+    let (status, _) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/sessions",
+        Some(open),
+    )
+    .await;
+    assert_eq!(status, 400, "one open session per cashier");
+    let (_, current) = admin_api_call(
+        &app,
+        &token,
+        Method::GET,
+        "/admin/pos/sessions/current",
+        None,
+    )
+    .await;
+    assert_eq!(current["session"]["id"], id.as_str());
+    assert_eq!(amount(&current["totals"]["expected_cash"]), 100.0);
+
+    let cash = format!("/admin/pos/sessions/{id}/cash");
+    let (status, _) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        &cash,
+        Some(serde_json::json!({"kind": "cash_in", "amount": 50})),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, _) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        &cash,
+        Some(serde_json::json!({"kind": "cash_out", "amount": 30})),
+    )
+    .await;
+    assert_eq!(status, 400, "taking cash out needs a reason");
+    let (status, report) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        &cash,
+        Some(serde_json::json!({"kind": "cash_out", "amount": "30,00", "reason": "Bank deposit"})),
+    )
+    .await;
+    assert_eq!(status, 200, "{report}");
+    assert_eq!(amount(&report["totals"]["expected_cash"]), 120.0);
+
+    // the terminal answers by the cents (simulated)
+    let pay = |cents: &str| serde_json::json!({"session_id": id, "amount": cents});
+    let (status, approved) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/terminal",
+        Some(pay("42.50")),
+    )
+    .await;
+    assert_eq!(
+        (status, approved["status"].as_str()),
+        (201, Some("approved")),
+        "{approved}"
+    );
+    let (_, declined) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/terminal",
+        Some(pay("10.13")),
+    )
+    .await;
+    assert_eq!(declined["status"], "declined");
+    let (_, pending) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/terminal",
+        Some(pay("10.14")),
+    )
+    .await;
+    let pending_path = format!("/admin/pos/terminal/{}", pending["id"].as_str().unwrap());
+    let (_, still) = admin_api_call(&app, &token, Method::GET, &pending_path, None).await;
+    assert_eq!(still["status"], "pending");
+    let cancel = format!("{pending_path}/cancel");
+    let (_, cancelled) = admin_api_call(&app, &token, Method::POST, &cancel, None).await;
+    assert_eq!(cancelled["status"], "cancelled");
+    let (status, _) = admin_api_call(&app, &token, Method::POST, &cancel, None).await;
+    assert_eq!(status, 400, "only a pending payment can be cancelled");
+
+    // codes: a GTIN, a SKU, a loyalty card, an order number, nothing
+    let product = app
+        .create_test_product("Till bricks", Decimal::new(250, 2), 0)
+        .await
+        .unwrap();
+    let sku = format!("TILL-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    sqlx::query("UPDATE products SET gtin = '5410000000017', sku = $2 WHERE id = $1")
+        .bind(product)
+        .bind(&sku)
+        .execute(app.app_state.db.pool())
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 7, None)
+        .await
+        .unwrap();
+    let scan = |code: &str| format!("/admin/pos/lookup?session_id={id}&code={code}");
+    let (_, hit) = admin_api_call(&app, &token, Method::GET, &scan("5410000000017"), None).await;
+    assert_eq!(
+        (hit["kind"].as_str(), hit["available"].as_i64()),
+        (Some("product"), Some(7)),
+        "{hit}"
+    );
+    let (_, hit) =
+        admin_api_call(&app, &token, Method::GET, &scan(&sku.to_lowercase()), None).await;
+    assert_eq!(hit["product_id"], product.to_string());
+    let (shopper, _) = app.create_test_customer().await.unwrap();
+    let mut conn = app.app_state.db.pool().acquire().await.unwrap();
+    let card = rcommerce_core::services::loyalty_service::card_number(&mut conn, shopper.id)
+        .await
+        .unwrap();
+    let (_, hit) = admin_api_call(&app, &token, Method::GET, &scan(&card), None).await;
+    assert_eq!(
+        (hit["kind"].as_str(), hit["email"].as_str()),
+        (Some("customer"), Some(shopper.email.as_str()))
+    );
+    let (_, hit) = admin_api_call(&app, &token, Method::GET, &scan("nothing-here"), None).await;
+    assert_eq!(hit["kind"], "not_found");
+
+    // another cashier cannot close it; the owner counts 118 of the 120 expected
+    let close = format!("/admin/pos/sessions/{id}/close");
+    let (status, _) = admin_api_call(
+        &app,
+        &admin,
+        Method::POST,
+        &close,
+        Some(serde_json::json!({"counted_cash": 0})),
+    )
+    .await;
+    assert_eq!(status, 403, "not the admin's session");
+    let (status, z) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        &close,
+        Some(serde_json::json!({"counted_cash": "118", "notes": "2 euros missing"})),
+    )
+    .await;
+    assert_eq!(status, 200, "{z}");
+    assert_eq!(amount(&z["session"]["difference"]), -2.0);
+    assert_eq!(z["session"]["z_number"], 1);
+    assert_eq!(amount(&z["totals"]["cash_in"]), 50.0);
+    assert_eq!(amount(&z["totals"]["cash_out"]), 30.0);
+    let (status, _) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        &cash,
+        Some(serde_json::json!({"kind": "cash_in", "amount": 5})),
+    )
+    .await;
+    assert_eq!(status, 400, "closed");
+    let (_, current) = admin_api_call(
+        &app,
+        &token,
+        Method::GET,
+        "/admin/pos/sessions/current",
+        None,
+    )
+    .await;
+    assert!(current.is_null(), "{current}");
+    app.cleanup().await.ok();
+}
+
+/// A sale at the till: a manual discount within the cashier's cap (one above
+/// it is refused), priced with VAT like the web shop, paid partly by card and
+/// partly in cash with change. The order is completed at the branch with its
+/// stock gone, the Z report counts it, the price history keeps the manual
+/// discount and its reason, the payments are split by method, and the card
+/// payment cannot pay a second sale.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_till_sale() {
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    let product = app
+        .create_test_product("Till cement", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 20, None)
+        .await
+        .unwrap();
+    let (cashier, password) = app.create_test_customer().await.unwrap();
+    let role = serde_json::json!({"permissions": ["pos:write", "orders:write", "customers:read",
+        "products:read", "inventory:read"], "max_discount_percent": 10});
+    role_for(&app, &admin, cashier.id, role).await;
+    let token = app.login(&cashier.email, &password).await.unwrap();
+    let open = serde_json::json!({"location_id": location, "opening_float": 50});
+    let (_, session) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/sessions",
+        Some(open),
+    )
+    .await;
+    let session = session["id"].as_str().unwrap().to_string();
+
+    let basket = |percent: &str| {
+        serde_json::json!({"session_id": session, "lines": [
+        {"product_id": product, "quantity": 3, "discount_percent": percent, "discount_reason": "Damaged bag"}]})
+    };
+    let (status, refused) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/baskets",
+        Some(basket("15")),
+    )
+    .await;
+    assert_eq!(status, 403, "above the 10 % cap: {refused}");
+    let (status, priced) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/baskets",
+        Some(basket("10")),
+    )
+    .await;
+    assert_eq!(status, 200, "{priced}");
+    let line = &priced["lines"][0];
+    assert_eq!(
+        (
+            amount(&line["unit_price"]),
+            amount(&line["manual_discount"])
+        ),
+        (9.0, 1.0),
+        "{priced}"
+    );
+    assert_eq!(line["available"], 20);
+    let total = amount(&priced["total"]);
+    let net = amount(&priced["subtotal"]) - amount(&priced["discount_total"])
+        + amount(&priced["tax_total"]);
+    assert!((total - net).abs() < 0.005, "{priced}");
+    let basket_id = priced["basket_id"].as_str().unwrap().to_string();
+
+    let pay = serde_json::json!({"session_id": session, "amount": "20.00"});
+    let (_, card) =
+        admin_api_call(&app, &token, Method::POST, "/admin/pos/terminal", Some(pay)).await;
+    let card = card["id"].as_str().unwrap().to_string();
+    let short = serde_json::json!({"session_id": session, "basket_id": basket_id, "cash_given": 1, "card_payments": [card]});
+    let (status, _) =
+        admin_api_call(&app, &token, Method::POST, "/admin/pos/sales", Some(short)).await;
+    assert_eq!(status, 400, "not enough cash");
+    let sale = serde_json::json!({"session_id": session, "basket_id": basket_id, "cash_given": "50", "card_payments": [card]});
+    let (status, sold) =
+        admin_api_call(&app, &token, Method::POST, "/admin/pos/sales", Some(sale)).await;
+    assert_eq!(status, 201, "{sold}");
+    let cash = total - 20.0;
+    assert_eq!(
+        sold["settlement"]["card"]
+            .as_str()
+            .map(|v| v.parse::<f64>().unwrap()),
+        Some(20.0)
+    );
+    assert!(
+        (amount(&sold["settlement"]["change"]) - (50.0 - cash)).abs() < 0.005,
+        "{sold}"
+    );
+    assert_eq!(sold["order"]["status"], "completed", "{sold}");
+    let order: Uuid = sold["order"]["id"].as_str().unwrap().parse().unwrap();
+
+    let pool = app.app_state.db.pool();
+    let (available, reserved): (i32, i32) = sqlx::query_as(
+        "SELECT available_quantity, reserved_quantity FROM inventory_levels WHERE product_id = $1 AND location_id = $2",
+    )
+    .bind(product)
+    .bind(location)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((available, reserved), (17, 0));
+    let promotions: serde_json::Value =
+        sqlx::query_scalar("SELECT promotions FROM order_line_pricing WHERE order_id = $1")
+            .bind(order)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let manual = promotions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["kind"] == "manual")
+        .expect("manual saving");
+    assert_eq!(
+        (manual["name"].as_str(), amount(&manual["saving"])),
+        (Some("Damaged bag"), 3.0)
+    );
+    let methods: Vec<String> = sqlx::query_scalar(
+        "SELECT payment_method::text FROM payments WHERE order_id = $1 ORDER BY payment_method::text",
+    )
+    .bind(order)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(methods, ["cash", "debit_card"]);
+    let kinds: Vec<String> =
+        sqlx::query_scalar("SELECT kind FROM order_events WHERE order_id = $1")
+            .bind(order)
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert!(
+        kinds.contains(&"sold_at_till".to_string()) && !kinds.contains(&"collected".to_string()),
+        "{kinds:?}"
+    );
+
+    let report_path = format!("/admin/pos/sessions/{session}");
+    let (_, z) = admin_api_call(&app, &token, Method::GET, &report_path, None).await;
+    assert!(
+        (amount(&z["totals"]["expected_cash"]) - (50.0 + cash)).abs() < 0.005,
+        "{z}"
+    );
+    assert!((amount(&z["totals"]["net"]) - total).abs() < 0.005, "{z}");
+
+    // the card payment is used: a second basket cannot be paid with it
+    let again = serde_json::json!({"session_id": session, "lines": [{"product_id": product, "quantity": 1}]});
+    let (_, second) = admin_api_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/baskets",
+        Some(again),
+    )
+    .await;
+    let reuse = serde_json::json!({"session_id": session, "basket_id": second["basket_id"], "cash_given": 50, "card_payments": [card]});
+    let (status, _) =
+        admin_api_call(&app, &token, Method::POST, "/admin/pos/sales", Some(reuse)).await;
+    assert_eq!(status, 400, "card payment already used");
+    app.cleanup().await.ok();
+}

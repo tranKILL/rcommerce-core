@@ -451,6 +451,19 @@ struct CartLine {
     product_id: Uuid,
     variant_id: Option<Uuid>,
     quantity: i32,
+    /// A manual discount given at the till, in percent
+    #[sqlx(default)]
+    manual_discount_percent: Option<Decimal>,
+}
+
+/// What a manual discount of `percent` takes off a unit priced `price`
+pub fn manual_discount(price: Decimal, percent: Option<Decimal>) -> Decimal {
+    match percent {
+        Some(p) if p > Decimal::ZERO => (price * p.min(Decimal::ONE_HUNDRED)
+            / Decimal::ONE_HUNDRED)
+            .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero),
+        _ => Decimal::ZERO,
+    }
 }
 
 /// The lines that still have a catalogue price, with what to price for each
@@ -565,16 +578,20 @@ async fn write_line_prices(
 ) -> Result<()> {
     for (line, price) in lines.iter().zip(prices) {
         let promotions: Vec<Uuid> = price.promotions.iter().map(|p| p.id).collect();
+        // a manual discount given at the till comes after every other price
+        let manual = manual_discount(price.price, line.manual_discount_percent);
         sqlx::query(
             "UPDATE cart_items SET unit_price = $2, subtotal = $2 * quantity, price_list_id = $3, \
-             original_price = $4, promotion_ids = $5, negotiated_price = $6, updated_at = NOW() WHERE id = $1",
+             original_price = $4, promotion_ids = $5, negotiated_price = $6, manual_discount = $7, \
+             updated_at = NOW() WHERE id = $1",
         )
         .bind(line.id)
-        .bind(price.price)
+        .bind(price.price - manual)
         .bind(price.price_list_id)
         .bind(price.base_price)
         .bind(&promotions)
         .bind(price.negotiated_price)
+        .bind(manual)
         .execute(&mut *conn)
         .await?;
     }
@@ -597,7 +614,7 @@ pub async fn reprice_cart_lines(
     };
     let promotions = live_promotions(&mut *conn, &buyer_of(&context, email)).await?;
     let lines: Vec<CartLine> = sqlx::query_as(
-        "SELECT id, product_id, variant_id, quantity FROM cart_items WHERE cart_id = $1 \
+        "SELECT id, product_id, variant_id, quantity, manual_discount_percent FROM cart_items WHERE cart_id = $1 \
            AND COALESCE((custom_attributes->>'is_bundle_component')::boolean, false) = false \
            AND COALESCE((custom_attributes->>'is_bundle_parent')::boolean, false) = false \
            AND custom_attributes->>'gift_promotion_id' IS NULL",

@@ -174,7 +174,7 @@ pub async fn mark_collected(
 
 /// A delivered fulfillment for every line, the order completed, the collector
 /// in the metadata and the order notes
-async fn record_collection(
+pub(crate) async fn record_collection(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
     collector: &str,

@@ -180,6 +180,8 @@ pub struct AppState {
     pub dashboard: rcommerce_core::services::dashboard_service::DashboardService,
     /// Finance and marketing reports
     pub analytics: rcommerce_core::services::analytics::AnalyticsService,
+    /// The till's card terminal (`[pos] terminal`)
+    pub pos_terminal: Arc<dyn rcommerce_core::services::pos::PaymentTerminal>,
     /// Accounting export configuration (store code/name, site URL)
     pub accounting: rcommerce_core::config::AccountingConfig,
     /// Store base currency for new carts (ISO code, e.g. "USD", "AUD")
@@ -199,6 +201,14 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// The till's terminal transactions
+    pub fn pos_terminals(&self) -> rcommerce_core::services::pos::Terminals {
+        rcommerce_core::services::pos::Terminals::new(
+            self.db.pool().clone(),
+            self.pos_terminal.clone(),
+        )
+    }
+
     pub async fn new(params: AppStateParams) -> Self {
         let rate_limiting = params.rate_limiting.clone();
 
@@ -370,6 +380,7 @@ impl AppState {
                 pool.clone(),
                 "Europe/Brussels",
             ),
+            pos_terminal: rcommerce_core::services::pos::terminal::from_config("simulated"),
             price_lists: rcommerce_core::services::price_list_service::PriceListService::new(pool),
             accounting: params.accounting,
             default_currency: params.default_currency,

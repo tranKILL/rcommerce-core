@@ -37,6 +37,10 @@ pub struct Config {
     #[serde(default)]
     pub peppol: crate::peppol::PeppolConfig,
 
+    /// The till (point of sale)
+    #[serde(default)]
+    pub pos: PosConfig,
+
     #[serde(default)]
     pub rate_limiting: RateLimitConfig,
 
@@ -864,6 +868,27 @@ pub struct ImageSize {
     pub width: u32,
     pub height: u32,
     pub crop: bool,
+}
+
+/// `[pos]`: the till
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PosConfig {
+    /// Card terminal: `simulated` (default, answers at once) or `worldline`
+    /// (not available yet: card payments are refused)
+    #[serde(default = "default_pos_terminal")]
+    pub terminal: String,
+}
+
+fn default_pos_terminal() -> String {
+    "simulated".to_string()
+}
+
+impl Default for PosConfig {
+    fn default() -> Self {
+        Self {
+            terminal: default_pos_terminal(),
+        }
+    }
 }
 
 /// `[invoicing]`: legal invoices, issued when an order's goods are handed

@@ -102,6 +102,11 @@ struct LineFacts {
     price_list_name: Option<String>,
     negotiated_price: Option<Decimal>,
     cost_price: Option<Decimal>,
+    /// What a manual discount given at the till took off each unit
+    #[sqlx(default)]
+    manual_discount: Decimal,
+    #[sqlx(default)]
+    manual_discount_reason: Option<String>,
 }
 
 fn gift_promotion(item: &CartItem) -> Option<Uuid> {
@@ -138,10 +143,27 @@ fn line_savings(
         .iter()
         .filter_map(|id| promotions.get(id))
         .collect();
-    chain_savings(&applied, negotiated, item.unit_price, item.quantity)
-        .into_iter()
-        .filter_map(|(id, saving)| promotions.get(&id).map(|p| LineSaving::of(p, saving)))
-        .collect()
+    let manual = facts.map(|f| f.manual_discount).unwrap_or_default();
+    let mut savings: Vec<LineSaving> = chain_savings(
+        &applied,
+        negotiated,
+        item.unit_price + manual,
+        item.quantity,
+    )
+    .into_iter()
+    .filter_map(|(id, saving)| promotions.get(&id).map(|p| LineSaving::of(p, saving)))
+    .collect();
+    if manual > Decimal::ZERO {
+        savings.push(LineSaving {
+            id: Uuid::nil(),
+            name: facts
+                .and_then(|f| f.manual_discount_reason.clone())
+                .unwrap_or_default(),
+            kind: "manual".into(),
+            saving: manual * Decimal::from(item.quantity),
+        });
+    }
+    savings
 }
 
 async fn used_promotions(
@@ -176,7 +198,8 @@ async fn used_promotions(
 async fn line_facts(conn: &mut PgConnection, cart_id: Uuid) -> Result<HashMap<Uuid, LineFacts>> {
     let rows: Vec<LineFacts> = sqlx::query_as(
         "SELECT ci.id, ci.price_list_id, pl.name AS price_list_name, ci.negotiated_price, \
-                COALESCE(v.cost_price, p.cost_price)::numeric AS cost_price \
+                COALESCE(v.cost_price, p.cost_price)::numeric AS cost_price, \
+                ci.manual_discount, ci.manual_discount_reason \
          FROM cart_items ci \
          LEFT JOIN price_lists pl ON pl.id = ci.price_list_id \
          LEFT JOIN products p ON p.id = ci.product_id \

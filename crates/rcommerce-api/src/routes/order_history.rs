@@ -48,13 +48,18 @@ pub(crate) fn actor(auth: &JwtAuth, owner: Option<Uuid>) -> Actor {
 
 /// After a collection or delivery: loyalty points, then the invoice
 pub(crate) async fn after_handover(state: &AppState, id: Uuid) {
+    after_handover_points(state, id).await;
+    super::invoices::issue_after_handover(state, id).await;
+}
+
+/// The loyalty points of an order handed over (best effort: logged on failure)
+pub(crate) async fn after_handover_points(state: &AppState, id: Uuid) {
     if let Err(e) = LoyaltyService::new(state.db.pool().clone())
         .award_for_order(id)
         .await
     {
         warn!("Failed to award the loyalty points of order {id}: {e}");
     }
-    super::invoices::issue_after_handover(state, id).await;
 }
 
 /// After a cancellation or refund: points earned taken back, points used

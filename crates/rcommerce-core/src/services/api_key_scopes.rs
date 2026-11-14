@@ -34,6 +34,8 @@ pub enum Resource {
     Reports,
     Imports,
     Exports,
+    /// The till: sessions, sales and returns at the counter
+    Pos,
 }
 
 impl Resource {
@@ -53,6 +55,7 @@ impl Resource {
             Resource::Reports,
             Resource::Imports,
             Resource::Exports,
+            Resource::Pos,
         ]
     }
 
@@ -72,6 +75,7 @@ impl Resource {
             Resource::Reports => "reports",
             Resource::Imports => "imports",
             Resource::Exports => "exports",
+            Resource::Pos => "pos",
         }
     }
 }
@@ -94,6 +98,7 @@ impl std::str::FromStr for Resource {
             "reports" => Ok(Resource::Reports),
             "imports" => Ok(Resource::Imports),
             "exports" => Ok(Resource::Exports),
+            "pos" => Ok(Resource::Pos),
             _ => Err(format!("Unknown resource: {}", s)),
         }
     }
