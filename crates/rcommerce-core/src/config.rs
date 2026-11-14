@@ -900,6 +900,10 @@ pub struct InvoicingConfig {
     /// Numbers are `{prefix}{year}-{sequence:05}` (`F2026-00001`)
     #[serde(default = "default_invoice_prefix")]
     pub number_prefix: String,
+    /// Credit notes have their own numbers: `{prefix}{year}-{sequence:05}`
+    /// (`NC2026-00001`)
+    #[serde(default = "default_credit_note_prefix")]
+    pub credit_note_prefix: String,
     /// Days to pay an invoice not paid online
     #[serde(default = "default_payment_terms")]
     pub payment_terms_days: i64,
@@ -915,6 +919,10 @@ fn default_invoice_prefix() -> String {
     "F".to_string()
 }
 
+fn default_credit_note_prefix() -> String {
+    "NC".to_string()
+}
+
 fn default_payment_terms() -> i64 {
     30
 }
@@ -928,6 +936,7 @@ impl Default for InvoicingConfig {
         Self {
             enabled: false,
             number_prefix: default_invoice_prefix(),
+            credit_note_prefix: default_credit_note_prefix(),
             payment_terms_days: default_payment_terms(),
             timezone: default_invoice_timezone(),
             seller: crate::invoicing::Party::default(),

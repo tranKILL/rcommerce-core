@@ -221,6 +221,10 @@ reference = "Structured communication"
 reverse_charge = "VAT reverse charge (intra-EU supply)"
 delivery = "Delivery"
 discount = "Discount"
+credit_note_number = "Credit note number"
+credits_invoice = "Corrects invoice"
+refunded = "Refunded"
+credit_left = "Left to deduct"
 
 [invoice_issued]
 subject = "Your invoice {{ invoice_number }}"
@@ -241,6 +245,28 @@ Total incl. VAT: {{ invoice_total }}
 {{ payment_line }}
 
 The invoice is attached as a PDF.
+
+{{ company_name }}
+'''
+
+[credit_note_issued]
+subject = "Your credit note {{ invoice_number }}"
+heading = "Your credit note"
+intro = "Hi {{ customer_name }}, here is the credit note {{ invoice_number }} for your order {{ order_number }}; it corrects invoice {{ credited_number }}."
+amount = "Credited incl. VAT"
+refunded = "Paid back to you: {{ refunded }}."
+credit = "{{ credit_left }} is deducted from what you owe."
+peppol = "As your company receives e-invoices, this credit note was also sent through Peppol."
+attached = "The credit note is attached as a PDF."
+text = '''
+Hi {{ customer_name }},
+
+Here is the credit note {{ invoice_number }} for your order {{ order_number }}; it corrects invoice {{ credited_number }}.
+
+Credited incl. VAT: {{ invoice_total }}
+{{ payment_line }}
+
+The credit note is attached as a PDF.
 
 {{ company_name }}
 '''

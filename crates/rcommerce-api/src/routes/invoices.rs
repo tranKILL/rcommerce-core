@@ -40,31 +40,49 @@ pub async fn issue_after_handover(state: &AppState, order_id: Uuid) {
                 serde_json::json!({ "invoice_number": invoice.number }),
             )
             .await;
-            send_invoice_email(state, &invoice);
-            if let Some(peppol) = state.peppol.clone() {
-                let invoices = state.invoices.clone();
-                let logo = state.branding.pdf_logo.clone();
-                tokio::spawn(async move {
-                    let pdf =
-                        rcommerce_core::invoice::legal::invoice_pdf(&invoice, logo.as_ref()).ok();
-                    if invoice.peppol_status.as_deref() == Some("pending") {
-                        if let Err(e) = peppol.deliver(&invoices, &invoice, pdf.as_deref()).await {
-                            warn!("Peppol: invoice {} queued for retry: {}", invoice.number, e);
-                        }
-                    }
-                });
-            }
+            send_issued(state, invoice);
         }
         Err(e) => warn!("Failed to issue the invoice of order {}: {}", order_id, e),
     }
 }
 
-/// A text of the invoice e-mail in the invoice's language, its placeholders filled
+/// An issued invoice or credit note goes out: e-mailed with its PDF, and
+/// sent through Peppol when it waits for it (in the background)
+pub fn send_issued(state: &AppState, invoice: Invoice) {
+    send_invoice_email(state, &invoice);
+    if invoice.peppol_status.as_deref() != Some("pending") {
+        return;
+    }
+    if let Some(peppol) = state.peppol.clone() {
+        let invoices = state.invoices.clone();
+        let logo = state.branding.pdf_logo.clone();
+        tokio::spawn(async move {
+            let pdf = rcommerce_core::invoice::legal::invoice_pdf(&invoice, logo.as_ref()).ok();
+            if let Err(e) = peppol.deliver(&invoices, &invoice, pdf.as_deref()).await {
+                warn!("Peppol: {} queued for retry: {}", invoice.number, e);
+            }
+        });
+    }
+}
+
+/// A text of the invoice (or credit note) e-mail in the document's
+/// language, its placeholders filled
 fn invoice_text(invoice: &Invoice, company: &str, key: &str) -> String {
     let locale = invoice.locale.as_str();
     let money = |amount| i18n::money(locale, amount, &invoice.currency);
-    i18n::text(locale, "invoice_issued", key)
+    let section = if invoice.is_credit_note() {
+        "credit_note_issued"
+    } else {
+        "invoice_issued"
+    };
+    i18n::text(locale, section, key)
         .replace("{{ customer_name }}", &invoice.buyer.name)
+        .replace(
+            "{{ credited_number }}",
+            invoice.credited_number.as_deref().unwrap_or_default(),
+        )
+        .replace("{{ refunded }}", &money(invoice.paid_amount))
+        .replace("{{ credit_left }}", &money(invoice.amount_due()))
         .replace("{{ invoice_number }}", &invoice.number)
         .replace("{{ order_number }}", &invoice.order_number)
         .replace("{{ due_date }}", &i18n::date(locale, invoice.due_date))
@@ -73,18 +91,33 @@ fn invoice_text(invoice: &Invoice, company: &str, key: &str) -> String {
         .replace("{{ company_name }}", company)
 }
 
-/// The invoice e-mail, in the invoice's language, with its PDF attached
+/// The e-mail's line on payment: paid or due for an invoice; paid back and
+/// left to deduct for a credit note
+fn payment_line(invoice: &Invoice, says: &dyn Fn(&str) -> String) -> String {
+    if !invoice.is_credit_note() {
+        return says(if invoice.amount_due().is_zero() {
+            "paid"
+        } else {
+            "due"
+        });
+    }
+    let refunded = (!invoice.paid_amount.is_zero()).then(|| says("refunded"));
+    let left = (!invoice.amount_due().is_zero()).then(|| says("credit"));
+    [refunded, left]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The invoice (or credit note) e-mail, in its language, with its PDF attached
 pub fn invoice_notification(
     invoice: &Invoice,
     branding: &rcommerce_core::BrandingConfig,
     pdf: Vec<u8>,
 ) -> Notification {
     let says = |key: &str| invoice_text(invoice, &branding.name, key);
-    let payment = says(if invoice.amount_due().is_zero() {
-        "paid"
-    } else {
-        "due"
-    });
+    let payment = payment_line(invoice, &says);
     let peppol = match invoice.peppol_status {
         Some(_) => format!("<p>{}</p>", says("peppol")),
         None => String::new(),
@@ -109,7 +142,7 @@ pub fn invoice_notification(
         Notification::new(NotificationChannel::Email, recipient, says("subject"), text)
             .with_html_body(html)
             .with_metadata(
-                serde_json::json!({"template_id": "invoice_issued", "invoice": invoice.number}),
+                serde_json::json!({"template_id": if invoice.is_credit_note() { "credit_note_issued" } else { "invoice_issued" }, "invoice": invoice.number}),
             );
     notification.attachments.push(EmailAttachment {
         filename: format!("{}.pdf", invoice.number),

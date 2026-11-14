@@ -220,6 +220,10 @@ reference = "Yapılandırılmış açıklama"
 reverse_charge = "KDV sorumluluğu alıcıda (AB içi teslimat)"
 delivery = "Teslimat"
 discount = "İndirim"
+credit_note_number = "İade faturası numarası"
+credits_invoice = "Düzeltilen fatura"
+refunded = "İade edilen"
+credit_left = "Mahsup edilecek"
 
 [invoice_issued]
 subject = "{{ invoice_number }} numaralı faturanız"
@@ -240,6 +244,28 @@ Toplam (KDV dahil): {{ invoice_total }}
 {{ payment_line }}
 
 Fatura PDF olarak eklenmiştir.
+
+{{ company_name }}
+'''
+
+[credit_note_issued]
+subject = "{{ invoice_number }} numaralı iade faturanız"
+heading = "İade faturanız"
+intro = "Merhaba {{ customer_name }}, {{ order_number }} numaralı siparişinize ait {{ invoice_number }} numaralı iade faturası ektedir; {{ credited_number }} numaralı faturayı düzeltir."
+amount = "İade edilen (KDV dahil)"
+refunded = "Size geri ödenen: {{ refunded }}."
+credit = "{{ credit_left }} borcunuzdan düşülür."
+peppol = "Şirketiniz e-fatura aldığı için bu iade faturası size Peppol üzerinden de gönderildi."
+attached = "İade faturası PDF olarak eklenmiştir."
+text = '''
+Merhaba {{ customer_name }},
+
+{{ order_number }} numaralı siparişinize ait {{ invoice_number }} numaralı iade faturası ektedir; {{ credited_number }} numaralı faturayı düzeltir.
+
+İade edilen (KDV dahil): {{ invoice_total }}
+{{ payment_line }}
+
+İade faturası PDF olarak eklenmiştir.
 
 {{ company_name }}
 '''

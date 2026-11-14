@@ -6635,3 +6635,295 @@ async fn test_till_sale() {
     assert_eq!(status, 400, "card payment already used");
     app.cleanup().await.ok();
 }
+
+/// Goods sold at the till to a business come back in two returns: each is
+/// priced like the invoice, paid back card first (exactly the card's part,
+/// through a terminal refund) then cash, restocked unless damaged, takes back
+/// its share of the points and gets a numbered credit note naming the
+/// invoice, sent through Peppol as a CreditNote. After the last one the order
+/// is refunded and nothing more can come back; the Z report counts it all.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_till_return_with_credit_notes() {
+    use rcommerce_core::peppol::{PeppolConfig, PeppolService, Provider};
+    use reqwest::Method;
+    let (peppyrus_url, peppyrus) = fake_peppyrus().await;
+    let app = TestApp::new_with(|state| {
+        let invoicing = rcommerce_core::config::InvoicingConfig {
+            enabled: true,
+            seller: test_seller(),
+            ..Default::default()
+        };
+        let peppol = PeppolConfig {
+            enabled: true,
+            provider: Provider::Peppyrus,
+            api_key: Some("test-key".into()),
+            base_url: Some(peppyrus_url),
+            ..Default::default()
+        };
+        state.peppol = PeppolService::new(&peppol, &invoicing.seller)
+            .unwrap()
+            .map(Arc::new);
+        state.invoices = rcommerce_core::invoicing::InvoiceService::new(
+            state.db.pool().clone(),
+            invoicing,
+            "en".into(),
+            true,
+        );
+    })
+    .await
+    .expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    let product = app
+        .create_test_product("Returned tiles", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 20, None)
+        .await
+        .unwrap();
+    let (buyer, password) = app.create_test_customer().await.unwrap();
+    let buyer_token = app.login(&buyer.email, &password).await.unwrap();
+    let company =
+        serde_json::json!({"vat_number": fresh_belgian_vat(), "name": "Returning Builders"});
+    let (status, body) = call_json(&app, &buyer_token, "/companies", Some(company)).await;
+    assert_eq!(status, 201, "{body}");
+    let (cashier, password) = app.create_test_customer().await.unwrap();
+    let role = serde_json::json!({"permissions": ["pos:write", "orders:write", "customers:read",
+        "products:read", "inventory:read"]});
+    role_for(&app, &admin, cashier.id, role).await;
+    let token = app.login(&cashier.email, &password).await.unwrap();
+    let pool = app.app_state.db.pool().clone();
+    let open = serde_json::json!({"location_id": location, "opening_float": 100});
+    let (_, session) = till_call(&app, &token, Method::POST, "/admin/pos/sessions", open).await;
+    let session = session["id"].as_str().unwrap().to_string();
+
+    // 10 tiles, 50 by card and the rest in cash
+    let lines = serde_json::json!([{"product_id": product, "quantity": 10}]);
+    let basket =
+        serde_json::json!({"session_id": session, "customer_id": buyer.id, "lines": lines});
+    let (_, basket) = till_call(&app, &token, Method::POST, "/admin/pos/baskets", basket).await;
+    let total = amount(&basket["total"]);
+    let pay = serde_json::json!({"session_id": session, "amount": "50.00"});
+    let (_, card) = till_call(&app, &token, Method::POST, "/admin/pos/terminal", pay).await;
+    let sale = serde_json::json!({"session_id": session, "basket_id": basket["basket_id"],
+        "cash_given": total, "card_payments": [card["id"]]});
+    let (status, sold) = till_call(&app, &token, Method::POST, "/admin/pos/sales", sale).await;
+    assert_eq!(status, 201, "{sold}");
+    let invoice_number = sold["invoice_number"]
+        .as_str()
+        .expect("invoiced")
+        .to_string();
+    let order: Uuid = sold["order"]["id"].as_str().unwrap().parse().unwrap();
+    sqlx::query(
+        "INSERT INTO loyalty_entries (customer_id, points, kind, order_id) VALUES ($1, 100, 'earn', $2) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(buyer.id)
+    .bind(order)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let earned: i32 = sqlx::query_scalar(
+        "SELECT points FROM loyalty_entries WHERE order_id = $1 AND kind = 'earn'",
+    )
+    .bind(order)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let path = format!("/admin/pos/orders/{order}/returnable");
+    let (_, returnable) = admin_api_call(&app, &token, Method::GET, &path, None).await;
+    let item = returnable["lines"][0]["order_item_id"].clone();
+    assert_eq!(returnable["lines"][0]["quantity"], 10, "{returnable}");
+    assert_eq!(returnable["invoice_number"], invoice_number.as_str());
+    assert_eq!(
+        amount(&returnable["refundable"]["card"]),
+        50.0,
+        "{returnable}"
+    );
+    assert!((amount(&returnable["refundable"]["cash"]) - (total - 50.0)).abs() < 0.005);
+
+    // First return: 4 tiles, all on the card
+    let four = serde_json::json!([{"order_item_id": item, "quantity": 4}]);
+    let ask = serde_json::json!({"session_id": session, "order_id": order, "lines": four});
+    let (status, preview) = till_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/returns/preview",
+        ask,
+    )
+    .await;
+    assert_eq!(status, 200, "{preview}");
+    let first_total = amount(&preview["total"]);
+    assert!((first_total - total * 0.4).abs() < 0.015, "{preview}");
+    assert!(
+        (amount(&preview["refund"]["card"]) - first_total).abs() < 0.005,
+        "{preview}"
+    );
+    let no_card = serde_json::json!({"session_id": session, "order_id": order, "lines": four,
+        "reason": "Wrong colour"});
+    let (status, _) = till_call(&app, &token, Method::POST, "/admin/pos/returns", no_card).await;
+    assert_eq!(status, 400, "the card part needs a terminal refund");
+    let refund = serde_json::json!({"session_id": session, "amount": preview["refund"]["card"],
+        "refund": true});
+    let (_, card_back) = till_call(&app, &token, Method::POST, "/admin/pos/terminal", refund).await;
+    assert_eq!(card_back["status"], "approved", "{card_back}");
+    let first = serde_json::json!({"session_id": session, "order_id": order, "lines": four,
+        "reason": "Wrong colour", "card_refunds": [card_back["id"]]});
+    let (status, done) = till_call(&app, &token, Method::POST, "/admin/pos/returns", first).await;
+    assert_eq!(status, 201, "{done}");
+    let first_note = done["credit_note_number"]
+        .as_str()
+        .expect("credit note")
+        .to_string();
+    assert!(first_note.starts_with("NC"), "{done}");
+    assert_eq!(
+        done["points_taken_back"],
+        (earned as f64 * 0.4).round() as i64,
+        "{done}"
+    );
+    assert_eq!(
+        tile_stock(&pool, product, location).await,
+        14,
+        "4 back on the shelf"
+    );
+    let too_many = serde_json::json!({"session_id": session, "order_id": order,
+        "reason": "Too many", "lines": [{"order_item_id": item, "quantity": 7}]});
+    let (status, _) = till_call(&app, &token, Method::POST, "/admin/pos/returns", too_many).await;
+    assert_eq!(status, 400, "only 6 left");
+
+    // Last return: 6 damaged tiles, what is left on the card then cash
+    let six = serde_json::json!([{"order_item_id": item, "quantity": 6, "restock": false}]);
+    let ask = serde_json::json!({"session_id": session, "order_id": order, "lines": six});
+    let (_, preview) = till_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/returns/preview",
+        ask,
+    )
+    .await;
+    let card_left = 50.0 - amount(&done["refund"]["card"]);
+    assert!(
+        (amount(&preview["refund"]["card"]) - card_left).abs() < 0.005,
+        "{preview}"
+    );
+    let refund = serde_json::json!({"session_id": session, "amount": preview["refund"]["card"],
+        "refund": true});
+    let (_, card_back) = till_call(&app, &token, Method::POST, "/admin/pos/terminal", refund).await;
+    let last = serde_json::json!({"session_id": session, "order_id": order, "lines": six,
+        "reason": "Broken in the van", "card_refunds": [card_back["id"]]});
+    let (status, done_last) =
+        till_call(&app, &token, Method::POST, "/admin/pos/returns", last).await;
+    assert_eq!(status, 201, "{done_last}");
+    assert_eq!(
+        tile_stock(&pool, product, location).await,
+        14,
+        "damaged tiles stay out"
+    );
+    let returned = amount(&done["total"]) + amount(&done_last["total"]);
+    assert!(
+        (returned - total).abs() < 0.015,
+        "both returns give back the sale: {done_last}"
+    );
+    let taken: i64 = sqlx::query_scalar(
+        "SELECT -SUM(points)::bigint FROM loyalty_entries WHERE order_id = $1 AND kind = 'reverse'",
+    )
+    .bind(order)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(taken, earned as i64, "every point taken back");
+    let state: (String, String) =
+        sqlx::query_as("SELECT status::text, payment_status::text FROM orders WHERE id = $1")
+            .bind(order)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (state.0.as_str(), state.1.as_str()),
+        ("refunded", "refunded")
+    );
+    let ask = serde_json::json!({"session_id": session, "order_id": order, "lines": six});
+    let (status, _) = till_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/returns/preview",
+        ask,
+    )
+    .await;
+    assert_eq!(status, 400, "nothing more comes back");
+
+    // Two credit notes in their own numbering, naming the invoice
+    let notes: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT number, credited_number FROM invoices WHERE order_id = $1 AND kind = 'credit_note' \
+         ORDER BY number",
+    )
+    .bind(order)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(notes.len(), 2);
+    assert!(notes
+        .iter()
+        .all(|n| n.1.as_deref() == Some(invoice_number.as_str())));
+    assert_eq!(notes[0].0, first_note);
+    let mut credit_notes = 0;
+    for _ in 0..40 {
+        credit_notes = peppyrus
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, m)| {
+                m["documentType"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("CreditNote-2::CreditNote")
+            })
+            .count();
+        if credit_notes == 2 {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(credit_notes, 2, "both credit notes went through Peppol");
+
+    // The till: what came in went back out
+    let path = format!("/admin/pos/sessions/{session}");
+    let (_, z) = admin_api_call(&app, &token, Method::GET, &path, None).await;
+    assert!(amount(&z["totals"]["net"]).abs() < 0.015, "{z}");
+    assert!(
+        (amount(&z["totals"]["expected_cash"]) - 100.0).abs() < 0.015,
+        "{z}"
+    );
+    app.cleanup().await.ok();
+}
+
+/// A till call with a JSON body
+async fn till_call(
+    app: &TestApp,
+    token: &str,
+    method: reqwest::Method,
+    path: &str,
+    body: serde_json::Value,
+) -> (u16, serde_json::Value) {
+    admin_api_call(app, token, method, path, Some(body)).await
+}
+
+/// Free stock of a product at a location
+async fn tile_stock(pool: &Pool<Postgres>, product: Uuid, location: Uuid) -> i32 {
+    sqlx::query_scalar(
+        "SELECT available_quantity FROM inventory_levels WHERE product_id = $1 AND location_id = $2",
+    )
+    .bind(product)
+    .bind(location)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}

@@ -233,6 +233,7 @@ base_url = "https://erp.dianxiaomi.com"
 [invoicing]                    # legal invoices (docs/architecture/peppol.md)
 enabled = false
 number_prefix = "F"            # F2026-00001
+credit_note_prefix = "NC"      # NC2026-00001
 payment_terms_days = 30
 [invoicing.seller]             # name, vat_number, company_number, street, city, postcode, country, iban, bic, email
 

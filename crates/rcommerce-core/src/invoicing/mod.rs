@@ -14,7 +14,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use service::InvoiceService;
+pub use service::{CreditNoteDraft, InvoiceService};
 
 /// The legal identity of the seller or the buyer, as printed on the invoice
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -121,9 +121,24 @@ pub struct Invoice {
     pub peppol_error: Option<String>,
     pub peppol_updated_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// A credit note: the invoice it corrects, its number and issue date
+    #[sqlx(default)]
+    pub credited_invoice_id: Option<Uuid>,
+    #[sqlx(default)]
+    pub credited_number: Option<String>,
+    #[sqlx(default)]
+    pub credited_issue_date: Option<NaiveDate>,
+    /// A credit note: the return it comes from
+    #[sqlx(default)]
+    pub return_id: Option<Uuid>,
 }
 
 impl Invoice {
+    /// Whether this is a credit note
+    pub fn is_credit_note(&self) -> bool {
+        self.kind == "credit_note"
+    }
+
     /// What remains to pay
     pub fn amount_due(&self) -> Decimal {
         (self.total - self.paid_amount).max(Decimal::ZERO)

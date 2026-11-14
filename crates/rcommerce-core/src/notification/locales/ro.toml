@@ -220,6 +220,10 @@ reference = "Comunicare structurată"
 reverse_charge = "Taxare inversă (livrare intracomunitară)"
 delivery = "Livrare"
 discount = "Reducere"
+credit_note_number = "Număr factură de stornare"
+credits_invoice = "Corectează factura"
+refunded = "Rambursat"
+credit_left = "Rămas de dedus"
 
 [invoice_issued]
 subject = "Factura dumneavoastră {{ invoice_number }}"
@@ -240,6 +244,28 @@ Total cu TVA: {{ invoice_total }}
 {{ payment_line }}
 
 Factura este atașată în format PDF.
+
+{{ company_name }}
+'''
+
+[credit_note_issued]
+subject = "Factura de stornare {{ invoice_number }}"
+heading = "Factura dumneavoastră de stornare"
+intro = "Bună ziua, {{ customer_name }}, iată factura de stornare {{ invoice_number }} pentru comanda {{ order_number }}; corectează factura {{ credited_number }}."
+amount = "Stornat cu TVA"
+refunded = "Rambursat: {{ refunded }}."
+credit = "{{ credit_left }} se scade din suma datorată."
+peppol = "Deoarece firma dumneavoastră primește facturi electronice, această factură de stornare v-a fost trimisă și prin Peppol."
+attached = "Factura de stornare este atașată în format PDF."
+text = '''
+Bună ziua, {{ customer_name }},
+
+iată factura de stornare {{ invoice_number }} pentru comanda {{ order_number }}; corectează factura {{ credited_number }}.
+
+Stornat cu TVA: {{ invoice_total }}
+{{ payment_line }}
+
+Factura de stornare este atașată în format PDF.
 
 {{ company_name }}
 '''

@@ -62,7 +62,17 @@ struct Draft<'a> {
     locale: &'a str,
 }
 
-/// Staff search of invoices
+/// A credit note to issue against an invoice, inside a return's transaction
+pub struct CreditNoteDraft<'a> {
+    pub invoice: &'a Invoice,
+    pub return_id: Uuid,
+    /// What is credited, excl. VAT (the returned share of a discount as
+    /// negative lines)
+    pub lines: Vec<InvoiceLine>,
+    /// What was paid back at once; the rest is deducted from what is owed
+    pub refunded: Decimal,
+}
+
 /// Columns the invoice list can be sorted on
 const INVOICE_SORTS: SortColumns = &[
     ("date", "issue_date"),
@@ -139,7 +149,7 @@ fn paid_amount(paid: bool, total: Decimal, charged: Decimal) -> Decimal {
 
 /// Spread `discount` over the VAT rates of `lines` in proportion to their
 /// totals: one negative line per rate
-fn discount_lines(lines: &[InvoiceLine], discount: Decimal, label: &str) -> Vec<InvoiceLine> {
+pub fn discount_lines(lines: &[InvoiceLine], discount: Decimal, label: &str) -> Vec<InvoiceLine> {
     let total: Decimal = lines.iter().map(|l| l.net).sum();
     if discount <= Decimal::ZERO || total <= Decimal::ZERO {
         return Vec::new();
@@ -196,6 +206,11 @@ impl InvoiceService {
     /// Whether the store issues invoices (`[invoicing] enabled`)
     pub fn enabled(&self) -> bool {
         self.config.enabled
+    }
+
+    /// The language of documents when nothing else gives one
+    pub fn default_locale(&self) -> &str {
+        &self.default_locale
     }
 
     /// The seller identity printed on invoices
@@ -448,6 +463,60 @@ impl InvoiceService {
         .bind(structured_reference(issue_date.year(), sequence))
         .bind(locale)
         .bind(peppol_status)
+        .fetch_one(conn)
+        .await?)
+    }
+
+    /// Issue a credit note against `draft.invoice` inside the caller's
+    /// transaction: its own gapless numbers (`credit_note_prefix`), the
+    /// invoice's seller, buyer and language, and Peppol when the invoice's
+    /// buyer is a company
+    pub async fn issue_credit_note(
+        &self,
+        conn: &mut PgConnection,
+        draft: CreditNoteDraft<'_>,
+    ) -> Result<Invoice> {
+        use chrono::Datelike;
+        let invoice = draft.invoice;
+        let issue_date = self.today();
+        let prefix = &self.config.credit_note_prefix;
+        let sequence = Self::next_sequence(&mut *conn, prefix, issue_date.year()).await?;
+        let vat = vat_breakdown(&draft.lines);
+        let subtotal: Decimal = vat.iter().map(|v| v.taxable).sum();
+        let tax_total: Decimal = vat.iter().map(|v| v.tax).sum();
+        let total = subtotal + tax_total;
+        let refunded = paid_amount(draft.refunded > Decimal::ZERO, total, draft.refunded);
+        let peppol_status =
+            (self.peppol_enabled && invoice.buyer.vat_number.is_some()).then_some("pending");
+        Ok(sqlx::query_as::<_, Invoice>(
+            "INSERT INTO invoices (number, kind, order_id, order_number, customer_id, company_id, issue_date, \
+             due_date, currency, seller, buyer, lines, vat, subtotal, tax_total, total, paid_amount, \
+             payment_reference, locale, peppol_status, credited_invoice_id, credited_number, \
+             credited_issue_date, return_id) \
+             VALUES ($1, 'credit_note', $2, $3, $4, $5, $6, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, '', \
+             $16, $17, $18, $19, $20, $21) RETURNING *",
+        )
+        .bind(invoice_number(prefix, issue_date.year(), sequence))
+        .bind(invoice.order_id)
+        .bind(&invoice.order_number)
+        .bind(invoice.customer_id)
+        .bind(invoice.company_id)
+        .bind(issue_date)
+        .bind(&invoice.currency)
+        .bind(&invoice.seller)
+        .bind(&invoice.buyer)
+        .bind(sqlx::types::Json(&draft.lines))
+        .bind(sqlx::types::Json(&vat))
+        .bind(subtotal)
+        .bind(tax_total)
+        .bind(total)
+        .bind(refunded)
+        .bind(&invoice.locale)
+        .bind(peppol_status)
+        .bind(invoice.id)
+        .bind(&invoice.number)
+        .bind(invoice.issue_date)
+        .bind(draft.return_id)
         .fetch_one(conn)
         .await?)
     }

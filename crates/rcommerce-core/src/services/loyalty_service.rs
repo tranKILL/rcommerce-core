@@ -435,23 +435,121 @@ impl LoyaltyService {
     }
 
     /// A cancelled or refunded order takes back the points it earned and
-    /// gives back the points it used
+    /// gives back the points it used (less what its returns already did)
     pub async fn undo_for_order(&self, order: Uuid) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        let entries: Vec<(Uuid, i32, String)> = sqlx::query_as(
-            "SELECT customer_id, points, kind FROM loyalty_entries WHERE order_id = $1 AND kind IN ('earn', 'redeem')",
-        )
-        .bind(order)
-        .fetch_all(&mut *tx)
-        .await?;
-        for (customer, points, kind) in entries {
-            lock_customer(&mut tx, customer).await?;
-            let undo = if kind == "earn" { "reverse" } else { "refund" };
-            add_entry(&mut tx, customer, -points, undo, Some(order), None, None).await?;
+        if let Some(points) = order_points(&mut tx, order).await? {
+            lock_customer(&mut tx, points.customer).await?;
+            let take = points.earned - points.taken_back;
+            if take > 0 {
+                add_entry(
+                    &mut tx,
+                    points.customer,
+                    -take,
+                    "reverse",
+                    Some(order),
+                    None,
+                    None,
+                )
+                .await?;
+            }
+            let give = points.redeemed - points.given_back;
+            if give > 0 {
+                add_entry(
+                    &mut tx,
+                    points.customer,
+                    give,
+                    "refund",
+                    Some(order),
+                    None,
+                    None,
+                )
+                .await?;
+            }
         }
         tx.commit().await?;
         Ok(())
     }
+}
+
+/// The points of one order: earned and redeemed, and how much of each its
+/// returns (or its cancellation) already undid
+struct OrderPoints {
+    customer: Uuid,
+    earned: i32,
+    taken_back: i32,
+    redeemed: i32,
+    given_back: i32,
+}
+
+async fn order_points(conn: &mut PgConnection, order: Uuid) -> Result<Option<OrderPoints>> {
+    let row: Option<(Uuid, i64, i64, i64, i64)> = sqlx::query_as(
+        "SELECT customer_id, \
+         COALESCE(SUM(points) FILTER (WHERE kind = 'earn'), 0)::bigint, \
+         COALESCE(-SUM(points) FILTER (WHERE kind = 'reverse'), 0)::bigint, \
+         COALESCE(-SUM(points) FILTER (WHERE kind = 'redeem'), 0)::bigint, \
+         COALESCE(SUM(points) FILTER (WHERE kind = 'refund'), 0)::bigint \
+         FROM loyalty_entries WHERE order_id = $1 AND kind IN ('earn', 'reverse', 'redeem', 'refund') \
+         GROUP BY customer_id LIMIT 1",
+    )
+    .bind(order)
+    .fetch_optional(conn)
+    .await?;
+    Ok(
+        row.map(|(customer, earned, taken, redeemed, given)| OrderPoints {
+            customer,
+            earned: earned as i32,
+            taken_back: taken as i32,
+            redeemed: redeemed as i32,
+            given_back: given as i32,
+        }),
+    )
+}
+
+/// The part of `total` points a return undoes: in proportion to the goods
+/// returned (`ratio`), and all that is left on the last return
+pub fn points_share(total: i32, done: i32, ratio: Decimal, last: bool) -> i32 {
+    let left = (total - done).max(0);
+    if last {
+        return left;
+    }
+    let share = (Decimal::from(total) * ratio).round().to_i32().unwrap_or(0);
+    share.clamp(0, left)
+}
+
+/// A return takes back its share of the points the order earned and gives
+/// back its share of the points the order used (inside the return's
+/// transaction); the points taken back and given back
+pub async fn undo_for_return(
+    conn: &mut PgConnection,
+    order: Uuid,
+    return_id: Uuid,
+    ratio: Decimal,
+    last: bool,
+) -> Result<(i32, i32)> {
+    let Some(points) = order_points(&mut *conn, order).await? else {
+        return Ok((0, 0));
+    };
+    lock_customer(&mut *conn, points.customer).await?;
+    let take = points_share(points.earned, points.taken_back, ratio, last);
+    let give = points_share(points.redeemed, points.given_back, ratio, last);
+    for (points_change, kind) in [(-take, "reverse"), (give, "refund")] {
+        if points_change == 0 {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO loyalty_entries (customer_id, points, kind, order_id, return_id) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(points.customer)
+        .bind(points_change)
+        .bind(kind)
+        .bind(order)
+        .bind(return_id)
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok((take, give))
 }
 
 fn check_update(update: &SettingsUpdate) -> Result<()> {
@@ -554,5 +652,16 @@ mod tests {
             ..Default::default()
         })
         .is_ok());
+    }
+
+    #[test]
+    fn a_return_undoes_its_share_of_the_points() {
+        use rust_decimal_macros::dec;
+        // 30 % of the goods back: 30 of 100 points earned
+        assert_eq!(points_share(100, 0, dec!(0.3), false), 30);
+        // never more than is left, and all of it on the last return
+        assert_eq!(points_share(100, 90, dec!(0.3), false), 10);
+        assert_eq!(points_share(100, 30, dec!(0.7), true), 70);
+        assert_eq!(points_share(0, 0, dec!(0.5), true), 0);
     }
 }

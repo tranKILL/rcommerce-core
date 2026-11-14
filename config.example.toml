@@ -223,6 +223,7 @@ crop = false
 # [invoicing]
 # enabled = true
 # number_prefix = "F"
+# credit_note_prefix = "NC"
 # payment_terms_days = 30
 # [invoicing.seller]
 # name = "Store SA"

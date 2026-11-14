@@ -220,6 +220,10 @@ reference = "Comunicación estructurada"
 reverse_charge = "Inversión del sujeto pasivo (entrega intracomunitaria)"
 delivery = "Entrega"
 discount = "Descuento"
+credit_note_number = "Número de factura rectificativa"
+credits_invoice = "Rectifica la factura"
+refunded = "Reembolsado"
+credit_left = "Pendiente de descontar"
 
 [invoice_issued]
 subject = "Su factura {{ invoice_number }}"
@@ -240,6 +244,28 @@ Total con IVA: {{ invoice_total }}
 {{ payment_line }}
 
 La factura va adjunta en PDF.
+
+{{ company_name }}
+'''
+
+[credit_note_issued]
+subject = "Su factura rectificativa {{ invoice_number }}"
+heading = "Su factura rectificativa"
+intro = "Hola, {{ customer_name }}: aquí tiene la factura rectificativa {{ invoice_number }} de su pedido {{ order_number }}; rectifica la factura {{ credited_number }}."
+amount = "Abonado con IVA"
+refunded = "Le hemos reembolsado {{ refunded }}."
+credit = "Se descuentan {{ credit_left }} de lo que nos debe."
+peppol = "Como su empresa recibe facturas electrónicas, esta factura rectificativa también se le ha enviado por Peppol."
+attached = "La factura rectificativa va adjunta en PDF."
+text = '''
+Hola, {{ customer_name }}:
+
+aquí tiene la factura rectificativa {{ invoice_number }} de su pedido {{ order_number }}; rectifica la factura {{ credited_number }}.
+
+Abonado con IVA: {{ invoice_total }}
+{{ payment_line }}
+
+La factura rectificativa va adjunta en PDF.
 
 {{ company_name }}
 '''

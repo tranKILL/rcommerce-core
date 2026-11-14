@@ -220,6 +220,10 @@ reference = "Gestructureerde mededeling"
 reverse_charge = "Btw verlegd (intracommunautaire levering)"
 delivery = "Levering"
 discount = "Korting"
+credit_note_number = "Creditnotanummer"
+credits_invoice = "Corrigeert factuur"
+refunded = "Terugbetaald"
+credit_left = "Nog te verrekenen"
 
 [invoice_issued]
 subject = "Uw factuur {{ invoice_number }}"
@@ -240,6 +244,28 @@ Totaal incl. btw: {{ invoice_total }}
 {{ payment_line }}
 
 De factuur zit als pdf bij deze e-mail.
+
+{{ company_name }}
+'''
+
+[credit_note_issued]
+subject = "Uw creditnota {{ invoice_number }}"
+heading = "Uw creditnota"
+intro = "Beste {{ customer_name }}, hier is creditnota {{ invoice_number }} voor uw bestelling {{ order_number }}; ze corrigeert factuur {{ credited_number }}."
+amount = "Gecrediteerd incl. btw"
+refunded = "Aan u terugbetaald: {{ refunded }}."
+credit = "{{ credit_left }} wordt verrekend met wat u nog verschuldigd bent."
+peppol = "Omdat uw bedrijf e-facturen ontvangt, werd deze creditnota ook via Peppol verstuurd."
+attached = "De creditnota zit als pdf bij deze e-mail."
+text = '''
+Beste {{ customer_name }},
+
+Hier is creditnota {{ invoice_number }} voor uw bestelling {{ order_number }}; ze corrigeert factuur {{ credited_number }}.
+
+Gecrediteerd incl. btw: {{ invoice_total }}
+{{ payment_line }}
+
+De creditnota zit als pdf bij deze e-mail.
 
 {{ company_name }}
 '''

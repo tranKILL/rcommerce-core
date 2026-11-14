@@ -220,6 +220,10 @@ reference = "Strukturierte Mitteilung"
 reverse_charge = "Steuerschuldnerschaft des Leistungsempfängers (innergemeinschaftliche Lieferung)"
 delivery = "Lieferung"
 discount = "Rabatt"
+credit_note_number = "Gutschriftnummer"
+credits_invoice = "Korrigiert Rechnung"
+refunded = "Erstattet"
+credit_left = "Noch zu verrechnen"
 
 [invoice_issued]
 subject = "Ihre Rechnung {{ invoice_number }}"
@@ -240,6 +244,28 @@ Summe brutto: {{ invoice_total }}
 {{ payment_line }}
 
 Die Rechnung finden Sie als PDF im Anhang.
+
+{{ company_name }}
+'''
+
+[credit_note_issued]
+subject = "Ihre Gutschrift {{ invoice_number }}"
+heading = "Ihre Gutschrift"
+intro = "Hallo {{ customer_name }}, anbei die Gutschrift {{ invoice_number }} zu Ihrer Bestellung {{ order_number }}; sie korrigiert die Rechnung {{ credited_number }}."
+amount = "Gutschrift brutto"
+refunded = "An Sie erstattet: {{ refunded }}."
+credit = "{{ credit_left }} wird mit Ihrem offenen Betrag verrechnet."
+peppol = "Da Ihr Unternehmen E-Rechnungen empfängt, wurde Ihnen diese Gutschrift auch über Peppol zugestellt."
+attached = "Die Gutschrift finden Sie als PDF im Anhang."
+text = '''
+Hallo {{ customer_name }},
+
+anbei die Gutschrift {{ invoice_number }} zu Ihrer Bestellung {{ order_number }}; sie korrigiert die Rechnung {{ credited_number }}.
+
+Gutschrift brutto: {{ invoice_total }}
+{{ payment_line }}
+
+Die Gutschrift finden Sie als PDF im Anhang.
 
 {{ company_name }}
 '''

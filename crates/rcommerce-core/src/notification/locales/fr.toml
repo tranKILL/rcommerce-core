@@ -220,6 +220,10 @@ reference = "Communication structurée"
 reverse_charge = "Autoliquidation de la TVA (livraison intracommunautaire)"
 delivery = "Livraison"
 discount = "Remise"
+credit_note_number = "Numéro de note de crédit"
+credits_invoice = "Corrige la facture"
+refunded = "Remboursé"
+credit_left = "Reste à déduire"
 
 [invoice_issued]
 subject = "Votre facture {{ invoice_number }}"
@@ -240,6 +244,28 @@ Total TVAC : {{ invoice_total }}
 {{ payment_line }}
 
 La facture est jointe en PDF.
+
+{{ company_name }}
+'''
+
+[credit_note_issued]
+subject = "Votre note de crédit {{ invoice_number }}"
+heading = "Votre note de crédit"
+intro = "Bonjour {{ customer_name }}, voici la note de crédit {{ invoice_number }} de votre commande {{ order_number }} ; elle corrige la facture {{ credited_number }}."
+amount = "Crédité TVAC"
+refunded = "Remboursé : {{ refunded }}."
+credit = "{{ credit_left }} est déduit de ce que vous devez."
+peppol = "Votre entreprise recevant les factures électroniques, cette note de crédit vous a aussi été envoyée via Peppol."
+attached = "La note de crédit est jointe en PDF."
+text = '''
+Bonjour {{ customer_name }},
+
+Voici la note de crédit {{ invoice_number }} de votre commande {{ order_number }} ; elle corrige la facture {{ credited_number }}.
+
+Crédité TVAC : {{ invoice_total }}
+{{ payment_line }}
+
+La note de crédit est jointe en PDF.
 
 {{ company_name }}
 '''

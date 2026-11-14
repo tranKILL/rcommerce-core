@@ -1378,7 +1378,9 @@ impl OrderService {
 
     /// Refund (or void) the most recent paid/authorized payment recorded for an
     /// order, using the gateway transaction id stored on the payment record.
-    async fn process_refund(
+    /// Records the refund; neither restocks nor changes the order's status
+    /// (a till return does both itself).
+    pub async fn process_refund(
         &self,
         order_id: Uuid,
         amount: Option<Decimal>,

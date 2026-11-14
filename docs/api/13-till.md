@@ -117,3 +117,53 @@ of `basket_id`:
   "change"}, "invoice_number"}`.
 
 Finance and marketing reports count these orders under the `pos` channel.
+
+## Returns
+
+Goods already handed over (an order `completed`, from the till or the web
+shop) come back at the till. The cashier's open session gives the branch.
+
+| Method and path | Body | Answer |
+|---|---|---|
+| `GET /admin/pos/orders/:id/returnable` | | the order's lines with `quantity`, `returned`, `unit_price` (excl. VAT) and `vat_rate`; `refundable` per method (`online`, `card`, `cash`: paid less refunded); `invoice_number` |
+| `POST /admin/pos/returns/preview` | `{"session_id", "order_id", "lines": [{"order_item_id", "quantity"}]}` | the priced return and its `refund` |
+| `POST /admin/pos/returns` | the same, plus `"reason"` and `"card_refunds": ["<approved terminal refund>"]` | 201, the return |
+
+A line may carry `"restock": false` for damaged goods; the others go back in
+stock at the session's branch (a bundle: its parts), as a `return` stock
+movement with the reason.
+
+- **Price:** what the goods cost the customer. Their price excl. VAT, less
+  their share of the order's discount (coupon, points, cart promotions) in
+  proportion to their value, with VAT per rate as on the invoice. The last
+  return takes what is left of the discount, so all the returns of an order
+  add up to what it cost, without its delivery.
+- **Refund by the original methods, in turn:**
+  1. the online payment, refunded through its gateway (as the last step, so a
+     refused refund cancels the whole return);
+  2. the card: an approved terminal refund (`POST /admin/pos/terminal` with
+     `"refund": true`) for exactly the card's part, else 400;
+  3. cash, up to what was paid in cash.
+
+  What the customer had not paid (an invoice still due) is only credited
+  (`not_refunded`). The preview shows the parts; its card part is the amount
+  to refund on the terminal.
+- **What is recorded:**
+  - the return and its lines, with who took it back and where;
+  - the session's `refund` movements (card, cash);
+  - a refund against the sale's cash and card payment rows;
+  - an order event `returned`.
+
+  Once everything sold has come back, the order is `refunded` (its payment
+  too when all that was paid went back), and nothing more can be returned.
+- **Points:** the return takes back its share of the points the order earned
+  and gives back its share of the points it used. The last return settles
+  what is left.
+- **Credit note:** an invoiced order's return gets a credit note against the
+  invoice (see [peppol.md](../architecture/peppol.md)). It is e-mailed and, for
+  companies, sent through Peppol.
+
+The answer has `lines` (as on the credit note, the discount share as negative
+lines), `goods`, `discount`, `subtotal`, `tax_total`, `total`, `last`,
+`refund` (`online`, `card`, `cash`, `not_refunded`), `points_taken_back`,
+`points_given_back` and `credit_note_number`.

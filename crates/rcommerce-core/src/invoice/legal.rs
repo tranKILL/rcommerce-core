@@ -151,21 +151,33 @@ fn party_block(
     canvas.y
 }
 
-/// The invoice's number, dates and order: labels, colons and values each in
-/// their own column
+/// The document's number, dates and order (a credit note: the invoice it
+/// corrects instead of a due date): labels, colons and values each in their
+/// own column
 fn references(canvas: &mut Canvas, invoice: &Invoice) {
     let locale = invoice.locale.as_str();
     let t = |key: &str| i18n::text(locale, "invoice_document", key);
-    let rows = [
-        (t("number"), invoice.number.clone(), true),
-        (
-            t("issue_date"),
-            i18n::date(locale, invoice.issue_date),
-            false,
-        ),
-        (t("due_date"), i18n::date(locale, invoice.due_date), false),
-        (t("order"), invoice.order_number.clone(), false),
-    ];
+    let issued = i18n::date(locale, invoice.issue_date);
+    let rows = if invoice.is_credit_note() {
+        let credited = match (&invoice.credited_number, invoice.credited_issue_date) {
+            (Some(number), Some(date)) => format!("{number} ({})", i18n::date(locale, date)),
+            (Some(number), None) => number.clone(),
+            _ => String::new(),
+        };
+        vec![
+            (t("credit_note_number"), invoice.number.clone(), true),
+            (t("issue_date"), issued, false),
+            (t("credits_invoice"), credited, false),
+            (t("order"), invoice.order_number.clone(), false),
+        ]
+    } else {
+        vec![
+            (t("number"), invoice.number.clone(), true),
+            (t("issue_date"), issued, false),
+            (t("due_date"), i18n::date(locale, invoice.due_date), false),
+            (t("order"), invoice.order_number.clone(), false),
+        ]
+    };
     let widest = rows
         .iter()
         .map(|(label, _, _)| canvas.width(false, 9.5, label))
@@ -271,7 +283,15 @@ fn totals(canvas: &mut Canvas, invoice: &Invoice) {
         (t("vat_amount"), invoice.tax_total, false),
         (t("total"), invoice.total, true),
     ];
-    if !invoice.paid_amount.is_zero() {
+    if invoice.is_credit_note() {
+        // What was paid back at once, and what is left to deduct
+        if !invoice.paid_amount.is_zero() {
+            rows.push((t("refunded"), invoice.paid_amount, false));
+        }
+        if !invoice.amount_due().is_zero() {
+            rows.push((t("credit_left"), invoice.amount_due(), true));
+        }
+    } else if !invoice.paid_amount.is_zero() {
         rows.push((t("paid"), -invoice.paid_amount, false));
         rows.push((t("amount_due"), invoice.amount_due(), true));
     }
@@ -292,7 +312,7 @@ fn payment(canvas: &mut Canvas, invoice: &Invoice) {
         canvas.text(false, 9.0, MARGIN, &t("reverse_charge"));
         canvas.down(16.0);
     }
-    if invoice.amount_due().is_zero() {
+    if invoice.amount_due().is_zero() || invoice.is_credit_note() {
         return;
     }
     if let Some(iban) = &invoice.seller.iban {
@@ -374,6 +394,18 @@ mod tests {
         invoice.lines.0 = vec![line; 60];
         let long = invoice_pdf(&invoice, None).unwrap();
         assert!(long.len() > pdf.len());
+    }
+
+    #[test]
+    fn a_credit_note_renders_without_payment_details() {
+        let mut note = crate::peppol::ubl::tests::sample();
+        note.kind = "credit_note".into();
+        note.number = "NC2026-00001".into();
+        note.credited_number = Some("F2026-00001".into());
+        note.credited_issue_date = note.issue_date.pred_opt();
+        note.paid_amount = note.total;
+        let pdf = invoice_pdf(&note, None).unwrap();
+        assert!(pdf.starts_with(b"%PDF"));
     }
 
     #[test]

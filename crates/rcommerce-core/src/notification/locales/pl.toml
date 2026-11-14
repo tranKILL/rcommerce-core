@@ -220,6 +220,10 @@ reference = "Komunikat strukturalny"
 reverse_charge = "Odwrotne obciążenie VAT (dostawa wewnątrzwspólnotowa)"
 delivery = "Dostawa"
 discount = "Rabat"
+credit_note_number = "Numer faktury korygującej"
+credits_invoice = "Koryguje fakturę"
+refunded = "Zwrócono"
+credit_left = "Pozostało do odliczenia"
 
 [invoice_issued]
 subject = "Twoja faktura {{ invoice_number }}"
@@ -240,6 +244,28 @@ Razem brutto: {{ invoice_total }}
 {{ payment_line }}
 
 Faktura jest załączona w pliku PDF.
+
+{{ company_name }}
+'''
+
+[credit_note_issued]
+subject = "Twoja faktura korygująca {{ invoice_number }}"
+heading = "Twoja faktura korygująca"
+intro = "Dzień dobry, {{ customer_name }}! Oto faktura korygująca {{ invoice_number }} do zamówienia {{ order_number }}; koryguje fakturę {{ credited_number }}."
+amount = "Korekta brutto"
+refunded = "Zwrócono Ci: {{ refunded }}."
+credit = "{{ credit_left }} zostanie odliczone od Twojego zadłużenia."
+peppol = "Ponieważ Twoja firma odbiera e-faktury, ta faktura korygująca została też wysłana przez Peppol."
+attached = "Faktura korygująca jest załączona w pliku PDF."
+text = '''
+Dzień dobry, {{ customer_name }}!
+
+Oto faktura korygująca {{ invoice_number }} do zamówienia {{ order_number }}; koryguje fakturę {{ credited_number }}.
+
+Korekta brutto: {{ invoice_total }}
+{{ payment_line }}
+
+Faktura korygująca jest załączona w pliku PDF.
 
 {{ company_name }}
 '''

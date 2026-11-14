@@ -220,6 +220,10 @@ reference = "Comunicação estruturada"
 reverse_charge = "Autoliquidação do IVA (fornecimento intracomunitário)"
 delivery = "Entrega"
 discount = "Desconto"
+credit_note_number = "Número da nota de crédito"
+credits_invoice = "Corrige a fatura"
+refunded = "Reembolsado"
+credit_left = "Por deduzir"
 
 [invoice_issued]
 subject = "A sua fatura {{ invoice_number }}"
@@ -240,6 +244,28 @@ Total c/ IVA: {{ invoice_total }}
 {{ payment_line }}
 
 A fatura segue em anexo em PDF.
+
+{{ company_name }}
+'''
+
+[credit_note_issued]
+subject = "A sua nota de crédito {{ invoice_number }}"
+heading = "A sua nota de crédito"
+intro = "Olá {{ customer_name }}, segue a nota de crédito {{ invoice_number }} da sua encomenda {{ order_number }}; corrige a fatura {{ credited_number }}."
+amount = "Creditado c/ IVA"
+refunded = "Reembolsado: {{ refunded }}."
+credit = "{{ credit_left }} é deduzido do montante em dívida."
+peppol = "Como a sua empresa recebe faturas eletrónicas, esta nota de crédito também lhe foi enviada através da Peppol."
+attached = "A nota de crédito segue em anexo em PDF."
+text = '''
+Olá {{ customer_name }},
+
+segue a nota de crédito {{ invoice_number }} da sua encomenda {{ order_number }}; corrige a fatura {{ credited_number }}.
+
+Creditado c/ IVA: {{ invoice_total }}
+{{ payment_line }}
+
+A nota de crédito segue em anexo em PDF.
 
 {{ company_name }}
 '''

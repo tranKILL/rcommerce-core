@@ -38,6 +38,26 @@ returns the same invoice).
 | `POST /admin/invoices/:id/peppol` | staff (`orders:write`) | Send through Peppol now (again) |
 | `POST /admin/orders/:id/invoice` | staff (`orders:write`) | Issue a completed order's invoice |
 
+### Credit notes
+
+A return of an invoiced order's goods (at the till, see
+[13-till.md](../api/13-till.md)) issues a credit note against the invoice,
+in the same transaction as the return:
+
+- its own numbers, `{credit_note_prefix}{year}-{sequence:05}` (`NC2026-00001`),
+  without gaps like invoices;
+- the invoice's seller, buyer and language; it names the invoice it corrects
+  (number and date);
+- the returned goods and their share of the discount as lines, with the VAT
+  per rate;
+- `paid_amount` is what was paid back at once; any rest is deducted from what
+  the buyer owes.
+
+It is e-mailed with its PDF and, when the invoice's buyer is a company and
+Peppol is on, sent as a UBL `CreditNote` (type code 381, with a
+`BillingReference` to the invoice). Credit notes are listed and read with
+the invoice routes (`kind` is `credit_note`).
+
 ## Peppol
 
 With `[peppol] enabled = true`, invoices to companies (a VAT number on the
@@ -87,6 +107,7 @@ covered.
 [invoicing]
 enabled = true
 number_prefix = "F"
+credit_note_prefix = "NC"
 payment_terms_days = 30
 timezone = "Europe/Brussels"
 

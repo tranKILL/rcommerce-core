@@ -136,9 +136,14 @@ fn tax_total(invoice: &Invoice, vat: &[VatSubtotal], currency: &str) -> String {
     xml
 }
 
-/// An invoice line; a negative line (a discount) has a negative quantity and
-/// a positive price, as prices may not be negative (BR-27)
+/// An invoice (or credit note) line; a negative line (a discount) has a
+/// negative quantity and a positive price, as prices may not be negative (BR-27)
 fn line(invoice: &Invoice, number: usize, line: &InvoiceLine, currency: &str) -> String {
+    let (tag, quantity_tag) = if invoice.is_credit_note() {
+        ("CreditNoteLine", "CreditedQuantity")
+    } else {
+        ("InvoiceLine", "InvoicedQuantity")
+    };
     let negative = line.net < Decimal::ZERO;
     let quantity = if negative {
         -line.quantity.abs()
@@ -151,10 +156,10 @@ fn line(invoice: &Invoice, number: usize, line: &InvoiceLine, currency: &str) ->
         .map(|s| format!("<cac:SellersItemIdentification><cbc:ID>{}</cbc:ID></cac:SellersItemIdentification>", esc(s)))
         .unwrap_or_default();
     format!(
-        "<cac:InvoiceLine><cbc:ID>{number}</cbc:ID><cbc:InvoicedQuantity unitCode=\"C62\">{quantity}</cbc:InvoicedQuantity>\
+        "<cac:{tag}><cbc:ID>{number}</cbc:ID><cbc:{quantity_tag} unitCode=\"C62\">{quantity}</cbc:{quantity_tag}>\
          <cbc:LineExtensionAmount currencyID=\"{currency}\">{}</cbc:LineExtensionAmount>\
          <cac:Item><cbc:Name>{}</cbc:Name>{sku}{}</cac:Item>\
-         <cac:Price><cbc:PriceAmount currencyID=\"{currency}\">{}</cbc:PriceAmount></cac:Price></cac:InvoiceLine>",
+         <cac:Price><cbc:PriceAmount currencyID=\"{currency}\">{}</cbc:PriceAmount></cac:Price></cac:{tag}>",
         amount(line.net),
         esc(&line.description),
         tax_category(invoice, line.vat_rate, "ClassifiedTaxCategory"),
@@ -182,27 +187,54 @@ fn payment(invoice: &Invoice) -> String {
     )
 }
 
-/// The invoice as a Peppol BIS Billing 3.0 UBL document, sent by `sender` to
-/// `recipient` (participant ids), with its PDF embedded when given
-pub fn invoice_xml(invoice: &Invoice, sender: &str, recipient: &str, pdf: Option<&[u8]>) -> String {
-    let currency = esc(&invoice.currency);
-    let mut xml = String::from(
+/// The opening of the document: its root element, identifiers, dates, type,
+/// order and, for a credit note, the invoice it corrects (BT-25, BT-26)
+fn document_head(invoice: &Invoice, currency: &str) -> String {
+    let credit = invoice.is_credit_note();
+    let (root, type_code) = if credit {
+        (
+            "CreditNote",
+            "<cbc:CreditNoteTypeCode>381</cbc:CreditNoteTypeCode>",
+        )
+    } else {
+        ("Invoice", "<cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>")
+    };
+    // A credit note has no due date of its own in UBL
+    let due = if credit {
+        String::new()
+    } else {
+        format!("<cbc:DueDate>{}</cbc:DueDate>", invoice.due_date)
+    };
+    let billing = match (&invoice.credited_number, invoice.credited_issue_date) {
+        (Some(number), Some(date)) => format!(
+            "<cac:BillingReference><cac:InvoiceDocumentReference><cbc:ID>{}</cbc:ID>\
+             <cbc:IssueDate>{date}</cbc:IssueDate></cac:InvoiceDocumentReference></cac:BillingReference>",
+            esc(number)
+        ),
+        _ => String::new(),
+    };
+    format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
-         <Invoice xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:Invoice-2\" \
+         <{root} xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:{root}-2\" \
          xmlns:cac=\"urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2\" \
-         xmlns:cbc=\"urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2\">",
-    );
-    xml.push_str(&format!(
-        "<cbc:CustomizationID>{CUSTOMIZATION}</cbc:CustomizationID><cbc:ProfileID>{PROFILE}</cbc:ProfileID>\
-         <cbc:ID>{}</cbc:ID><cbc:IssueDate>{}</cbc:IssueDate><cbc:DueDate>{}</cbc:DueDate>\
-         <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode><cbc:DocumentCurrencyCode>{currency}</cbc:DocumentCurrencyCode>\
-         <cbc:BuyerReference>{}</cbc:BuyerReference><cac:OrderReference><cbc:ID>{}</cbc:ID></cac:OrderReference>",
+         xmlns:cbc=\"urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2\">\
+         <cbc:CustomizationID>{CUSTOMIZATION}</cbc:CustomizationID><cbc:ProfileID>{PROFILE}</cbc:ProfileID>\
+         <cbc:ID>{}</cbc:ID><cbc:IssueDate>{}</cbc:IssueDate>{due}{type_code}\
+         <cbc:DocumentCurrencyCode>{currency}</cbc:DocumentCurrencyCode>\
+         <cbc:BuyerReference>{}</cbc:BuyerReference><cac:OrderReference><cbc:ID>{}</cbc:ID></cac:OrderReference>{billing}",
         esc(&invoice.number),
         invoice.issue_date,
-        invoice.due_date,
         esc(&invoice.order_number),
         esc(&invoice.order_number)
-    ));
+    )
+}
+
+/// The invoice (or credit note) as a Peppol BIS Billing 3.0 UBL document,
+/// sent by `sender` to `recipient` (participant ids), with its PDF embedded
+/// when given
+pub fn invoice_xml(invoice: &Invoice, sender: &str, recipient: &str, pdf: Option<&[u8]>) -> String {
+    let currency = esc(&invoice.currency);
+    let mut xml = document_head(invoice, &currency);
     if let Some(pdf) = pdf {
         xml.push_str(&format!(
             "<cac:AdditionalDocumentReference><cbc:ID>{0}</cbc:ID><cac:Attachment>\
@@ -214,7 +246,10 @@ pub fn invoice_xml(invoice: &Invoice, sender: &str, recipient: &str, pdf: Option
     }
     xml.push_str(&party("AccountingSupplierParty", &invoice.seller, sender));
     xml.push_str(&party("AccountingCustomerParty", &invoice.buyer, recipient));
-    xml.push_str(&payment(invoice));
+    // A credit note is paid back, not paid: no payment means
+    if !invoice.is_credit_note() {
+        xml.push_str(&payment(invoice));
+    }
     xml.push_str(&tax_total(invoice, &invoice.vat, &currency));
     let lines: Decimal = invoice.lines.iter().map(|l| l.net).sum();
     xml.push_str(&format!(
@@ -231,7 +266,11 @@ pub fn invoice_xml(invoice: &Invoice, sender: &str, recipient: &str, pdf: Option
     for (i, l) in invoice.lines.iter().enumerate() {
         xml.push_str(&line(invoice, i + 1, l, &currency));
     }
-    xml.push_str("</Invoice>");
+    xml.push_str(if invoice.is_credit_note() {
+        "</CreditNote>"
+    } else {
+        "</Invoice>"
+    });
     xml
 }
 
@@ -258,7 +297,7 @@ pub fn check(invoice: &Invoice) -> Vec<String> {
         "invoicing.seller.country must be a two-letter code",
     );
     need(
-        invoice.amount_due().is_zero() || seller.iban.is_some(),
+        invoice.amount_due().is_zero() || invoice.is_credit_note() || seller.iban.is_some(),
         "invoicing.seller.iban is needed for an amount due",
     );
     need(!invoice.buyer.name.is_empty(), "the buyer has no name");
@@ -267,6 +306,10 @@ pub fn check(invoice: &Invoice) -> Vec<String> {
         "the buyer's country is missing",
     );
     need(!invoice.lines.is_empty(), "the invoice has no line");
+    need(
+        !invoice.is_credit_note() || invoice.credited_number.is_some(),
+        "the credit note names no invoice",
+    );
     let lines: Decimal = invoice.lines.iter().map(|l| l.net).sum();
     need(
         lines.round_dp(2) == invoice.subtotal,
@@ -351,6 +394,10 @@ pub(crate) mod tests {
             peppol_error: None,
             peppol_updated_at: None,
             created_at: Utc::now(),
+            credited_invoice_id: None,
+            credited_number: None,
+            credited_issue_date: None,
+            return_id: None,
         }
     }
 
@@ -392,6 +439,48 @@ pub(crate) mod tests {
             "<cac:TaxTotal>",
             "<cac:LegalMonetaryTotal>",
             "<cac:InvoiceLine>",
+        ];
+        let positions: Vec<usize> = order.iter().map(|tag| xml.find(tag).unwrap()).collect();
+        assert!(positions.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn a_credit_note_names_the_invoice_it_corrects() {
+        let mut note = sample();
+        note.kind = "credit_note".into();
+        note.number = "NC2026-00001".into();
+        note.credited_number = Some("F2026-00001".into());
+        note.credited_issue_date = NaiveDate::from_ymd_opt(2026, 11, 10);
+        note.paid_amount = note.total;
+        let xml = invoice_xml(&note, "0208:0123456749", "0208:0987654321", None);
+        assert!(xml.contains(
+            "<CreditNote xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2\""
+        ));
+        assert!(xml.ends_with("</CreditNote>"));
+        for part in [
+            "<cbc:CreditNoteTypeCode>381</cbc:CreditNoteTypeCode>",
+            "<cac:BillingReference><cac:InvoiceDocumentReference><cbc:ID>F2026-00001</cbc:ID><cbc:IssueDate>2026-11-10</cbc:IssueDate>",
+            "<cac:CreditNoteLine><cbc:ID>1</cbc:ID><cbc:CreditedQuantity unitCode=\"C62\">",
+            "<cbc:PayableAmount currencyID=\"EUR\">0.00</cbc:PayableAmount>",
+        ] {
+            assert!(xml.contains(part), "missing {part}");
+        }
+        for absent in [
+            "<cbc:DueDate>",
+            "<cac:PaymentMeans>",
+            "InvoiceLine>",
+            "InvoiceTypeCode",
+        ] {
+            assert!(!xml.contains(absent), "unexpected {absent}");
+        }
+        let order = [
+            "<cbc:CreditNoteTypeCode>",
+            "<cac:OrderReference>",
+            "<cac:BillingReference>",
+            "<cac:AccountingSupplierParty>",
+            "<cac:TaxTotal>",
+            "<cac:LegalMonetaryTotal>",
+            "<cac:CreditNoteLine>",
         ];
         let positions: Vec<usize> = order.iter().map(|tag| xml.find(tag).unwrap()).collect();
         assert!(positions.windows(2).all(|w| w[0] < w[1]));

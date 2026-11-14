@@ -220,6 +220,10 @@ reference = "Comunicazione strutturata"
 reverse_charge = "Inversione contabile dell'IVA (cessione intracomunitaria)"
 delivery = "Consegna"
 discount = "Sconto"
+credit_note_number = "Numero nota di credito"
+credits_invoice = "Rettifica la fattura"
+refunded = "Rimborsato"
+credit_left = "Ancora da detrarre"
 
 [invoice_issued]
 subject = "La tua fattura {{ invoice_number }}"
@@ -240,6 +244,28 @@ Totale IVA incl.: {{ invoice_total }}
 {{ payment_line }}
 
 La fattura è allegata in PDF.
+
+{{ company_name }}
+'''
+
+[credit_note_issued]
+subject = "La tua nota di credito {{ invoice_number }}"
+heading = "La tua nota di credito"
+intro = "Ciao {{ customer_name }}, ecco la nota di credito {{ invoice_number }} del tuo ordine {{ order_number }}; rettifica la fattura {{ credited_number }}."
+amount = "Accreditato IVA incl."
+refunded = "Rimborsato a te: {{ refunded }}."
+credit = "{{ credit_left }} viene detratto da quanto devi."
+peppol = "Poiché la tua azienda riceve fatture elettroniche, questa nota di credito ti è stata inviata anche tramite Peppol."
+attached = "La nota di credito è allegata in PDF."
+text = '''
+Ciao {{ customer_name }},
+
+ecco la nota di credito {{ invoice_number }} del tuo ordine {{ order_number }}; rettifica la fattura {{ credited_number }}.
+
+Accreditato IVA incl.: {{ invoice_total }}
+{{ payment_line }}
+
+La nota di credito è allegata in PDF.
 
 {{ company_name }}
 '''
