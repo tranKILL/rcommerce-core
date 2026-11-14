@@ -6560,6 +6560,10 @@ async fn test_till_sale() {
         "{sold}"
     );
     assert_eq!(sold["order"]["status"], "completed", "{sold}");
+    assert!(
+        (amount(&sold["order"]["total"]) - total).abs() < 0.005,
+        "the order costs what the till showed: {sold}"
+    );
     let order: Uuid = sold["order"]["id"].as_str().unwrap().parse().unwrap();
 
     let pool = app.app_state.db.pool();

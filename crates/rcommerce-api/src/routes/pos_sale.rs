@@ -145,6 +145,13 @@ fn till_checkout(state: &AppState) -> CheckoutService {
     .with_pickup_locations(PickupLocations::new(state.db.pool().clone()))
 }
 
+/// What a till sale costs: the goods after discounts with their VAT. The
+/// quote's own total may include a delivery the counter does not charge
+/// (its cheapest rate); the sale itself uses the branch's free pickup rate.
+fn till_total(summary: &CheckoutSummary) -> Decimal {
+    summary.subtotal - summary.discount_total + summary.item_tax
+}
+
 /// The branch's address: where a till sale is "shipped" (picked up)
 async fn branch_address(state: &AppState, session: &TillSession) -> Result<Address, Error> {
     let row: (Option<String>, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
@@ -298,8 +305,8 @@ async fn basket_view(
         lines,
         subtotal: summary.subtotal,
         discount_total: summary.discount_total,
-        tax_total: summary.tax_total,
-        total: summary.total,
+        tax_total: summary.item_tax,
+        total: till_total(summary),
         promotions: cart.0 .0,
         coupon: cart.1,
     })
@@ -346,7 +353,7 @@ async fn sell(
     let cards = card_amounts(&state, session.id, &body.card_payments).await?;
     let summary = quote(&state, &session, body.basket_id, customer).await?;
     let card_total: Vec<Decimal> = cards.iter().map(|c| c.1).collect();
-    let plan = settle(summary.total, body.cash_given, &card_total)?;
+    let plan = settle(till_total(&summary), body.cash_given, &card_total)?;
     let order = place(&state, &session, body.basket_id, customer, email, &summary).await?;
     let collector = collector_name(&state, customer, body.collected_by.as_deref()).await?;
     let sale = Sale {
