@@ -535,9 +535,11 @@ mod tests {
     /// (TEST_ELASTICSEARCH_URL); skipped unless both are set
     #[tokio::test]
     async fn index_and_search_against_elasticsearch() {
-        let (Ok(db_url), Ok(es_url)) = (
+        let (Ok(db_url), Some(es_url)) = (
             std::env::var("TEST_DATABASE_URL"),
-            std::env::var("TEST_ELASTICSEARCH_URL"),
+            std::env::var("TEST_ELASTICSEARCH_URL")
+                .ok()
+                .filter(|url| !url.is_empty()),
         ) else {
             eprintln!(
                 "Skipping Elasticsearch test: set TEST_DATABASE_URL and TEST_ELASTICSEARCH_URL"
