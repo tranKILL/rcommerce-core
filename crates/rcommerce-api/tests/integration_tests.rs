@@ -4757,7 +4757,7 @@ async fn test_invoice_issued_at_collection_and_sent_through_peppol() {
 
     let peppol = app.app_state.peppol.clone().unwrap();
     peppol
-        .run_once(&app.app_state.invoices, |_| None)
+        .run_once(&app.app_state.invoices, None)
         .await
         .unwrap();
     let (_, body) = call_json(&app, &token, &format!("/invoices/{id}"), None).await;
@@ -6926,4 +6926,158 @@ async fn tile_stock(pool: &Pool<Postgres>, product: Uuid, location: Uuid) -> i32
     .fetch_one(pool)
     .await
     .unwrap()
+}
+
+/// A company's owner sets its logo (shrunk to fit 600 x 240 px); a buyer
+/// cannot, nor can anything but a picture be sent. An invoice keeps the logo
+/// it was issued with when the company changes or removes its logo; staff set
+/// and remove logos too.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_company_logo_on_documents() {
+    let logo_png: &[u8] = include_bytes!("../../rcommerce-core/assets/88-logo.png");
+    let app = TestApp::new_with(|state| {
+        let invoicing = rcommerce_core::config::InvoicingConfig {
+            enabled: true,
+            seller: test_seller(),
+            ..Default::default()
+        };
+        state.invoices = rcommerce_core::invoicing::InvoiceService::new(
+            state.db.pool().clone(),
+            invoicing,
+            "en".into(),
+            false,
+        );
+    })
+    .await
+    .expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    let product = app
+        .create_test_product("Logo bricks", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 5, None)
+        .await
+        .unwrap();
+    let (owner, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&owner.email, &password).await.unwrap();
+    let company = serde_json::json!({"vat_number": fresh_belgian_vat(), "name": "Logo Builders"});
+    let (status, body) = call_json(&app, &token, "/companies", Some(company)).await;
+    assert_eq!(status, 201, "{body}");
+    let company_id = body["company"]["id"].as_str().unwrap().to_string();
+
+    let upload = |token: &str, path: &str, bytes: Vec<u8>| {
+        app.http_client
+            .put(format!("{}/api/v1{path}", app.base_url()))
+            .bearer_auth(token.to_string())
+            .header("Content-Type", "image/png")
+            .body(bytes)
+            .send()
+    };
+    let refused = upload(&token, "/companies/me/logo", b"<svg/>".to_vec())
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 400, "not a picture");
+    let too_big = upload(&token, "/companies/me/logo", vec![0_u8; 6 * 1024 * 1024])
+        .await
+        .unwrap();
+    assert_eq!(too_big.status(), 413);
+    let set = upload(&token, "/companies/me/logo", logo_png.to_vec())
+        .await
+        .unwrap();
+    assert_eq!(set.status(), 200);
+    let first: serde_json::Value = set.json().await.unwrap();
+    let first_id = first["logo"]["id"].as_str().unwrap().to_string();
+    assert!(first["logo"]["height"].as_i64().unwrap() <= 240, "{first}");
+    assert!(first["logo"]["width"].as_i64().unwrap() <= 600, "{first}");
+    let got = app
+        .http_client
+        .get(format!("{}/api/v1/companies/me/logo", app.base_url()))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(got.status(), 200);
+    assert!(got.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("image/"));
+    let (_, mine) = call_json(&app, &token, "/companies/me", None).await;
+    assert_eq!(mine["company"]["logo_id"], first_id.as_str());
+
+    // a buyer of the company may see the logo but not change it
+    let (buyer, buyer_password) = app.create_test_customer().await.unwrap();
+    let add = serde_json::json!({"email": buyer.email});
+    let (status, _) = call_json(&app, &token, "/companies/me/members", Some(add)).await;
+    assert_eq!(status, 201);
+    let buyer_token = app.login(&buyer.email, &buyer_password).await.unwrap();
+    let as_buyer = upload(&buyer_token, "/companies/me/logo", logo_png.to_vec())
+        .await
+        .unwrap();
+    assert_eq!(as_buyer.status(), 403);
+
+    // the invoice keeps the logo it was issued with
+    let order = customer_pickup_order(&app, &token, &owner.email, location, product).await;
+    collect(&app, &admin, &order, "L. Ogo").await;
+    let pool = app.app_state.db.pool();
+    let invoice_logo: Option<Uuid> = sqlx::query_scalar(
+        "SELECT buyer_logo_id FROM invoices WHERE order_id = $1::uuid AND kind = 'invoice'",
+    )
+    .bind(&order)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        invoice_logo.map(|id| id.to_string()),
+        Some(first_id.clone())
+    );
+    let path = format!("/admin/companies/{company_id}/logo");
+    let replaced = upload(&admin, &path, logo_png.to_vec()).await.unwrap();
+    assert_eq!(replaced.status(), 200, "staff set it too");
+    let (status, _) = send_json(
+        &app,
+        reqwest::Method::DELETE,
+        &token,
+        "/companies/me/logo",
+        None,
+    )
+    .await;
+    assert_eq!(status, 204);
+    let kept: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM company_logos WHERE company_id = $1::uuid")
+            .bind(&company_id)
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        kept.iter().map(Uuid::to_string).collect::<Vec<_>>(),
+        [first_id],
+        "only the logo an invoice prints is kept"
+    );
+    let (_, invoices) = call_json(&app, &token, &format!("/invoices?order_id={order}"), None).await;
+    let invoice_id = invoices["invoices"][0]["id"].as_str().unwrap().to_string();
+    let pdf = app
+        .http_client
+        .get(format!(
+            "{}/api/v1/invoices/{invoice_id}/pdf",
+            app.base_url()
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pdf.status(), 200);
+    assert!(pdf.bytes().await.unwrap().starts_with(b"%PDF"));
+    let gone = app
+        .http_client
+        .get(format!("{}/api/v1/companies/me/logo", app.base_url()))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 404);
+    app.cleanup().await.ok();
 }

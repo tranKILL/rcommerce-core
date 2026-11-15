@@ -77,9 +77,25 @@ pub async fn order_email_locale(pool: &sqlx::PgPool, order_id: Uuid, default: &s
     i18n::pick_locale([placed.as_deref(), preferred.as_deref(), Some(default)])
 }
 
+/// The logo of the company an order was placed for (none on failure: the
+/// document goes out without it)
+pub async fn buyer_logo(
+    db: &rcommerce_core::Database,
+    order_id: Uuid,
+) -> Option<rcommerce_core::invoice::PdfLogo> {
+    rcommerce_core::services::company_logo::CompanyLogos::new(db.pool().clone())
+        .for_order(order_id)
+        .await
+        .unwrap_or_else(|e| {
+            warn!("Failed to load the buyer logo of order {}: {}", order_id, e);
+            None
+        })
+}
+
 /// Attach the order's PDF (invoice, or order summary when the store issues
-/// legal invoices) in `locale`; the e-mail still goes out when the PDF fails
-pub fn attach_order_pdf(
+/// legal invoices) in `locale`, with the buyer's company logo; the e-mail
+/// still goes out when the PDF fails
+pub async fn attach_order_pdf(
     notification: &mut rcommerce_core::notification::Notification,
     order: Option<&(
         rcommerce_core::models::Order,
@@ -88,12 +104,14 @@ pub fn attach_order_pdf(
     branding: &rcommerce_core::BrandingConfig,
     locale: &str,
     order_id: Uuid,
+    db: &rcommerce_core::Database,
 ) {
     let Some((order, items)) = order else {
         warn!("Failed to load order {} for its PDF attachment", order_id);
         return;
     };
-    let data = super::invoice::invoice_data_from_order(order, items, branding, locale);
+    let mut data = super::invoice::invoice_data_from_order(order, items, branding, locale);
+    data.buyer_logo = buyer_logo(db, order_id).await;
     match rcommerce_core::invoice::generate_invoice_pdf(&data) {
         Ok(pdf) => notification
             .attachments
@@ -232,12 +250,13 @@ pub async fn send_admin_order_email(state: &AppState, order_id: Uuid) {
     // Attach the invoice PDF, same as the customer confirmation email
     match super::payment::fetch_invoice_order(&state.db, order_id).await {
         Ok((order, items)) => {
-            let invoice_data = super::invoice::invoice_data_from_order(
+            let mut invoice_data = super::invoice::invoice_data_from_order(
                 &order,
                 &items,
                 &state.branding,
                 &state.email_locale,
             );
+            invoice_data.buyer_logo = buyer_logo(&state.db, order_id).await;
             match rcommerce_core::invoice::generate_invoice_pdf(&invoice_data) {
                 Ok(pdf) => {
                     notification

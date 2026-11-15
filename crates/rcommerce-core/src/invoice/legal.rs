@@ -24,6 +24,8 @@ const BOTTOM: f32 = 90.0;
 const BUYER_X: f32 = 330.0;
 /// Box the logo is fitted in, in points
 const LOGO_BOX: (f32, f32) = (180.0, 64.0);
+/// Box the buyer's company logo is fitted in, above the buyer's block
+const BUYER_LOGO_BOX: (f32, f32) = (150.0, 44.0);
 
 /// Width of `text` in points, from the font's glyph advances
 fn measure(font: &ParsedFont, size: f32, text: &str) -> f32 {
@@ -191,10 +193,21 @@ fn references(canvas: &mut Canvas, invoice: &Invoice) {
     }
 }
 
-/// Top of the first page: logo (already drawn, `logo_height` tall) and title,
-/// the seller on the left and the buyer on the right at the same height, then
-/// the references
-fn header(canvas: &mut Canvas, invoice: &Invoice, logo_height: f32) {
+/// Where the buyer's block starts: below the store's logo (`logo_height`
+/// tall, 0 without one), never above the title
+fn buyer_top(top: f32, logo_height: f32) -> f32 {
+    let blocks = if logo_height > 0.0 {
+        top - logo_height - 24.0
+    } else {
+        top - 12.0
+    };
+    blocks.min(top - 50.0)
+}
+
+/// Top of the first page: logos (already drawn: the store's `logo_height`
+/// tall, the buyer's `buyer_logo_height`) and title, the seller on the left
+/// and the buyer on the right at the same height, then the references
+fn header(canvas: &mut Canvas, invoice: &Invoice, logo_height: f32, buyer_logo_height: f32) {
     let locale = invoice.locale.as_str();
     let t = |key: &str| i18n::text(locale, "invoice_document", key);
     let top = canvas.y;
@@ -212,7 +225,10 @@ fn header(canvas: &mut Canvas, invoice: &Invoice, logo_height: f32) {
     };
     canvas.y = blocks;
     let seller_end = party_block(canvas, MARGIN, None, &invoice.seller, locale);
-    canvas.y = blocks.min(top - 50.0);
+    canvas.y = buyer_top(top, logo_height);
+    if buyer_logo_height > 0.0 {
+        canvas.y -= buyer_logo_height + 12.0;
+    }
     let buyer_end = party_block(canvas, BUYER_X, Some(&t("buyer")), &invoice.buyer, locale);
     canvas.y = seller_end.min(buyer_end) - 30.0;
     references(canvas, invoice);
@@ -345,8 +361,12 @@ fn payment(canvas: &mut Canvas, invoice: &Invoice) {
 }
 
 /// The invoice's PDF (A4, as many pages as its lines need), with the store's
-/// logo when it has one
-pub fn invoice_pdf(invoice: &Invoice, logo: Option<&PdfLogo>) -> Result<Vec<u8>> {
+/// logo when it has one, and the buyer's company logo above their block
+pub fn invoice_pdf(
+    invoice: &Invoice,
+    logo: Option<&PdfLogo>,
+    buyer_logo: Option<&PdfLogo>,
+) -> Result<Vec<u8>> {
     let mut warnings = Vec::new();
     let regular = ParsedFont::from_bytes(HELVETICA_REGULAR, 0, &mut warnings)
         .ok_or_else(|| Error::internal("Failed to parse embedded regular font"))?;
@@ -364,7 +384,11 @@ pub fn invoice_pdf(invoice: &Invoice, logo: Option<&PdfLogo>) -> Result<Vec<u8>>
     let logo_height = logo.map_or(0.0, |logo| {
         logo.draw(&mut doc, &mut canvas.ops, (MARGIN, canvas.y), LOGO_BOX)
     });
-    header(&mut canvas, invoice, logo_height);
+    let buyer_logo_height = buyer_logo.map_or(0.0, |buyer| {
+        let at = (BUYER_X, buyer_top(canvas.y, logo_height));
+        buyer.draw(&mut doc, &mut canvas.ops, at, BUYER_LOGO_BOX)
+    });
+    header(&mut canvas, invoice, logo_height, buyer_logo_height);
     lines_table(&mut canvas, invoice);
     totals(&mut canvas, invoice);
     payment(&mut canvas, invoice);
@@ -388,11 +412,11 @@ mod tests {
     #[test]
     fn an_invoice_renders_as_a_pdf_of_one_or_more_pages() {
         let mut invoice = crate::peppol::ubl::tests::sample();
-        let pdf = invoice_pdf(&invoice, None).unwrap();
+        let pdf = invoice_pdf(&invoice, None, None).unwrap();
         assert!(pdf.starts_with(b"%PDF"));
         let line = invoice.lines.0[0].clone();
         invoice.lines.0 = vec![line; 60];
-        let long = invoice_pdf(&invoice, None).unwrap();
+        let long = invoice_pdf(&invoice, None, None).unwrap();
         assert!(long.len() > pdf.len());
     }
 
@@ -404,7 +428,7 @@ mod tests {
         note.credited_number = Some("F2026-00001".into());
         note.credited_issue_date = note.issue_date.pred_opt();
         note.paid_amount = note.total;
-        let pdf = invoice_pdf(&note, None).unwrap();
+        let pdf = invoice_pdf(&note, None, None).unwrap();
         assert!(pdf.starts_with(b"%PDF"));
     }
 
@@ -412,9 +436,11 @@ mod tests {
     fn a_store_logo_is_embedded() {
         let invoice = crate::peppol::ubl::tests::sample();
         let logo = PdfLogo::from_png(super::super::LOGO_PNG).unwrap();
-        let plain = invoice_pdf(&invoice, None).unwrap();
-        let with_logo = invoice_pdf(&invoice, Some(&logo)).unwrap();
+        let plain = invoice_pdf(&invoice, None, None).unwrap();
+        let with_logo = invoice_pdf(&invoice, Some(&logo), None).unwrap();
         assert!(with_logo.len() > plain.len() + 1000);
+        let both = invoice_pdf(&invoice, Some(&logo), Some(&logo)).unwrap();
+        assert!(both.len() > with_logo.len() + 1000, "the buyer's logo too");
     }
 
     #[test]

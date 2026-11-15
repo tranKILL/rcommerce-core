@@ -14,6 +14,9 @@ All routes need the customer's bearer token.
 | `GET /companies/me` | The caller's company, their `role` (`owner` or `buyer`) and, for the owner, its `members`. 404 outside a company. |
 | `POST /companies/me/members` `{email}` | The owner adds an existing customer as a buyer. |
 | `DELETE /companies/me/members/:customer_id` | The owner removes a buyer. |
+| `GET /companies/me/logo` | The company's logo (a member), as a picture; 404 without one. |
+| `PUT /companies/me/logo` | The owner uploads the logo as the request body (see below). |
+| `DELETE /companies/me/logo` | The owner removes the logo. |
 
 **VAT check.** The number may be typed with spaces, dots or dashes
 (`be 0123.456.749`); old 9-digit Belgian numbers get their leading zero.
@@ -42,8 +45,28 @@ Guarded as customer data (`customers:read`, `customers:write`).
 | `GET /admin/companies?q=&status=&page=&per_page=` | Newest first; `q` matches the name or VAT number |
 | `GET /admin/companies/:id` | The company with its members |
 | `PUT /admin/companies/:id` `{name?, status?, customer_group_id?}` | `status` is `active` or `suspended` |
+| `GET`, `PUT`, `DELETE /admin/companies/:id/logo` | The company's logo, as for the owner |
 | `GET /admin/customer-groups` | Every group (`trade` exists from the start) |
 | `POST /admin/customer-groups` `{code, name, prices_exclude_tax}` | `prices_exclude_tax`: members see prices excluding VAT first |
+
+## Company logos
+
+A company's logo is printed beside its name on the documents addressed to it:
+the order summary (or order invoice) e-mailed with the order, its legal
+invoices and credit notes.
+
+- **Upload:** the picture's bytes as the body of the `PUT` (PNG, JPEG or WebP;
+  at most 5 MB and 8000 pixels a side). Anything else: 400; larger: 413.
+- **Kept small:** empty margins (transparent, or white around a picture
+  without transparency) are trimmed. The logo is shrunk to fit 600 × 240
+  pixels, the buyer box at about 300 dpi. It is stored as PNG at best
+  compression, or as JPEG (quality 85) when a photo-like logo would weigh more
+  than 120 KB as PNG.
+- **The answer:** `{"logo": {"id", "content_type", "width", "height", "size"}}`.
+  The company's `logo_id` names the current one.
+- **Documents do not change:** an invoice or credit note prints the logo it
+  was issued with, even after the company replaces or removes it. Stored
+  logos that no company and no document use any more are deleted.
 
 ## Price lists (staff)
 

@@ -50,6 +50,8 @@ pub struct InvoiceData {
     pub brand_email: String,
     /// Store logo (top left); None prints the built-in one
     pub logo: Option<PdfLogo>,
+    /// The buyer's company logo, above their address
+    pub buyer_logo: Option<PdfLogo>,
     /// Store address under its name (top right); empty prints the built-in one
     pub company_lines: Vec<String>,
 }
@@ -306,30 +308,6 @@ impl PartialEq for PdfLogo {
 
 impl Eq for PdfLogo {}
 
-/// 8-bit pixels of a decoded PNG as RGBA, whatever its colour type
-fn rgba_pixels(buf: Vec<u8>, color: png::ColorType) -> Result<Vec<u8>> {
-    let pixel = |px: &[u8]| -> [u8; 4] {
-        match px.len() {
-            1 => [px[0], px[0], px[0], 255],
-            2 => [px[0], px[0], px[0], px[1]],
-            3 => [px[0], px[1], px[2], 255],
-            _ => [px[0], px[1], px[2], px[3]],
-        }
-    };
-    let size = match color {
-        png::ColorType::Grayscale => 1,
-        png::ColorType::GrayscaleAlpha => 2,
-        png::ColorType::Rgb => 3,
-        png::ColorType::Rgba => return Ok(buf),
-        other => {
-            return Err(Error::internal(format!(
-                "Unsupported logo color type: {other:?}"
-            )))
-        }
-    };
-    Ok(buf.chunks_exact(size).flat_map(pixel).collect())
-}
-
 /// Largest logo kept, in pixels: the logo box (180 x 64 pt) at about 300 dpi.
 /// Bigger pictures are shrunk so every PDF stays small.
 const MAX_LOGO_PIXELS: (usize, usize) = (750, 270);
@@ -369,25 +347,23 @@ impl PdfLogo {
     /// Decode a PNG (any colour type and bit depth; palettes are expanded),
     /// shrunk to at most 750 x 270 pixels
     pub fn from_png(bytes: &[u8]) -> Result<Self> {
-        let mut decoder = png::Decoder::new(bytes);
-        decoder.set_transformations(png::Transformations::normalize_to_color8());
-        let mut reader = decoder
-            .read_info()
-            .map_err(|e| Error::internal(format!("Failed to read logo PNG: {e}")))?;
-        let mut buf = vec![0u8; reader.output_buffer_size()];
-        let info = reader
-            .next_frame(&mut buf)
-            .map_err(|e| Error::internal(format!("Failed to decode logo PNG: {e}")))?;
-        buf.truncate(info.buffer_size());
-        let size = (info.width as usize, info.height as usize);
-        let (pixels, width, height) =
-            shrink(rgba_pixels(buf, info.color_type)?, size, MAX_LOGO_PIXELS);
+        Self::from_bytes(bytes, b"store-logo")
+    }
+
+    /// Decode a PNG or JPEG picture, shrunk to at most 750 x 270 pixels;
+    /// `tag` names it inside the PDF
+    pub fn from_bytes(bytes: &[u8], tag: &[u8]) -> Result<Self> {
+        let decoded = image::load_from_memory(bytes)
+            .map_err(|e| Error::internal(format!("Failed to decode logo: {e}")))?
+            .to_rgba8();
+        let size = (decoded.width() as usize, decoded.height() as usize);
+        let (pixels, width, height) = shrink(decoded.into_raw(), size, MAX_LOGO_PIXELS);
         Ok(Self(Arc::new(RawImage {
             pixels: RawImageData::U8(pixels),
             width,
             height,
             data_format: RawImageFormat::RGBA8,
-            tag: b"store-logo".to_vec(),
+            tag: tag.to_vec(),
         })))
     }
 
@@ -503,8 +479,17 @@ pub fn generate_invoice_pdf(data: &InvoiceData) -> Result<Vec<u8>> {
     write_text(&mut ops, bold.clone(), 21.0, MARGIN, invoice_y, &title);
 
     // Row 3: single shipping address directly under INVOICE (plain lines, no
-    // label); the meta block sits to the right at the same vertical level.
-    let address_top = invoice_y - 40.0;
+    // label), below the buyer's company logo when they have one; the meta
+    // block sits to the right at the same vertical level.
+    let buyer_logo_height = data.buyer_logo.as_ref().map_or(0.0, |buyer| {
+        buyer.draw(
+            &mut doc,
+            &mut ops,
+            (MARGIN, invoice_y - 18.0),
+            (150.0, 44.0),
+        ) + 14.0
+    });
+    let address_top = invoice_y - 40.0 - buyer_logo_height;
     let address_lines = data
         .shipping
         .clone()
@@ -894,6 +879,7 @@ mod tests {
             brand_name: String::new(),
             brand_email: String::new(),
             logo: None,
+            buyer_logo: None,
             company_lines: Vec::new(),
             locale: "en".to_string(),
             summary_only: false,
@@ -945,6 +931,15 @@ mod tests {
         // Variant item rendered without disturbing the rows around it; the
         // text is font-encoded, so we assert structural success only here.
         assert!(pdf.len() > 2000);
+    }
+
+    #[test]
+    fn a_buyer_logo_is_printed_on_the_order_document() {
+        let plain = generate_invoice_pdf(&sample_invoice()).unwrap();
+        let mut data = sample_invoice();
+        data.buyer_logo = Some(PdfLogo::built_in().unwrap());
+        let with_logo = generate_invoice_pdf(&data).unwrap();
+        assert!(with_logo.len() > plain.len() + 1000);
     }
 
     #[test]

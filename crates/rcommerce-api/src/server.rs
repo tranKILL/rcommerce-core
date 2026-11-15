@@ -1371,9 +1371,7 @@ fn spawn_peppol_loop(config: &Config, app_state: &AppState) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(minutes * 60)).await;
-            let run = peppol.run_once(&invoices, |invoice| {
-                rcommerce_core::invoice::legal::invoice_pdf(invoice, logo.as_ref()).ok()
-            });
+            let run = peppol.run_once(&invoices, logo.as_ref());
             if let Err(e) = run_exclusive(db.pool(), job_names::PEPPOL_DELIVERY, run).await {
                 warn!("Peppol delivery round failed: {}", e);
             }

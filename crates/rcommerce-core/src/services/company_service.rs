@@ -49,6 +49,9 @@ pub struct Company {
     pub vat_checked_at: Option<DateTime<Utc>>,
     /// Peppol participant id, when the company receives e-invoices
     pub peppol_id: Option<String>,
+    /// Its current logo, printed on the documents addressed to it
+    #[sqlx(default)]
+    pub logo_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

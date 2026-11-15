@@ -347,17 +347,16 @@ impl PeppolService {
         Ok(status.as_str().to_string())
     }
 
-    /// One round of the background job: send what waits, then follow what
-    /// is on its way. `pdf` renders an invoice's PDF to embed.
-    pub async fn run_once<F>(&self, invoices: &InvoiceService, pdf: F) -> Result<()>
-    where
-        F: Fn(&Invoice) -> Option<Vec<u8>>,
-    {
+    /// One round of the background job: send what waits (its PDF embedded,
+    /// with `store_logo`), then follow what is on its way
+    pub async fn run_once(
+        &self,
+        invoices: &InvoiceService,
+        store_logo: Option<&crate::invoice::PdfLogo>,
+    ) -> Result<()> {
         for invoice in invoices.awaiting_peppol(&["pending"], 50).await? {
-            if let Err(e) = self
-                .deliver(invoices, &invoice, pdf(&invoice).as_deref())
-                .await
-            {
+            let pdf = invoices.pdf(&invoice, store_logo).await.ok();
+            if let Err(e) = self.deliver(invoices, &invoice, pdf.as_deref()).await {
                 warn!(
                     "Peppol: sending invoice {} failed, retried later: {}",
                     invoice.number, e

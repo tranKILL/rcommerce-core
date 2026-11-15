@@ -1,9 +1,12 @@
 //! Company accounts: a customer opens one with a VAT number and adds buyers;
 //! staff list companies, suspend them, or move them to another customer group.
+//! The owner (or staff) sets the company's logo, printed on its documents.
 
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
+    body::Bytes,
+    extract::{DefaultBodyLimit, Path, Query, State},
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Extension, Json, Router,
 };
@@ -12,6 +15,7 @@ use uuid::Uuid;
 
 use crate::middleware::JwtAuth;
 use crate::state::AppState;
+use rcommerce_core::services::company_logo::{CompanyLogos, MAX_UPLOAD_BYTES};
 use rcommerce_core::services::company_service::{Company, CompanyQuery, CompanyUpdate};
 use rcommerce_core::Error;
 
@@ -174,11 +178,134 @@ pub async fn create_group(
     ))
 }
 
+/// The caller's company; with `owner`, refused unless they own it
+async fn caller_company(state: &AppState, auth: &JwtAuth, owner: bool) -> Result<Company, Error> {
+    let (company, role) = state
+        .companies
+        .company_of(auth.customer_id)
+        .await?
+        .ok_or_else(|| Error::not_found("You do not belong to a company account"))?;
+    if owner && role != "owner" {
+        return Err(Error::forbidden("Only the company's owner sets its logo"));
+    }
+    Ok(company)
+}
+
+/// A company's logo as a picture
+async fn logo_response(state: &AppState, company: Uuid) -> Result<Response, Error> {
+    let logo = CompanyLogos::new(state.db.pool().clone())
+        .image(company)
+        .await?
+        .ok_or_else(|| Error::not_found("This company has no logo"))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, logo.content_type),
+            (header::CACHE_CONTROL, "private, max-age=300".to_string()),
+            (header::ETAG, format!("\"{}\"", logo.id)),
+        ],
+        logo.image,
+    )
+        .into_response())
+}
+
+/// Store an uploaded logo (PNG, JPEG or WebP, shrunk and compressed)
+async fn store_logo(
+    state: &AppState,
+    company: Uuid,
+    by: Uuid,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, Error> {
+    if body.is_empty() {
+        return Err(Error::validation("Send the picture as the request body"));
+    }
+    let logo = CompanyLogos::new(state.db.pool().clone())
+        .set(company, body.to_vec(), Some(by))
+        .await?;
+    Ok(Json(serde_json::json!({ "logo": logo })))
+}
+
+/// GET /companies/me/logo
+pub async fn my_logo(
+    State(state): State<AppState>,
+    Extension(auth): Extension<JwtAuth>,
+) -> Result<Response, Error> {
+    let company = caller_company(&state, &auth, false).await?;
+    logo_response(&state, company.id).await
+}
+
+/// PUT /companies/me/logo: the owner uploads the picture as the body
+pub async fn set_my_logo(
+    State(state): State<AppState>,
+    Extension(auth): Extension<JwtAuth>,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, Error> {
+    let company = caller_company(&state, &auth, true).await?;
+    store_logo(&state, company.id, auth.customer_id, body).await
+}
+
+/// DELETE /companies/me/logo
+pub async fn remove_my_logo(
+    State(state): State<AppState>,
+    Extension(auth): Extension<JwtAuth>,
+) -> Result<StatusCode, Error> {
+    let company = caller_company(&state, &auth, true).await?;
+    CompanyLogos::new(state.db.pool().clone())
+        .remove(company.id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /admin/companies/:id/logo
+pub async fn company_logo(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Response, Error> {
+    logo_response(&state, id).await
+}
+
+/// PUT /admin/companies/:id/logo
+pub async fn set_company_logo(
+    State(state): State<AppState>,
+    Extension(auth): Extension<JwtAuth>,
+    Path(id): Path<Uuid>,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, Error> {
+    store_logo(&state, id, auth.customer_id, body).await
+}
+
+/// DELETE /admin/companies/:id/logo
+pub async fn remove_company_logo(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, Error> {
+    state
+        .companies
+        .get(id)
+        .await?
+        .ok_or_else(|| Error::not_found("Company not found"))?;
+    CompanyLogos::new(state.db.pool().clone())
+        .remove(id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Uploads up to the logo limit (and a little room for the request)
+fn logo_body_limit() -> DefaultBodyLimit {
+    DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 64 * 1024)
+}
+
 /// Customer routes (JWT required)
 pub fn protected_router() -> Router<AppState> {
     Router::new()
         .route("/companies", post(sign_up))
         .route("/companies/me", get(my_company))
+        .route(
+            "/companies/me/logo",
+            get(my_logo)
+                .put(set_my_logo)
+                .delete(remove_my_logo)
+                .layer(logo_body_limit()),
+        )
         .route("/companies/me/members", post(add_member))
         .route("/companies/me/members/:customer_id", delete(remove_member))
 }
@@ -188,6 +315,13 @@ pub fn admin_router() -> Router<AppState> {
     Router::new()
         .route("/admin/companies", get(list_companies))
         .route("/admin/companies/:id", get(get_company).put(update_company))
+        .route(
+            "/admin/companies/:id/logo",
+            get(company_logo)
+                .put(set_company_logo)
+                .delete(remove_company_logo)
+                .layer(logo_body_limit()),
+        )
         .route(
             "/admin/customer-groups",
             get(list_groups).post(create_group),

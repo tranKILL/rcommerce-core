@@ -57,7 +57,7 @@ pub fn send_issued(state: &AppState, invoice: Invoice) {
         let invoices = state.invoices.clone();
         let logo = state.branding.pdf_logo.clone();
         tokio::spawn(async move {
-            let pdf = rcommerce_core::invoice::legal::invoice_pdf(&invoice, logo.as_ref()).ok();
+            let pdf = invoices.pdf(&invoice, logo.as_ref()).await.ok();
             if let Err(e) = peppol.deliver(&invoices, &invoice, pdf.as_deref()).await {
                 warn!("Peppol: {} queued for retry: {}", invoice.number, e);
             }
@@ -157,16 +157,23 @@ fn send_invoice_email(state: &AppState, invoice: &Invoice) {
     if state.notification_service.is_none() || invoice.buyer.email.is_none() {
         return;
     }
-    match rcommerce_core::invoice::legal::invoice_pdf(invoice, state.branding.pdf_logo.as_ref()) {
-        Ok(pdf) => {
-            let notification = invoice_notification(invoice, &state.branding, pdf);
-            super::email_helpers::spawn_send(state, notification, "invoice email");
+    let (state, invoice) = (state.clone(), invoice.clone());
+    tokio::spawn(async move {
+        match state
+            .invoices
+            .pdf(&invoice, state.branding.pdf_logo.as_ref())
+            .await
+        {
+            Ok(pdf) => {
+                let notification = invoice_notification(&invoice, &state.branding, pdf);
+                super::email_helpers::spawn_send(&state, notification, "invoice email");
+            }
+            Err(e) => warn!(
+                "Failed to render the PDF of invoice {}: {}",
+                invoice.number, e
+            ),
         }
-        Err(e) => warn!(
-            "Failed to render the PDF of invoice {}: {}",
-            invoice.number, e
-        ),
-    }
+    });
 }
 
 /// `?order_id=`: the invoice of one order
@@ -225,8 +232,10 @@ pub async fn invoice_pdf(
     Path(id): Path<Uuid>,
 ) -> Result<Response, Error> {
     let invoice = readable(&state, &auth, id).await?;
-    let pdf =
-        rcommerce_core::invoice::legal::invoice_pdf(&invoice, state.branding.pdf_logo.as_ref())?;
+    let pdf = state
+        .invoices
+        .pdf(&invoice, state.branding.pdf_logo.as_ref())
+        .await?;
     let disposition = format!("inline; filename=\"{}.pdf\"", invoice.number);
     Ok((
         [
@@ -325,9 +334,11 @@ pub async fn send_peppol(
             "Only invoices to companies go through Peppol",
         ));
     }
-    let pdf =
-        rcommerce_core::invoice::legal::invoice_pdf(&invoice, state.branding.pdf_logo.as_ref())
-            .ok();
+    let pdf = state
+        .invoices
+        .pdf(&invoice, state.branding.pdf_logo.as_ref())
+        .await
+        .ok();
     peppol
         .deliver(&state.invoices, &invoice, pdf.as_deref())
         .await?;

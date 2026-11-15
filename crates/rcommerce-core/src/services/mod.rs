@@ -7,6 +7,7 @@ pub(crate) mod cart_mutation;
 pub mod cart_service;
 pub mod checkout_pickup;
 pub mod checkout_service;
+pub mod company_logo;
 pub mod company_service;
 pub mod content_service;
 pub mod coupon_service;

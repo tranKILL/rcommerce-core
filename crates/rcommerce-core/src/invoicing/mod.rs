@@ -131,6 +131,9 @@ pub struct Invoice {
     /// A credit note: the return it comes from
     #[sqlx(default)]
     pub return_id: Option<Uuid>,
+    /// The buyer's company logo when the document was issued
+    #[sqlx(default)]
+    pub buyer_logo_id: Option<Uuid>,
 }
 
 impl Invoice {

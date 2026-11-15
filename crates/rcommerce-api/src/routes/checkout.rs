@@ -1092,7 +1092,9 @@ pub(crate) async fn send_order_confirmation_email(
         branding,
         &locale,
         order_id,
-    );
+        db,
+    )
+    .await;
     notification_service.send(&notification).await?;
     Ok(())
 }

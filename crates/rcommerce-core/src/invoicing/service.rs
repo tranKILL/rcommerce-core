@@ -10,8 +10,10 @@ use super::{
     invoice_number, rate_of, structured_reference, vat_breakdown, Invoice, InvoiceLine, Party,
 };
 use crate::config::InvoicingConfig;
+use crate::invoice::PdfLogo;
 use crate::list_sort::{order_by, SortColumns};
 use crate::notification::i18n;
+use crate::services::company_logo::CompanyLogos;
 use crate::{Error, Result};
 
 /// The order facts an invoice is made from
@@ -186,6 +188,8 @@ pub struct InvoiceService {
     default_locale: String,
     /// Whether invoices to companies wait for Peppol
     peppol_enabled: bool,
+    /// Buyers' company logos, for PDFs
+    logos: CompanyLogos,
 }
 
 impl InvoiceService {
@@ -196,6 +200,7 @@ impl InvoiceService {
         peppol_enabled: bool,
     ) -> Self {
         Self {
+            logos: CompanyLogos::new(pool.clone()),
             pool,
             config,
             default_locale,
@@ -440,8 +445,9 @@ impl InvoiceService {
         Ok(sqlx::query_as::<_, Invoice>(
             "INSERT INTO invoices (number, kind, order_id, order_number, customer_id, company_id, issue_date, \
              due_date, currency, seller, buyer, lines, vat, subtotal, tax_total, total, paid_amount, \
-             payment_reference, locale, peppol_status) \
-             VALUES ($1, 'invoice', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
+             payment_reference, locale, peppol_status, buyer_logo_id) \
+             VALUES ($1, 'invoice', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, \
+             (SELECT logo_id FROM companies WHERE id = $5)) \
              RETURNING *",
         )
         .bind(invoice_number(&self.config.number_prefix, issue_date.year(), sequence))
@@ -492,9 +498,9 @@ impl InvoiceService {
             "INSERT INTO invoices (number, kind, order_id, order_number, customer_id, company_id, issue_date, \
              due_date, currency, seller, buyer, lines, vat, subtotal, tax_total, total, paid_amount, \
              payment_reference, locale, peppol_status, credited_invoice_id, credited_number, \
-             credited_issue_date, return_id) \
+             credited_issue_date, return_id, buyer_logo_id) \
              VALUES ($1, 'credit_note', $2, $3, $4, $5, $6, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, '', \
-             $16, $17, $18, $19, $20, $21) RETURNING *",
+             $16, $17, $18, $19, $20, $21, $22) RETURNING *",
         )
         .bind(invoice_number(prefix, issue_date.year(), sequence))
         .bind(invoice.order_id)
@@ -517,8 +523,19 @@ impl InvoiceService {
         .bind(&invoice.number)
         .bind(invoice.issue_date)
         .bind(draft.return_id)
+        .bind(invoice.buyer_logo_id)
         .fetch_one(conn)
         .await?)
+    }
+
+    /// The document's PDF: the store's logo, and the buyer's company logo it
+    /// was issued with
+    pub async fn pdf(&self, invoice: &Invoice, store_logo: Option<&PdfLogo>) -> Result<Vec<u8>> {
+        let buyer_logo = match invoice.buyer_logo_id {
+            Some(id) => self.logos.pdf_logo(id).await?,
+            None => None,
+        };
+        crate::invoice::legal::invoice_pdf(invoice, store_logo, buyer_logo.as_ref())
     }
 
     /// The invoice of an order, if issued

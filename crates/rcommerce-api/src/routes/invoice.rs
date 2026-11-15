@@ -177,6 +177,7 @@ pub fn invoice_data_from_order(
 
     InvoiceData {
         logo: branding.pdf_logo.clone(),
+        buyer_logo: None,
         company_lines: branding.address_lines.clone(),
         order_number: order.order_number.clone(),
         order_date: i18n::date(locale, order.created_at.date_naive()),

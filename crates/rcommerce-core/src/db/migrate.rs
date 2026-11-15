@@ -319,6 +319,11 @@ impl Migrator {
                 "returns_credit_notes",
                 include_str!("../../migrations/044_returns_credit_notes.sql"),
             ),
+            (
+                45,
+                "company_logos",
+                include_str!("../../migrations/045_company_logos.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

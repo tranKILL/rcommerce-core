@@ -398,6 +398,7 @@ pub(crate) mod tests {
             credited_number: None,
             credited_issue_date: None,
             return_id: None,
+            buyer_logo_id: None,
         }
     }
 
