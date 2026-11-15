@@ -48,7 +48,7 @@ names (USB scanners type the code and Enter):
 |---|---|
 | `customer` | 13 digits starting with `29` with a valid EAN-13 check digit: a loyalty card; the holder and their company |
 | `product` | a variant's or product's GTIN (8, 12, 13 or 14 digits, compared in their 13-digit form) or SKU (case ignored); `available` is the free stock at the session's branch |
-| `order` | an order number |
+| `order` | an order number, with `pickup_location_id` and `pickup_location_name` for a pickup order and `amount_due` (its total until it is paid) |
 | `not_found` | nothing |
 
 ## Card terminal
@@ -117,6 +117,32 @@ of `basket_id`:
   "change"}, "invoice_number"}`.
 
 Finance and marketing reports count these orders under the `pos` channel.
+
+## Pickup orders
+
+`POST /admin/pos/pickups` hands over a pickup order collected at the
+session's branch, in one step: the counter's "ready" then "collected".
+
+```json
+{ "session_id": "…", "order_id": "…", "collected_by": "J. Mason",
+  "cash_given": 50, "card_payments": ["<approved terminal transaction>"] }
+```
+
+- **Paid online:** nothing to pay; `cash_given` and `card_payments` must be
+  left out (400 otherwise).
+- **Not paid yet** (status `pending`: payment at pickup, a phone order): paid
+  there like a sale. Card payments first, cash for the rest, change given back;
+  400 when short. The money is recorded as `sale` movements of the session,
+  with payment rows by method (`cash`, `debit_card`); the order becomes paid.
+- **Refused (400):** an order collected at another branch, not a pickup order,
+  or already collected, cancelled or refunded.
+- **Recorded:** a `collected` event (with `at_till`, the collector and any
+  money), the order completed and its stock out of the branch. Loyalty points
+  and the invoice follow as at the counter.
+- **Collector:** `collected_by` defaults to the name on the order.
+
+The answer is `{"order", "settlement": {"card", "cash", "cash_given",
+"change"}, "invoice_number"}`.
 
 ## Returns
 

@@ -131,5 +131,6 @@ pub fn router() -> Router<AppState> {
         .merge(super::pos::admin_router())
         .merge(super::pos_sale::admin_router())
         .merge(super::pos_return::admin_router())
+        .merge(super::pos_pickup::admin_router())
         .merge(staff::router())
 }

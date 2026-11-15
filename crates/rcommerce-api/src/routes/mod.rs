@@ -27,6 +27,7 @@ pub mod order_list;
 pub mod order_pickup;
 pub mod payment;
 pub mod pos;
+pub mod pos_pickup;
 pub mod pos_return;
 pub mod pos_sale;
 pub mod price_history;

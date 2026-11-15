@@ -57,6 +57,11 @@ pub struct OrderHit {
     pub payment_status: String,
     pub total: Decimal,
     pub customer_email: String,
+    /// A pickup order: the branch it is collected at
+    pub pickup_location_id: Option<Uuid>,
+    pub pickup_location_name: Option<String>,
+    /// What is left to pay (the total until the order is paid)
+    pub amount_due: Decimal,
 }
 
 /// Whether `code` is one of our loyalty cards: 13 digits, `29` first, a valid
@@ -151,7 +156,10 @@ async fn product(pool: &PgPool, code: &str, location: Uuid) -> Result<Option<Pro
 async fn order(pool: &PgPool, code: &str) -> Result<Option<OrderHit>> {
     let hit = sqlx::query_as(
         "SELECT id AS order_id, order_number, status::text AS status, \
-         payment_status::text AS payment_status, total, customer_email \
+         payment_status::text AS payment_status, total, customer_email, \
+         (metadata->'pickup'->>'location_id')::uuid AS pickup_location_id, \
+         metadata->'pickup'->>'location_name' AS pickup_location_name, \
+         CASE WHEN payment_status = 'paid' THEN 0 ELSE total END AS amount_due \
          FROM orders WHERE upper(order_number) = upper($1) LIMIT 1",
     )
     .bind(code)

@@ -7081,3 +7081,137 @@ async fn test_company_logo_on_documents() {
     assert_eq!(gone.status(), 404);
     app.cleanup().await.ok();
 }
+
+/// Pickup orders at the till: scanned, an order paid online is handed over in
+/// one step (ready and collected); one not paid yet is paid there by card and
+/// cash with the change given back, as a sale of the session. An order of
+/// another branch is refused, and an order cannot be handed over twice.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_pickup_handed_over_at_the_till() {
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    let elsewhere = create_pickup_location(&app, &admin).await;
+    let product = app
+        .create_test_product("Pickup sand", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    for branch in [location, elsewhere] {
+        app.app_state
+            .inventory_service
+            .receive_stock(product, branch, 20, None)
+            .await
+            .unwrap();
+    }
+    let (buyer, password) = app.create_test_customer().await.unwrap();
+    let buyer_token = app.login(&buyer.email, &password).await.unwrap();
+    let (cashier, password) = app.create_test_customer().await.unwrap();
+    let role = serde_json::json!({"permissions": ["pos:write", "orders:write", "customers:read",
+        "products:read", "inventory:read"]});
+    role_for(&app, &admin, cashier.id, role).await;
+    let token = app.login(&cashier.email, &password).await.unwrap();
+    let open = serde_json::json!({"location_id": location, "opening_float": 50});
+    let (_, session) = till_call(&app, &token, Method::POST, "/admin/pos/sessions", open).await;
+    let session = session["id"].as_str().unwrap().to_string();
+
+    // paid online: handed over in one step
+    let paid = customer_pickup_order(&app, &buyer_token, &buyer.email, location, product).await;
+    let (_, number) = call_json(&app, &buyer_token, &format!("/orders/{paid}"), None).await;
+    let number = number["order_number"].as_str().unwrap().to_string();
+    let path = format!("/admin/pos/lookup?session_id={session}&code={number}");
+    let (_, found) = admin_api_call(&app, &token, Method::GET, &path, None).await;
+    assert_eq!(found["kind"], "order", "{found}");
+    assert_eq!(found["pickup_location_id"], location.to_string());
+    assert_eq!(amount(&found["amount_due"]), 0.0, "{found}");
+    let give = serde_json::json!({"session_id": session, "order_id": paid});
+    let (status, done) = till_call(
+        &app,
+        &token,
+        Method::POST,
+        "/admin/pos/pickups",
+        give.clone(),
+    )
+    .await;
+    assert_eq!(status, 200, "{done}");
+    assert_eq!(done["order"]["status"], "completed", "{done}");
+    assert_eq!(amount(&done["settlement"]["cash"]), 0.0);
+    let (status, _) = till_call(&app, &token, Method::POST, "/admin/pos/pickups", give).await;
+    assert_eq!(status, 400, "not twice");
+    let pool = app.app_state.db.pool();
+    let (kind, at_till): (String, Option<bool>) = sqlx::query_as(
+        "SELECT kind, (detail->>'at_till')::boolean FROM order_events WHERE order_id = $1::uuid \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&paid)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((kind.as_str(), at_till), ("collected", Some(true)));
+
+    // not paid yet: paid at the till, part by card, the rest in cash
+    let unpaid = customer_pickup_order(&app, &buyer_token, &buyer.email, location, product).await;
+    sqlx::query(
+        "UPDATE orders SET status = 'pending', payment_status = 'pending' WHERE id = $1::uuid",
+    )
+    .bind(&unpaid)
+    .execute(pool)
+    .await
+    .unwrap();
+    let total: Decimal = sqlx::query_scalar("SELECT total FROM orders WHERE id = $1::uuid")
+        .bind(&unpaid)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let short = serde_json::json!({"session_id": session, "order_id": unpaid, "cash_given": 1});
+    let (status, _) = till_call(&app, &token, Method::POST, "/admin/pos/pickups", short).await;
+    assert_eq!(status, 400, "not enough cash");
+    let pay = serde_json::json!({"session_id": session, "amount": "5.00"});
+    let (_, card) = till_call(&app, &token, Method::POST, "/admin/pos/terminal", pay).await;
+    let cash_given = (total - Decimal::new(500, 2)).round_dp(0) + Decimal::from(10);
+    let give = serde_json::json!({"session_id": session, "order_id": unpaid,
+        "cash_given": cash_given.to_string(), "card_payments": [card["id"]], "collected_by": "J. Mason"});
+    let (status, done) = till_call(&app, &token, Method::POST, "/admin/pos/pickups", give).await;
+    assert_eq!(status, 200, "{done}");
+    let change = cash_given - (total - Decimal::new(500, 2));
+    assert!(
+        (amount(&done["settlement"]["change"]) - change.to_string().parse::<f64>().unwrap()).abs()
+            < 0.005,
+        "{done}"
+    );
+    assert_eq!(done["order"]["status"], "completed");
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT payment_method::text, status::text FROM payments WHERE order_id = $1::uuid AND gateway = 'till' \
+         ORDER BY payment_method::text",
+    )
+    .bind(&unpaid)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        [
+            ("cash".to_string(), "paid".to_string()),
+            ("debit_card".to_string(), "paid".to_string())
+        ]
+    );
+    let path = format!("/admin/pos/sessions/{session}");
+    let (_, z) = admin_api_call(&app, &token, Method::GET, &path, None).await;
+    let expected_cash = 50.0
+        + (total - Decimal::new(500, 2))
+            .to_string()
+            .parse::<f64>()
+            .unwrap();
+    assert!(
+        (amount(&z["totals"]["expected_cash"]) - expected_cash).abs() < 0.005,
+        "{z}"
+    );
+
+    // an order of another branch is refused
+    let other = customer_pickup_order(&app, &buyer_token, &buyer.email, elsewhere, product).await;
+    let give = serde_json::json!({"session_id": session, "order_id": other});
+    let (status, refused) = till_call(&app, &token, Method::POST, "/admin/pos/pickups", give).await;
+    assert_eq!(status, 400, "{refused}");
+    app.cleanup().await.ok();
+}

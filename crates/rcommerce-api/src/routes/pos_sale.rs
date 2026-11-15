@@ -313,7 +313,7 @@ async fn basket_view(
 }
 
 /// The approved, unused card payments of the session, with their amounts
-async fn card_amounts(
+pub(crate) async fn card_amounts(
     state: &AppState,
     session: Uuid,
     ids: &[Uuid],
