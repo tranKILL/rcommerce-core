@@ -324,6 +324,11 @@ impl Migrator {
                 "company_logos",
                 include_str!("../../migrations/045_company_logos.sql"),
             ),
+            (
+                46,
+                "search_and_checkout_indexes",
+                include_str!("../../migrations/046_search_and_checkout_indexes.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

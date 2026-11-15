@@ -166,30 +166,30 @@ const SEARCH_SKU: &str = search_sql!(
 
 /// $1 = search_words (space-separated, escaped for LIKE): every word must appear in
 /// the title (translated in $2, else base) or a SKU, compared through
-/// catalog_search_text (migration 030: case, accents, spaces, decimal comma)
+/// catalog_search_text (migration 030: case, accents, spaces, decimal comma).
+/// Each word finds its candidates through the trigram indexes of migration 046
+/// (titles, product and variant SKUs); a product is a hit when every word found it.
 const SEARCH_SUBSTRING: &str = search_sql!(
     "
-    WITH words AS (
-        SELECT catalog_search_text(w) AS w FROM unnest(string_to_array($1, ' ')) AS w WHERE w <> ''
+    WITH words AS MATERIALIZED (
+        SELECT DISTINCT catalog_search_text(w) AS w
+        FROM unnest(string_to_array($1, ' ')) AS w WHERE w <> ''
+    ), found AS (
+        SELECT words.w, t.product_id AS id FROM words
+        JOIN product_translations t ON t.locale = $2
+         AND catalog_search_text(t.title) LIKE '%' || words.w || '%' ESCAPE '\\'
+        UNION
+        SELECT words.w, p.id FROM words
+        JOIN products p ON catalog_search_text(p.title) LIKE '%' || words.w || '%' ESCAPE '\\'
+        WHERE NOT EXISTS (SELECT 1 FROM product_translations t WHERE t.product_id = p.id AND t.locale = $2)
+        UNION
+        SELECT words.w, p.id FROM words
+        JOIN products p ON catalog_search_text(p.sku) LIKE '%' || words.w || '%' ESCAPE '\\'
+        UNION
+        SELECT words.w, v.product_id FROM words
+        JOIN product_variants v ON catalog_search_text(v.sku) LIKE '%' || words.w || '%' ESCAPE '\\'
     ), hits AS (
-        SELECT t.product_id AS id
-        FROM product_translations t
-        JOIN products p ON p.id = t.product_id
-        WHERE t.locale = $2
-          AND NOT EXISTS (SELECT 1 FROM words WHERE NOT (
-              catalog_search_text(t.title) LIKE '%' || words.w || '%' ESCAPE '\\'
-              OR catalog_search_text(p.sku) LIKE '%' || words.w || '%' ESCAPE '\\'
-              OR EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id
-                         AND catalog_search_text(v.sku) LIKE '%' || words.w || '%' ESCAPE '\\')))
-        UNION ALL
-        SELECT p.id
-        FROM products p
-        WHERE NOT EXISTS (SELECT 1 FROM words WHERE NOT (
-              catalog_search_text(p.title) LIKE '%' || words.w || '%' ESCAPE '\\'
-              OR catalog_search_text(p.sku) LIKE '%' || words.w || '%' ESCAPE '\\'
-              OR EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id
-                         AND catalog_search_text(v.sku) LIKE '%' || words.w || '%' ESCAPE '\\')))
-          AND NOT EXISTS (SELECT 1 FROM product_translations t WHERE t.product_id = p.id AND t.locale = $2)
+        SELECT id FROM found GROUP BY id HAVING COUNT(*) = (SELECT COUNT(*) FROM words)
     )",
     "p.created_at DESC, p.id"
 );
