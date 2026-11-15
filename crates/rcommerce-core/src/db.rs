@@ -18,6 +18,8 @@ pub mod job_names {
     pub const DUNNING_RETRIES: &str = "dunning_retries";
     /// Peppol delivery of invoices (background loop)
     pub const PEPPOL_DELIVERY: &str = "peppol_delivery";
+    /// Deletion of carts nobody touched for months (background loop)
+    pub const CART_CLEANUP: &str = "cart_cleanup";
 }
 
 /// Run `job` unless another database session is running the job of the same

@@ -7215,3 +7215,71 @@ async fn test_pickup_handed_over_at_the_till() {
     assert_eq!(status, 400, "{refused}");
     app.cleanup().await.ok();
 }
+
+/// Carts untouched for longer than the retention go with their lines, whether
+/// abandoned, ordered or left at the till; recent carts stay
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_inactive_carts_deleted_after_months() {
+    use rcommerce_core::services::cart_cleanup::{cutoff, delete_inactive_carts};
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let product = app
+        .create_test_product("Cleanup cement", Decimal::new(500, 2), 0)
+        .await
+        .unwrap();
+    let pool = app.app_state.db.pool();
+    // carts and lines written directly with their dates (the trigger only
+    // dates updates)
+    let cart = |months: i32, token: &str, converted: bool| {
+        let pool = pool.clone();
+        let token = token.to_string();
+        async move {
+            let id: Uuid = sqlx::query_scalar(
+                "INSERT INTO carts (session_token, currency, converted_to_order, created_at, updated_at) \
+                 VALUES ($1, 'EUR', $2, NOW() - make_interval(months => $3), NOW() - make_interval(months => $3)) \
+                 RETURNING id",
+            )
+            .bind(&token)
+            .bind(converted)
+            .bind(months)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO cart_items (cart_id, product_id, title, quantity, unit_price, original_price, subtotal, total) \
+                 VALUES ($1, $2, 'Cleanup cement', 1, 5, 5, 5, 5)",
+            )
+            .bind(id)
+            .bind(product)
+            .execute(&pool)
+            .await
+            .unwrap();
+            id
+        }
+    };
+    let tag = Uuid::new_v4().simple().to_string();
+    let abandoned = cart(7, &format!("guest-{tag}"), false).await;
+    let ordered = cart(8, &format!("ordered-{tag}"), true).await;
+    let till = cart(7, &format!("pos:{tag}"), false).await;
+    let recent = cart(5, &format!("recent-{tag}"), false).await;
+    let today = cart(0, &format!("today-{tag}"), false).await;
+
+    let deleted = delete_inactive_carts(pool, cutoff(chrono::Utc::now(), 6))
+        .await
+        .unwrap();
+    assert!(deleted >= 3, "{deleted}");
+    let left: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM carts WHERE id = ANY($1)")
+        .bind(vec![abandoned, ordered, till, recent, today])
+        .fetch_all(pool)
+        .await
+        .unwrap();
+    assert_eq!(left.len(), 2, "only the recent carts stay");
+    assert!(left.contains(&recent) && left.contains(&today));
+    let lines: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cart_items WHERE cart_id = ANY($1)")
+        .bind(vec![abandoned, ordered, till])
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(lines, 0, "their lines went with them");
+    app.cleanup().await.ok();
+}

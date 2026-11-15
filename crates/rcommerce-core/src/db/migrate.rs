@@ -329,6 +329,11 @@ impl Migrator {
                 "search_and_checkout_indexes",
                 include_str!("../../migrations/046_search_and_checkout_indexes.sql"),
             ),
+            (
+                47,
+                "cart_activity_index",
+                include_str!("../../migrations/047_cart_activity_index.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

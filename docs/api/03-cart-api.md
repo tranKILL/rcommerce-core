@@ -11,6 +11,7 @@ The Cart API provides a complete shopping cart system that supports guest users 
 - **Cart Merging**: Automatic merging when guest logs in
 - **Database Persistence**: All carts stored in PostgreSQL via CartService
 - **Expiration**: Carts expire after 30 days of inactivity
+- **Cleanup**: with `[carts] delete_inactive_after_months` set, carts nobody changed for that many months (abandoned, or already turned into orders, whose lines are kept on the order) are deleted with their lines, once a day
 
 ## Base URL
 

@@ -230,6 +230,9 @@ base_url = "https://erp.dianxiaomi.com"
 ## Notification Configuration
 
 ```toml
+[carts]                        # cart retention
+delete_inactive_after_months = 6  # daily: carts unchanged that long are deleted with their lines; unset keeps all
+
 [invoicing]                    # legal invoices (docs/architecture/peppol.md)
 enabled = false
 number_prefix = "F"            # F2026-00001

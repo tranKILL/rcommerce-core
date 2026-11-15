@@ -206,6 +206,11 @@ crop = false
 #[orders]
 #auto_cancel_pending_minutes = 120
 
+# Carts: delete carts nobody changed for this many months, once a day
+# (abandoned carts, and carts already turned into orders). Kept when unset.
+#[carts]
+#delete_inactive_after_months = 6
+
 # Store branding (customer emails shell, invoice header/footer, notification vars).
 # All fields are optional; when unset, neutral placeholder branding is used.
 #[branding]

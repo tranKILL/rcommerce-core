@@ -96,6 +96,7 @@ pub async fn build_app(config: &Config) -> Result<Router> {
     if stores.is_empty() {
         let app_state = create_app_state(config).await?;
         spawn_abandoned_order_sweeper(config, &app_state);
+        spawn_cart_cleanup(config, &app_state);
         spawn_catalogue_sync_loop(config, &app_state);
         spawn_subscription_billing_loop(config, &app_state);
         spawn_peppol_loop(config, &app_state);
@@ -132,6 +133,7 @@ async fn build_multi_store_router(
         );
         let app_state = create_app_state(&store.config).await?;
         spawn_abandoned_order_sweeper(&store.config, &app_state);
+        spawn_cart_cleanup(&store.config, &app_state);
         spawn_catalogue_sync_loop(&store.config, &app_state);
         spawn_subscription_billing_loop(&store.config, &app_state);
         spawn_peppol_loop(&store.config, &app_state);
@@ -292,6 +294,7 @@ async fn run_tls_server(config: Config) -> Result<()> {
     // Initialize application state
     let app_state = create_app_state(&config).await?;
     spawn_abandoned_order_sweeper(&config, &app_state);
+    spawn_cart_cleanup(&config, &app_state);
     spawn_catalogue_sync_loop(&config, &app_state);
     spawn_subscription_billing_loop(&config, &app_state);
     spawn_state_cleanup(&app_state);
@@ -1346,6 +1349,37 @@ fn spawn_abandoned_order_sweeper(config: &Config, app_state: &AppState) {
                 Err(e) => warn!("abandoned-order sweeper run failed: {}", e),
             }
             tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        }
+    });
+}
+
+/// Delete carts nobody touched for `[carts] delete_inactive_after_months`
+/// months, once a day (first run 5 minutes after startup), one store
+/// instance at a time
+fn spawn_cart_cleanup(config: &Config, app_state: &AppState) {
+    let Some(months) = config.carts.delete_inactive_after_months.filter(|m| *m > 0) else {
+        return;
+    };
+    info!(
+        "cart cleanup enabled: carts untouched for {} month(s) are deleted daily",
+        months
+    );
+    let db = app_state.db.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        loop {
+            let before = rcommerce_core::services::cart_cleanup::cutoff(chrono::Utc::now(), months);
+            let run =
+                rcommerce_core::services::cart_cleanup::delete_inactive_carts(db.pool(), before);
+            match run_exclusive(db.pool(), job_names::CART_CLEANUP, run).await {
+                Ok(Some(n)) if n > 0 => info!(
+                    "cart cleanup deleted {} cart(s) untouched since {}",
+                    n, before
+                ),
+                Ok(_) => {}
+                Err(e) => warn!("cart cleanup failed: {}", e),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
         }
     });
 }

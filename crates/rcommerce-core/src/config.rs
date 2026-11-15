@@ -75,6 +75,10 @@ pub struct Config {
     #[serde(default)]
     pub orders: OrdersConfig,
 
+    /// Cleanup of carts nobody touched for months
+    #[serde(default)]
+    pub carts: CartsConfig,
+
     #[serde(default)]
     pub subscriptions: SubscriptionsConfig,
 
@@ -214,6 +218,15 @@ impl Default for SubscriptionsConfig {
 
 fn default_subscription_billing_interval_minutes() -> u64 {
     60
+}
+
+/// Cart retention
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CartsConfig {
+    /// Delete carts not changed for this many months (abandoned ones, and
+    /// those already turned into orders), once a day. None (the default)
+    /// keeps every cart.
+    pub delete_inactive_after_months: Option<u32>,
 }
 
 /// Order lifecycle settings
