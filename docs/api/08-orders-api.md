@@ -6,8 +6,9 @@ are then prepared, made ready and handed over at the counter by staff with `orde
 
 ## List orders
 
-`GET /api/v1/orders`, newest first. Lines are left out (`items` is empty); `item_count`
-gives the number of articles. `GET /api/v1/orders/:id` returns one order with its lines.
+`GET /api/v1/orders`, newest first, each order with its lines (`items`, loaded
+for the whole page in one query); `item_count` gives the number of articles.
+`GET /api/v1/orders/:id` also returns its payments and fulfillments.
 
 | Parameter | Meaning |
 |---|---|

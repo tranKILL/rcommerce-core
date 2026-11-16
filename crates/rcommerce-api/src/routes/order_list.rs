@@ -137,38 +137,58 @@ fn push_filters(
 }
 
 /// Number of articles of each order, in one query
-async fn item_counts(state: &AppState, ids: &[Uuid]) -> Result<HashMap<Uuid, i64>, Error> {
-    let rows: Vec<(Uuid, i64)> = sqlx::query_as(
-        "SELECT order_id, COALESCE(SUM(quantity), 0)::bigint FROM order_items
-          WHERE order_id = ANY($1) GROUP BY order_id",
+/// The lines of several orders, in one query
+async fn order_lines(
+    state: &AppState,
+    ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<super::order::OrderItemResponse>>, Error> {
+    let items: Vec<rcommerce_core::models::OrderItem> = sqlx::query_as(
+        "SELECT * FROM order_items WHERE order_id = ANY($1) ORDER BY created_at, id",
     )
     .bind(ids)
     .fetch_all(state.db.pool())
     .await?;
-    Ok(rows.into_iter().collect())
+    let mut lines: HashMap<Uuid, Vec<super::order::OrderItemResponse>> = HashMap::new();
+    for item in items {
+        lines
+            .entry(item.order_id)
+            .or_default()
+            .push(super::order::OrderItemResponse {
+                id: item.id,
+                product_id: item.product_id,
+                variant_id: item.variant_id,
+                name: item.title,
+                sku: item.sku,
+                quantity: item.quantity,
+                price: item.price,
+                total: item.total,
+            });
+    }
+    Ok(lines)
 }
 
-/// Order summaries with their number of articles
+/// Order summaries with their lines and number of articles
 pub(crate) async fn summaries(
     state: &AppState,
     orders: Vec<rcommerce_core::models::Order>,
 ) -> Result<Vec<super::order::OrderResponse>, Error> {
     let ids: Vec<Uuid> = orders.iter().map(|o| o.id).collect();
-    let counts = item_counts(state, &ids).await?;
+    let mut lines = order_lines(state, &ids).await?;
     Ok(orders
         .into_iter()
         .map(|o| {
-            let count = counts.get(&o.id).copied().unwrap_or(0);
+            let items = lines.remove(&o.id).unwrap_or_default();
             let mut summary = order_summary(o);
-            summary.item_count = Some(count);
+            summary.item_count = Some(items.iter().map(|i| i64::from(i.quantity)).sum());
+            summary.items = items;
             summary
         })
         .collect())
 }
 
 /// GET /orders - the customer's orders, or all orders for staff, newest first
-/// unless sorted otherwise. Lines are not included (see `GET /orders/:id`);
-/// `item_count` gives their size.
+/// unless sorted otherwise, with their lines; `item_count` is the number of
+/// articles.
 pub async fn list_orders(
     State(state): State<AppState>,
     Extension(auth): Extension<JwtAuth>,

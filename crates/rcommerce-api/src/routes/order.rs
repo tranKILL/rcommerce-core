@@ -155,7 +155,8 @@ pub struct OrderItemResponse {
 
 pub(crate) const ORDER_COLUMNS: &str = "id, order_number, customer_id, customer_email, currency::text AS currency_text, order_type, subtotal, tax_total, shipping_total, discount_total, total, status, payment_status, fulfillment_status, shipping_address_id, billing_address_id, payment_method, shipping_method, notes, tags, draft, subscription_id, billing_cycle, coupon_code, coupon_id, ip_address, user_agent, metadata, shipping_address, billing_address, created_at, updated_at, completed_at, cancelled_at";
 
-/// An order without its lines, payments or fulfillments, for order lists
+/// An order without its payments or fulfillments, for order lists (the
+/// lists add its lines)
 pub(crate) fn order_summary(o: rcommerce_core::models::Order) -> OrderResponse {
     OrderResponse {
         id: o.id,

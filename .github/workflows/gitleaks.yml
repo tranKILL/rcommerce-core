@@ -1,0 +1,32 @@
+name: gitleaks
+
+# A secret scan on every PR and push to main. Runs with `pull_request`
+# (never `pull_request_target`), so PRs from outside forks execute with
+# no secrets. No GITLEAKS_LICENSE: the CLI is invoked directly rather
+# than via gitleaks-action, whose org license gate we don't need.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: read-all
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        # Pin is deliberate: the fingerprint format is part of the gate's contract, and
+        # .gitleaksignore was written against this version. Bump the pin and re-verify
+        # the list in the SAME commit -- never one without the other. Aligned with the
+        # private rcommerce repo's scan (v8.30.1) on 2026-11-16: both versions were run
+        # over this repo's full history and produced the identical 30 fingerprints, so
+        # the list needed no rewrite. See the header of .gitleaksignore.
+        run: >-
+          docker run --rm -v "$PWD:/repo"
+          zricethezav/gitleaks:v8.30.1
+          git --redact --log-opts="--all" /repo

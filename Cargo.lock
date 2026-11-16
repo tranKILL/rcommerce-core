@@ -3838,7 +3838,7 @@ dependencies = [
 
 [[package]]
 name = "rcommerce-api"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3851,6 +3851,7 @@ dependencies = [
  "hmac",
  "hyper",
  "ipnet",
+ "lettre",
  "mockall",
  "once_cell",
  "rand 0.8.6",
@@ -3885,7 +3886,7 @@ dependencies = [
 
 [[package]]
 name = "rcommerce-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "atty",
@@ -3921,7 +3922,7 @@ dependencies = [
 
 [[package]]
 name = "rcommerce-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3980,7 +3981,7 @@ dependencies = [
 
 [[package]]
 name = "rcommerce-demo"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "axum",
