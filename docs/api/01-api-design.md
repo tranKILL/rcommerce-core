@@ -452,9 +452,16 @@ language is a query parameter rather than `Accept-Language`, so caches key on th
 - `GET /v1/products/:slug` resolves a slug in the requested language, then the base
   slug, then any other language (a link shared from another language). The response
   lists `alternates`: `[{"locale": "nl", "slug": "..."}]` for hreflang links.
-- `GET /v1/products?category=` accepts base or translated category slugs.
+- `GET /v1/products?category=` accepts base or translated category slugs. A
+  category lists its own products and those of every category below it, so a
+  top category shows its whole range; search (`?q=`) narrowed to a category does
+  the same. With Elasticsearch, each product is indexed with its categories and
+  the categories above them: after moving a category elsewhere in the tree,
+  reindex.
 - `GET /v1/categories?lang=` and `GET /v1/categories/:slug?lang=` return translated
-  names and slugs.
+  names and slugs. The list comes in display order (`sort_order`, then name), and
+  each category has its `parent_id` (`null` for a top category), from which a
+  client builds the menu tree and breadcrumbs.
 
 **Search (`?q=`):** PostgreSQL full-text search, ranked, with the stemmer of the
 requested language (English, French, Dutch, German, Spanish, Italian, Portuguese,

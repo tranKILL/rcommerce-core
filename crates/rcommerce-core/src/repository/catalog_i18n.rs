@@ -110,8 +110,15 @@ macro_rules! search_sql {
             FROM hits h
             JOIN products p ON p.id = h.id
             WHERE p.is_active = true
-              AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM product_category_relations r
-                                               WHERE r.product_id = p.id AND r.category_id = $3))
+              AND ($3::uuid IS NULL OR EXISTS (
+                  SELECT 1 FROM product_category_relations r
+                  WHERE r.product_id = p.id AND r.category_id IN (
+                      WITH RECURSIVE below(id) AS (
+                          SELECT $3::uuid
+                          UNION
+                          SELECT c.id FROM product_categories c JOIN below b ON c.parent_id = b.id
+                      )
+                      SELECT id FROM below)))
             ORDER BY ",
             $order,
             "

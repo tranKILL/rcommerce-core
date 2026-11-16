@@ -733,7 +733,8 @@ pub fn router() -> Router<AppState> {
         .route("/categories/:slug", get(get_category))
 }
 
-/// List all active product categories (`?lang=` for translated names and slugs)
+/// List all active product categories (`?lang=` for translated names and slugs),
+/// in display order, each with its parent (`null` for a top category)
 pub async fn list_categories(
     State(state): State<AppState>,
     Query(params): Query<LangParams>,
@@ -759,6 +760,8 @@ pub async fn list_categories(
                 "slug": t.as_ref().map_or(&c.slug, |t| &t.slug),
                 "description": t.as_ref().map_or(c.description.as_ref(), |t| t.description.as_ref()),
                 "locale": t.as_ref().map(|t| &t.locale),
+                "parent_id": c.parent_id,
+                "sort_order": c.sort_order,
             })
         }).collect::<Vec<_>>()
     })))

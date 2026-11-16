@@ -56,12 +56,15 @@ pub fn push_filter(qb: &mut QueryBuilder<'_, Postgres>, filter: &ProductFilter) 
         }
         Some(ProductStatus::Archived) | None => {}
     }
+    // the category and every category below it: a top category lists its whole range
     if let Some(category_id) = filter.category_id {
         qb.push(
-            " AND id IN (SELECT product_id FROM product_category_relations WHERE category_id = ",
+            " AND id IN (SELECT product_id FROM product_category_relations WHERE category_id IN (             WITH RECURSIVE below(id) AS (SELECT ",
         )
         .push_bind(category_id)
-        .push(")");
+        .push(
+            "::uuid UNION SELECT c.id FROM product_categories c JOIN below b ON c.parent_id = b.id)              SELECT id FROM below))",
+        );
     }
     if let Some(min) = filter.price_min {
         qb.push(" AND price >= ").push_bind(min);

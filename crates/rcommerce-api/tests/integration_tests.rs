@@ -4312,6 +4312,74 @@ async fn product_in_category(app: &TestApp, price: Decimal) -> (Uuid, Uuid) {
     (product, category)
 }
 
+/// A category tree: the list gives each category its parent, and a top
+/// category lists (and searches) the products of the categories below it
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_categories_include_their_sub_categories() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let tag = Uuid::new_v4().simple().to_string();
+    let mut parent = None;
+    let mut ids = Vec::new();
+    for (level, name) in ["Masonry", "Blocks", "Clay blocks"].into_iter().enumerate() {
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO product_categories (name, slug, parent_id, sort_order) \
+             VALUES ($1, $2, $3, $4) RETURNING id",
+        )
+        .bind(name)
+        .bind(format!("{}-{tag}", name.to_lowercase().replace(' ', "-")))
+        .bind(parent)
+        .bind(level as i32)
+        .fetch_one(&app.db_pool)
+        .await
+        .unwrap();
+        parent = Some(id);
+        ids.push(id);
+    }
+    let product = app
+        .create_test_product(&format!("Gabion block {tag}"), Decimal::new(500, 2), 10)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO product_category_relations (product_id, category_id) VALUES ($1, $2)")
+        .bind(product)
+        .bind(ids[2])
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+
+    let response = app
+        .http_client
+        .get(format!("{}/api/v1/categories", app.base_url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let list: serde_json::Value = response.json().await.unwrap();
+    let by_id = |id: Uuid| {
+        list["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id.to_string())
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} missing: {list}"))
+    };
+    assert_eq!(by_id(ids[0])["parent_id"], serde_json::Value::Null);
+    assert_eq!(by_id(ids[1])["parent_id"], ids[0].to_string());
+    assert_eq!(by_id(ids[2])["parent_id"], ids[1].to_string());
+    assert_eq!(by_id(ids[2])["sort_order"], 2);
+
+    let title = format!("Gabion block {tag}");
+    for top in [format!("masonry-{tag}"), format!("blocks-{tag}")] {
+        for search in ["", "&q=gabion"] {
+            let query = format!("category={top}{search}&per_page=100");
+            let (status, titles, _) = listing(&app, &query).await;
+            assert_eq!(status, 200, "{query}");
+            assert!(titles.contains(&title), "{query}: {titles:?}");
+        }
+    }
+}
+
 /// A price list created by staff; returns its id
 async fn new_price_list(app: &TestApp, admin: &str, body: serde_json::Value) -> String {
     let (status, created) = call_json(app, admin, "/admin/price-lists", Some(body)).await;

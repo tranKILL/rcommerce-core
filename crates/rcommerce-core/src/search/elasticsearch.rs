@@ -38,14 +38,20 @@ struct ProductDocRow {
     is_active: bool,
     created_at: chrono::DateTime<chrono::Utc>,
     translations: sqlx::types::Json<HashMap<String, LocalizedText>>,
+    /// The product's categories and every category above them, so a filter on
+    /// a top category finds the products of its sub-categories
     category_ids: Vec<Uuid>,
 }
 
 const DOC_SELECT: &str = "SELECT p.id, p.title, p.description, p.sku, p.price, p.is_active, p.created_at,
        COALESCE((SELECT json_object_agg(t.locale, json_build_object('title', t.title, 'description', t.description))
                  FROM product_translations t WHERE t.product_id = p.id), '{}') AS translations,
-       COALESCE((SELECT array_agg(r.category_id) FROM product_category_relations r WHERE r.product_id = p.id),
-                '{}') AS category_ids
+       COALESCE((WITH RECURSIVE up(id) AS (
+                     SELECT r.category_id FROM product_category_relations r WHERE r.product_id = p.id
+                     UNION
+                     SELECT c.parent_id FROM product_categories c JOIN up ON c.id = up.id
+                     WHERE c.parent_id IS NOT NULL)
+                 SELECT array_agg(id) FROM up), '{}') AS category_ids
 FROM products p";
 
 /// Elasticsearch analyzer for a locale (built-in language analysis is extended
