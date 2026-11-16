@@ -211,6 +211,16 @@ impl PostgresProductRepository {
     }
 }
 
+impl PostgresProductRepository {
+    /// The filter's category and the categories below it (empty without a category)
+    async fn category_and_below(&self, filter: &ProductFilter) -> Result<Vec<Uuid>> {
+        match filter.category_id {
+            Some(id) => product_search::category_and_below(self.db.pool(), id).await,
+            None => Ok(Vec::new()),
+        }
+    }
+}
+
 #[async_trait]
 impl ProductRepositoryTrait for PostgresProductRepository {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<Product>> {
@@ -237,15 +247,19 @@ impl ProductRepositoryTrait for PostgresProductRepository {
         pagination: &Pagination,
         sort: Option<&SortParams>,
     ) -> Result<Vec<Product>> {
+        let categories = self.category_and_below(filter).await?;
         let mut qb = QueryBuilder::<Postgres>::new("SELECT * FROM products");
-        product_search::push_filter(&mut qb, filter);
+        product_search::push_filter(&mut qb, filter, &categories);
         product_search::push_order(&mut qb, filter, sort)?;
         qb.push(" LIMIT ")
             .push_bind(pagination.per_page)
             .push(" OFFSET ")
             .push_bind(pagination.offset());
+        // planned for each set of categories (a cached generic plan cannot tell
+        // a category of 50 products from one of 5,000)
         let products = qb
             .build_query_as::<Product>()
+            .persistent(filter.category_id.is_none())
             .fetch_all(self.db.pool())
             .await?;
         Ok(products)
@@ -257,9 +271,15 @@ impl ProductRepositoryTrait for PostgresProductRepository {
 
     /// Same conditions as `find_with_filter` (shared builder), so `meta.total` matches
     async fn count_by_filter(&self, filter: &ProductFilter) -> Result<i64> {
+        let categories = self.category_and_below(filter).await?;
         let mut qb = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM products");
-        product_search::push_filter(&mut qb, filter);
-        let count: i64 = qb.build().fetch_one(self.db.pool()).await?.get(0);
+        product_search::push_filter(&mut qb, filter, &categories);
+        let count: i64 = qb
+            .build()
+            .persistent(filter.category_id.is_none())
+            .fetch_one(self.db.pool())
+            .await?
+            .get(0);
         Ok(count)
     }
 

@@ -6,7 +6,8 @@
 //! decimal comma read as a dot. So "25kg" finds "25 kg", "1.2mm" finds "1,2 mm",
 //! "beton" finds "Béton" and "bm-0005" finds the SKU "BM-0005".
 
-use sqlx::{Postgres, QueryBuilder};
+use sqlx::{PgPool, Postgres, QueryBuilder};
+use uuid::Uuid;
 
 use crate::{models::ProductFilter, models::ProductStatus, SortDirection, SortParams};
 
@@ -44,8 +45,29 @@ pub fn search_terms(query: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-/// Append the `WHERE` conditions of `filter` (the query already selects from products)
-pub fn push_filter(qb: &mut QueryBuilder<'_, Postgres>, filter: &ProductFilter) {
+/// A category and every category below it: a category lists their products too
+pub async fn category_and_below(pool: &PgPool, id: Uuid) -> crate::Result<Vec<Uuid>> {
+    let ids = sqlx::query_scalar(
+        "WITH RECURSIVE below(id) AS (SELECT $1::uuid \
+         UNION SELECT c.id FROM product_categories c JOIN below b ON c.parent_id = b.id) \
+         SELECT id FROM below",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
+    Ok(ids)
+}
+
+/// Append the `WHERE` conditions of `filter` (the query already selects from
+/// products). `categories`: `filter.category_id` and the categories below it
+/// (`category_and_below`), passed as values rather than a subquery so the
+/// planner knows how many products they hold: a small category is read from
+/// its products, not by walking the whole catalogue in the listing's order.
+pub fn push_filter(
+    qb: &mut QueryBuilder<'_, Postgres>,
+    filter: &ProductFilter,
+    categories: &[Uuid],
+) {
     qb.push(" WHERE 1=1");
     match filter.status {
         Some(ProductStatus::Active) => {
@@ -56,15 +78,12 @@ pub fn push_filter(qb: &mut QueryBuilder<'_, Postgres>, filter: &ProductFilter) 
         }
         Some(ProductStatus::Archived) | None => {}
     }
-    // the category and every category below it: a top category lists its whole range
-    if let Some(category_id) = filter.category_id {
+    if filter.category_id.is_some() {
         qb.push(
-            " AND id IN (SELECT product_id FROM product_category_relations WHERE category_id IN (             WITH RECURSIVE below(id) AS (SELECT ",
+            " AND id IN (SELECT product_id FROM product_category_relations WHERE category_id = ANY(",
         )
-        .push_bind(category_id)
-        .push(
-            "::uuid UNION SELECT c.id FROM product_categories c JOIN below b ON c.parent_id = b.id)              SELECT id FROM below))",
-        );
+        .push_bind(categories.to_vec())
+        .push("))");
     }
     if let Some(min) = filter.price_min {
         qb.push(" AND price >= ").push_bind(min);
@@ -151,7 +170,7 @@ mod tests {
             ..Default::default()
         };
         let mut qb = QueryBuilder::<Postgres>::new("SELECT * FROM products");
-        push_filter(&mut qb, &filter);
+        push_filter(&mut qb, &filter, &[]);
         push_order(&mut qb, &filter, None).unwrap();
         let sql = qb.sql();
         assert!(sql.contains("is_active = true"));
@@ -159,6 +178,17 @@ mod tests {
         assert_eq!(sql.matches("catalog_search_text(").count(), 4);
         assert!(sql.contains("lower($4)"));
         assert!(sql.ends_with("created_at DESC, id"));
+    }
+
+    #[test]
+    fn a_category_filter_takes_its_ids_as_one_value() {
+        let filter = ProductFilter {
+            category_id: Some(Uuid::nil()),
+            ..Default::default()
+        };
+        let mut qb = QueryBuilder::<Postgres>::new("SELECT * FROM products");
+        push_filter(&mut qb, &filter, &[Uuid::nil(), Uuid::max()]);
+        assert!(qb.sql().contains("category_id = ANY($1)"), "{}", qb.sql());
     }
 
     #[test]
