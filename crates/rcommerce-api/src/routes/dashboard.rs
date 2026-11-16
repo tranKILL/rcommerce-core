@@ -223,22 +223,43 @@ fn wanted_widgets(asked: Option<&str>, offered: &[LayoutSlot]) -> Vec<String> {
 }
 
 /// GET /admin/dashboard?location_id=&widgets= - what needs doing and how the
-/// store is going, limited to the widgets offered to the caller
+/// store is going, limited to the widgets offered to the caller. Staff asking
+/// for the same widgets at the same branch share an answer for 30 seconds.
 async fn dashboard(
     State(state): State<AppState>,
     Extension(auth): Extension<JwtAuth>,
     Query(query): Query<DashboardQuery>,
-) -> Result<Json<Dashboard>, Error> {
+) -> Result<Json<serde_json::Value>, Error> {
     let offered = view(&state, &auth).await?.widgets;
-    let wanted = wanted_widgets(query.widgets.as_deref(), &offered);
+    let mut wanted = wanted_widgets(query.widgets.as_deref(), &offered);
+    wanted.sort();
+    wanted.dedup();
+    let key = format!(
+        "{}|{}",
+        query.location_id.map(|l| l.to_string()).unwrap_or_default(),
+        wanted.join(",")
+    );
+    if let Some(kept) = state.dashboard_cache.get(&key) {
+        return Ok(Json(kept));
+    }
+    let board = serde_json::to_value(compute(&state, query.location_id, &wanted).await?)?;
+    state.dashboard_cache.put(key, board.clone());
+    Ok(Json(board))
+}
+
+/// The widgets asked for, computed
+async fn compute(
+    state: &AppState,
+    location: Option<Uuid>,
+    wanted: &[String],
+) -> Result<Dashboard, Error> {
     let wants = |id: &str| wanted.iter().any(|w| w == id);
     let figures = &state.dashboard;
-    let location = query.location_id;
     let mut board = Dashboard::default();
     if wants("orders") {
         board.orders = Some(OrderSection {
             work: figures.order_work(location).await?,
-            next: next_orders(&state, location).await?,
+            next: next_orders(state, location).await?,
         });
     }
     if wants("invoices") {
@@ -256,8 +277,8 @@ async fn dashboard(
     if wants("catalogue") {
         board.catalogue = Some(figures.catalogue_figures().await?);
     }
-    add_analytics(&state, location, &wanted, &mut board).await?;
-    Ok(Json(board))
+    add_analytics(state, location, wanted, &mut board).await?;
+    Ok(board)
 }
 
 /// The reports the analytics widgets need: the finance report once for

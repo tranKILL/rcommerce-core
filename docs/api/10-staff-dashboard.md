@@ -56,6 +56,12 @@ role lists widgets, lists it; global admins are offered every widget.
 default). Test orders count as work, since they are on the counter boards too,
 but not as sales.
 
+The figures count over every order, product and stock level. Callers asking
+for the same widgets at the same branch therefore share an answer for 30
+seconds: a dashboard is at most 30 seconds old, and many staff opening it
+cost the database one count instead of one each. The counter and order
+boards themselves are never cached.
+
 ## Widgets and personal layouts
 
 | Widget | Resource | Sizes (default first) | Shown by default |

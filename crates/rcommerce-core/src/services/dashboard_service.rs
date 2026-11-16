@@ -353,3 +353,69 @@ mod tests {
         assert_eq!(sales.days[7].takings.orders, 0);
     }
 }
+
+/// Dashboards answered in the last seconds, shared by the staff asking for
+/// the same widgets at the same branch. Its figures count over every order,
+/// product and stock level, so without it each staff member's refresh counts
+/// again; with it they are at most `ttl` old.
+pub struct DashboardCache {
+    ttl: std::time::Duration,
+    entries: std::sync::Mutex<
+        std::collections::HashMap<String, (std::time::Instant, serde_json::Value)>,
+    >,
+}
+
+impl Default for DashboardCache {
+    fn default() -> Self {
+        Self::new(std::time::Duration::from_secs(30))
+    }
+}
+
+impl DashboardCache {
+    /// Most dashboards kept at once (one per widget set and branch asked)
+    const CAPACITY: usize = 256;
+
+    pub fn new(ttl: std::time::Duration) -> Self {
+        Self {
+            ttl,
+            entries: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// The dashboard kept for `key`, while it is fresh
+    pub fn get(&self, key: &str) -> Option<serde_json::Value> {
+        let entries = self.entries.lock().ok()?;
+        let (at, value) = entries.get(key)?;
+        (at.elapsed() < self.ttl).then(|| value.clone())
+    }
+
+    /// Keep a dashboard for `key`, dropping the stale ones
+    pub fn put(&self, key: String, value: serde_json::Value) {
+        let Ok(mut entries) = self.entries.lock() else {
+            return;
+        };
+        let ttl = self.ttl;
+        entries.retain(|_, (at, _)| at.elapsed() < ttl);
+        if entries.len() >= Self::CAPACITY {
+            entries.clear();
+        }
+        entries.insert(key, (std::time::Instant::now(), value));
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::DashboardCache;
+    use std::time::Duration;
+
+    #[test]
+    fn a_dashboard_is_shared_while_fresh() {
+        let cache = DashboardCache::new(Duration::from_millis(50));
+        assert!(cache.get("orders|").is_none());
+        cache.put("orders|".into(), serde_json::json!({"orders": 3}));
+        assert_eq!(cache.get("orders|").unwrap()["orders"], 3);
+        assert!(cache.get("orders|branch").is_none(), "another branch");
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(cache.get("orders|").is_none(), "stale");
+    }
+}

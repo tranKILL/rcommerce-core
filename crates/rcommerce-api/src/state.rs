@@ -178,6 +178,8 @@ pub struct AppState {
     pub peppol: Option<Arc<rcommerce_core::peppol::PeppolService>>,
     /// Figures of the back-office home
     pub dashboard: rcommerce_core::services::dashboard_service::DashboardService,
+    /// Dashboards answered in the last 30 seconds, shared by the staff
+    pub dashboard_cache: Arc<rcommerce_core::services::dashboard_service::DashboardCache>,
     /// Finance and marketing reports
     pub analytics: rcommerce_core::services::analytics::AnalyticsService,
     /// The till's card terminal (`[pos] terminal`)
@@ -376,6 +378,7 @@ impl AppState {
                 pool.clone(),
                 "Europe/Brussels",
             ),
+            dashboard_cache: Default::default(),
             analytics: rcommerce_core::services::analytics::AnalyticsService::new(
                 pool.clone(),
                 "Europe/Brussels",
