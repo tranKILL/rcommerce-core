@@ -343,3 +343,27 @@ Si vous ne pouvez plus vous connecter, écrivez à {{ support_email }}.
 
 {{ company_name }}
 '''
+
+[stock_alert]
+subject = "De retour en stock : {{ product_name }}"
+heading = "De retour en stock"
+intro = "Bonjour {{ customer_name }}, bonne nouvelle : {{ product_name }} est de nouveau en stock."
+branch = "Dépôt"
+available = "Disponible"
+available_value = "au moins {{ quantity }}"
+hurry = "Le stock part vite : commandez maintenant pour être sûr de l'avoir."
+button = "Voir le produit"
+closed = "Vous nous aviez demandé de vous prévenir ; cette alerte est maintenant close."
+text = '''
+Bonjour {{ customer_name }},
+
+Bonne nouvelle : {{ product_name }} est de nouveau en stock.
+Dépôt : {{ location_name }}
+Disponible : au moins {{ quantity }}
+
+{{ product_url }}
+
+Le stock part vite : commandez maintenant pour être sûr de l'avoir.
+
+{{ company_name }}
+'''

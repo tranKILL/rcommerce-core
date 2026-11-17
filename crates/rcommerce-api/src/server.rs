@@ -97,6 +97,7 @@ pub async fn build_app(config: &Config) -> Result<Router> {
         let app_state = create_app_state(config).await?;
         spawn_abandoned_order_sweeper(config, &app_state);
         spawn_cart_cleanup(config, &app_state);
+        spawn_stock_alerts(&app_state);
         spawn_catalogue_sync_loop(config, &app_state);
         spawn_subscription_billing_loop(config, &app_state);
         spawn_peppol_loop(config, &app_state);
@@ -134,6 +135,7 @@ async fn build_multi_store_router(
         let app_state = create_app_state(&store.config).await?;
         spawn_abandoned_order_sweeper(&store.config, &app_state);
         spawn_cart_cleanup(&store.config, &app_state);
+        spawn_stock_alerts(&app_state);
         spawn_catalogue_sync_loop(&store.config, &app_state);
         spawn_subscription_billing_loop(&store.config, &app_state);
         spawn_peppol_loop(&store.config, &app_state);
@@ -295,6 +297,7 @@ async fn run_tls_server(config: Config) -> Result<()> {
     let app_state = create_app_state(&config).await?;
     spawn_abandoned_order_sweeper(&config, &app_state);
     spawn_cart_cleanup(&config, &app_state);
+    spawn_stock_alerts(&app_state);
     spawn_catalogue_sync_loop(&config, &app_state);
     spawn_subscription_billing_loop(&config, &app_state);
     spawn_state_cleanup(&app_state);
@@ -1384,6 +1387,29 @@ fn spawn_cart_cleanup(config: &Config, app_state: &AppState) {
     });
 }
 
+/// E-mail the stock alerts whose stock has arrived, every 5 minutes (first run a
+/// minute after start), one store instance at a time. Nothing runs without a
+/// notification service.
+fn spawn_stock_alerts(app_state: &AppState) {
+    if app_state.notification_service.is_none() {
+        return;
+    }
+    let state = app_state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        loop {
+            let pool = state.db.pool().clone();
+            let run = crate::routes::stock_alerts::send_due(&state);
+            match run_exclusive(&pool, job_names::STOCK_ALERTS, run).await {
+                Ok(Some(n)) if n > 0 => info!("stock alerts: {} e-mail(s) sent", n),
+                Ok(_) => {}
+                Err(e) => warn!("stock alerts failed: {}", e),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        }
+    });
+}
+
 /// Spawn the subscription billing loop when enabled
 /// (`[subscriptions] enabled`). First run ~60s after startup, then every
 /// `billing_interval_minutes`. For each due subscription a renewal order is
@@ -1766,6 +1792,8 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         .merge(crate::routes::invoices::protected_router())
         .merge(crate::routes::price_lists::protected_router())
         .merge(crate::routes::loyalty::protected_router())
+        // Stock alerts of the signed-in customer
+        .merge(crate::routes::stock_alerts::protected_router())
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,

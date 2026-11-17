@@ -7750,6 +7750,190 @@ async fn test_setup_tokens_end_with_a_password_reset() {
     app.cleanup().await.ok();
 }
 
+/// Stock alerts: asking twice keeps one alert (with the new quantity); only tracked
+/// products and public branches; due only once the branch holds the quantity
+/// wanted after cart holds, sent once; customers close their own alerts only
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_stock_alerts_fire_when_stock_reaches_the_branch() {
+    use rcommerce_core::services::stock_alerts;
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let (token, _) = sign_in(&app, &customer.email, &password).await;
+    let product = app
+        .create_test_product("Alert Test Cement", Decimal::from(9), 0)
+        .await
+        .unwrap();
+    let mut branches = Vec::new();
+    for public in [true, false] {
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO inventory_locations (name, code, slug, is_public, sort_order)              VALUES ('Alert Branch', $1, $1, $2, 0) RETURNING id",
+        )
+        .bind(format!("alr-{}", Uuid::new_v4().simple()))
+        .bind(public)
+        .fetch_one(&app.db_pool)
+        .await
+        .unwrap();
+        branches.push(id);
+    }
+    let (branch, private) = (branches[0], branches[1]);
+    let path = "/customers/me/alerts";
+    let ask =
+        |body: serde_json::Value| admin_api_call(&app, &token, Method::POST, path, Some(body));
+
+    let (status, alert) =
+        ask(serde_json::json!({ "product_id": product, "location_id": branch, "quantity": 4 }))
+            .await;
+    assert_eq!(status, 201, "{alert}");
+    assert_eq!(alert["location_name"], "Alert Branch");
+    let (status, again) =
+        ask(serde_json::json!({ "product_id": product, "location_id": branch, "quantity": 10 }))
+            .await;
+    assert_eq!(status, 201, "{again}");
+    assert_eq!(
+        (&again["id"], &again["quantity"]),
+        (&alert["id"], &serde_json::json!(10))
+    );
+    let untracked = app
+        .create_test_product("Alert Test Service", Decimal::from(5), 0)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE products SET inventory_management = false WHERE id = $1")
+        .bind(untracked)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    for refused in [
+        serde_json::json!({ "product_id": product, "location_id": private }),
+        serde_json::json!({ "product_id": Uuid::new_v4() }),
+        serde_json::json!({ "product_id": product, "quantity": 0 }),
+        serde_json::json!({ "product_id": untracked }),
+    ] {
+        let (status, body) = ask(refused.clone()).await;
+        assert!(
+            (400..500).contains(&status) && status != 401,
+            "{refused}: {status} {body}"
+        );
+    }
+
+    // 6 at the branch for 10 wanted: not due; 12 with 3 held in carts: still 9
+    let id: Uuid = serde_json::from_value(alert["id"].clone()).unwrap();
+    let is_due = || async {
+        let due = stock_alerts::due(&app.db_pool, 10_000).await.unwrap();
+        due.into_iter().find(|d| d.id == id)
+    };
+    sqlx::query(
+        "INSERT INTO inventory_levels (product_id, location_id, available_quantity,          reserved_quantity, reorder_point) VALUES ($1, $2, 6, 0, 2)",
+    )
+    .bind(product)
+    .bind(branch)
+    .execute(&app.db_pool)
+    .await
+    .unwrap();
+    assert!(is_due().await.is_none());
+    let set_stock = |quantity: i32| {
+        sqlx::query(
+            "UPDATE inventory_levels SET available_quantity = $3              WHERE product_id = $1 AND location_id = $2",
+        )
+        .bind(product)
+        .bind(branch)
+        .bind(quantity)
+        .execute(&app.db_pool)
+    };
+    set_stock(12).await.unwrap();
+    sqlx::query(
+        "INSERT INTO stock_reservations (product_id, location_id, quantity, status, expires_at)          VALUES ($1, $2, 3, 'active', NOW() + INTERVAL '30 minutes')",
+    )
+    .bind(product)
+    .bind(branch)
+    .execute(&app.db_pool)
+    .await
+    .unwrap();
+    assert!(is_due().await.is_none());
+    set_stock(13).await.unwrap();
+    let due = is_due().await.expect("10 saleable at the branch");
+    assert_eq!(
+        (due.location_name.as_str(), due.quantity),
+        ("Alert Branch", 10)
+    );
+
+    // A failed send counts, and the alert waits before the next try
+    stock_alerts::failed(&app.db_pool, id).await.unwrap();
+    assert!(is_due().await.is_none(), "waits 15 minutes");
+    sqlx::query("UPDATE stock_alerts SET next_attempt_at = NOW() WHERE id = $1")
+        .bind(id)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    assert!(is_due().await.is_some(), "tried again");
+
+    // Sent once: closed, listed as sent
+    assert!(stock_alerts::mark_sent(&app.db_pool, id).await.unwrap());
+    assert!(!stock_alerts::mark_sent(&app.db_pool, id).await.unwrap());
+    assert!(is_due().await.is_none());
+    let (_, listed) = admin_api_call(&app, &token, Method::GET, path, None).await;
+    assert!(listed["alerts"][0]["notified_at"].is_string(), "{listed}");
+
+    // What is in stock now cannot be asked for: it can be ordered
+    let (status, _) =
+        ask(serde_json::json!({ "product_id": product, "location_id": branch, "quantity": 2 }))
+            .await;
+    assert_eq!(status, 409);
+
+    // A branch by its slug
+    let slug: String = sqlx::query_scalar("SELECT slug FROM inventory_locations WHERE id = $1")
+        .bind(branch)
+        .fetch_one(&app.db_pool)
+        .await
+        .unwrap();
+    let (status, by_slug) =
+        ask(serde_json::json!({ "product_id": product, "location": slug, "quantity": 50 })).await;
+    assert_eq!(
+        (status, &by_slug["location_name"]),
+        (201, &serde_json::json!("Alert Branch"))
+    );
+
+    // An alert whose branch goes private can never fire: the check closes it
+    let (_, doomed) =
+        ask(serde_json::json!({ "product_id": product, "location_id": branch, "quantity": 50 }))
+            .await;
+    sqlx::query("UPDATE inventory_locations SET is_public = false WHERE id = $1")
+        .bind(branch)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    assert!(stock_alerts::close_unreachable(&app.db_pool).await.unwrap() >= 1);
+    let (_, listed) = admin_api_call(&app, &token, Method::GET, path, None).await;
+    let still_open = listed["alerts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["id"] == doomed["id"]);
+    assert!(!still_open, "{listed}");
+
+    // Closing: own alerts only, once
+    let (_, open) = ask(serde_json::json!({ "product_id": product })).await;
+    let close = format!("{path}/{}", open["id"].as_str().unwrap());
+    let (other, other_password) = app.create_test_customer().await.unwrap();
+    let (other_token, _) = sign_in(&app, &other.email, &other_password).await;
+    let not_theirs = admin_api_call(&app, &other_token, Method::DELETE, &close, None).await;
+    assert_eq!(not_theirs.0, 404);
+    assert_eq!(
+        admin_api_call(&app, &token, Method::DELETE, &close, None)
+            .await
+            .0,
+        204
+    );
+    assert_eq!(
+        admin_api_call(&app, &token, Method::DELETE, &close, None)
+            .await
+            .0,
+        404
+    );
+    app.cleanup().await.ok();
+}
+
 /// Make `customer` an admin
 async fn make_admin(app: &TestApp, customer: &Customer) {
     sqlx::query("UPDATE customers SET role = 'admin' WHERE id = $1")

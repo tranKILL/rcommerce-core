@@ -343,3 +343,27 @@ Artık giriş yapamıyorsanız {{ support_email }} adresine yazın.
 
 {{ company_name }}
 '''
+
+[stock_alert]
+subject = "Yeniden stokta: {{ product_name }}"
+heading = "Yeniden stokta"
+intro = "Merhaba {{ customer_name }}, iyi haber: {{ product_name }} yeniden stokta."
+branch = "Depo"
+available = "Mevcut"
+available_value = "en az {{ quantity }}"
+hurry = "Stok hızlı tükenir: emin olmak için şimdi sipariş verin."
+button = "Ürünü gör"
+closed = "Size haber vermemizi istemiştiniz; bu uyarı artık kapandı."
+text = '''
+Merhaba {{ customer_name }},
+
+İyi haber: {{ product_name }} yeniden stokta.
+Depo: {{ location_name }}
+Mevcut: en az {{ quantity }}
+
+{{ product_url }}
+
+Stok hızlı tükenir: emin olmak için şimdi sipariş verin.
+
+{{ company_name }}
+'''

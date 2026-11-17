@@ -344,3 +344,27 @@ If you can no longer sign in, write to {{ support_email }}.
 
 {{ company_name }}
 '''
+
+[stock_alert]
+subject = "Back in stock: {{ product_name }}"
+heading = "Back in stock"
+intro = "Hi {{ customer_name }}, good news: {{ product_name }} is back in stock."
+branch = "Branch"
+available = "Available"
+available_value = "at least {{ quantity }}"
+hurry = "Stock moves fast: order now to be sure of it."
+button = "See the product"
+closed = "You asked us to tell you when it was back; this alert is now closed."
+text = '''
+Hi {{ customer_name }},
+
+Good news: {{ product_name }} is back in stock.
+Branch: {{ location_name }}
+Available: at least {{ quantity }}
+
+{{ product_url }}
+
+Stock moves fast: order now to be sure of it.
+
+{{ company_name }}
+'''

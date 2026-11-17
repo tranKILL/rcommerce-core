@@ -343,3 +343,27 @@ Jeśli nie możesz się już zalogować, napisz na {{ support_email }}.
 
 {{ company_name }}
 '''
+
+[stock_alert]
+subject = "Znów dostępne: {{ product_name }}"
+heading = "Znów dostępne"
+intro = "Dzień dobry, {{ customer_name }}! Dobra wiadomość: produkt {{ product_name }} jest znów dostępny."
+branch = "Skład"
+available = "Dostępne"
+available_value = "co najmniej {{ quantity }}"
+hurry = "Zapasy szybko się kończą: zamów teraz, aby mieć pewność."
+button = "Zobacz produkt"
+closed = "Prosiłeś nas o powiadomienie; to powiadomienie jest już zamknięte."
+text = '''
+Dzień dobry, {{ customer_name }}!
+
+Dobra wiadomość: produkt {{ product_name }} jest znów dostępny.
+Skład: {{ location_name }}
+Dostępne: co najmniej {{ quantity }}
+
+{{ product_url }}
+
+Zapasy szybko się kończą: zamów teraz, aby mieć pewność.
+
+{{ company_name }}
+'''

@@ -343,3 +343,27 @@ Se já não conseguir iniciar sessão, escreva para {{ support_email }}.
 
 {{ company_name }}
 '''
+
+[stock_alert]
+subject = "De novo em stock: {{ product_name }}"
+heading = "De novo em stock"
+intro = "Olá {{ customer_name }}, boas notícias: {{ product_name }} está de novo em stock."
+branch = "Armazém"
+available = "Disponível"
+available_value = "pelo menos {{ quantity }}"
+hurry = "O stock esgota depressa: encomende já para garantir."
+button = "Ver o produto"
+closed = "Pediu-nos que o avisássemos; este alerta está agora fechado."
+text = '''
+Olá {{ customer_name }},
+
+Boas notícias: {{ product_name }} está de novo em stock.
+Armazém: {{ location_name }}
+Disponível: pelo menos {{ quantity }}
+
+{{ product_url }}
+
+O stock esgota depressa: encomende já para garantir.
+
+{{ company_name }}
+'''

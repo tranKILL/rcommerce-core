@@ -339,6 +339,11 @@ impl Migrator {
                 "two_factor",
                 include_str!("../../migrations/048_two_factor.sql"),
             ),
+            (
+                49,
+                "stock_alerts",
+                include_str!("../../migrations/049_stock_alerts.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

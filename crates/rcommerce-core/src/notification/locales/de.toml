@@ -343,3 +343,27 @@ Wenn Sie sich nicht mehr anmelden können, schreiben Sie an {{ support_email }}.
 
 {{ company_name }}
 '''
+
+[stock_alert]
+subject = "Wieder vorrätig: {{ product_name }}"
+heading = "Wieder vorrätig"
+intro = "Hallo {{ customer_name }}, gute Nachricht: {{ product_name }} ist wieder vorrätig."
+branch = "Standort"
+available = "Verfügbar"
+available_value = "mindestens {{ quantity }}"
+hurry = "Der Bestand ist schnell weg: Bestellen Sie jetzt, um sicherzugehen."
+button = "Zum Produkt"
+closed = "Sie wollten benachrichtigt werden; diese Benachrichtigung ist jetzt abgeschlossen."
+text = '''
+Hallo {{ customer_name }},
+
+Gute Nachricht: {{ product_name }} ist wieder vorrätig.
+Standort: {{ location_name }}
+Verfügbar: mindestens {{ quantity }}
+
+{{ product_url }}
+
+Der Bestand ist schnell weg: Bestellen Sie jetzt, um sicherzugehen.
+
+{{ company_name }}
+'''

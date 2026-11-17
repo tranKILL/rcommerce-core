@@ -343,3 +343,27 @@ Se non riesci più ad accedere, scrivi a {{ support_email }}.
 
 {{ company_name }}
 '''
+
+[stock_alert]
+subject = "Di nuovo disponibile: {{ product_name }}"
+heading = "Di nuovo disponibile"
+intro = "Ciao {{ customer_name }}, buone notizie: {{ product_name }} è di nuovo disponibile."
+branch = "Deposito"
+available = "Disponibile"
+available_value = "almeno {{ quantity }}"
+hurry = "Le scorte vanno via in fretta: ordina ora per essere sicuro di averlo."
+button = "Vedi il prodotto"
+closed = "Ci avevi chiesto di avvisarti; questo avviso è ora chiuso."
+text = '''
+Ciao {{ customer_name }},
+
+Buone notizie: {{ product_name }} è di nuovo disponibile.
+Deposito: {{ location_name }}
+Disponibile: almeno {{ quantity }}
+
+{{ product_url }}
+
+Le scorte vanno via in fretta: ordina ora per essere sicuro di averlo.
+
+{{ company_name }}
+'''

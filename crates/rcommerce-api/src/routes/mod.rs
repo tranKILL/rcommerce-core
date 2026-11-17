@@ -38,6 +38,7 @@ pub mod review;
 pub mod security_notice;
 pub mod staff_lists;
 pub mod statistics;
+pub mod stock_alerts;
 pub mod subscription;
 pub mod two_factor;
 pub mod webhook;

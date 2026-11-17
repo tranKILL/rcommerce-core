@@ -20,6 +20,8 @@ pub mod job_names {
     pub const PEPPOL_DELIVERY: &str = "peppol_delivery";
     /// Deletion of carts nobody touched for months (background loop)
     pub const CART_CLEANUP: &str = "cart_cleanup";
+    /// Stock alerts whose stock arrived (background loop)
+    pub const STOCK_ALERTS: &str = "stock_alerts";
 }
 
 /// Run `job` unless another database session is running the job of the same

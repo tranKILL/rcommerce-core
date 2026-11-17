@@ -84,6 +84,7 @@ impl NotificationTemplate {
             "welcome_html" => Ok(Self::welcome_html()),
             "password_reset_html" => Ok(Self::password_reset_html()),
             "security_notice_html" => Ok(Self::security_notice_html()),
+            "stock_alert_html" => Ok(Self::stock_alert_html()),
             "verify_email_html" => Ok(Self::verify_email_html()),
             "abandoned_cart_html" => Ok(Self::abandoned_cart_html()),
             _ => Err(Error::not_found("Template not found")),
@@ -176,6 +177,7 @@ impl NotificationTemplate {
             "security_notice.html" => {
                 Ok(include_str!("templates/security_notice.html").to_string())
             }
+            "stock_alert.html" => Ok(include_str!("templates/stock_alert.html").to_string()),
             "abandoned_cart.html" => Ok(include_str!("templates/abandoned_cart.html").to_string()),
             "verify_email.html" => Ok(include_str!("templates/verify_email.html").to_string()),
             _ => Err(Error::not_found("HTML template not found")),
@@ -818,6 +820,30 @@ Questions? {{ contact_support_url }}
                 "security_url".to_string(),
                 "company_name".to_string(),
                 "support_email".to_string(),
+            ],
+        }
+    }
+
+    /// A product a customer asked about is in stock at a branch
+    fn stock_alert_html() -> Self {
+        Self {
+            id: "stock_alert_html".to_string(),
+            name: "Stock Alert HTML".to_string(),
+            subject: "{{ t.subject }}".to_string(),
+            body: "{{ t.text }}".to_string(),
+            html_body: Some(
+                Self::load_html_template("stock_alert.html")
+                    .unwrap_or_else(|_| Self::get_default_html_template()),
+            ),
+            locale: i18n::BASE_LOCALE.to_string(),
+            channel: crate::notification::NotificationChannel::Email,
+            variables: vec![
+                "customer_name".to_string(),
+                "product_name".to_string(),
+                "location_name".to_string(),
+                "quantity".to_string(),
+                "product_url".to_string(),
+                "company_name".to_string(),
             ],
         }
     }

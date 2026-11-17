@@ -343,3 +343,27 @@ Si ya no puede iniciar sesión, escriba a {{ support_email }}.
 
 {{ company_name }}
 '''
+
+[stock_alert]
+subject = "De nuevo en stock: {{ product_name }}"
+heading = "De nuevo en stock"
+intro = "Hola, {{ customer_name }}: buenas noticias, {{ product_name }} vuelve a estar en stock."
+branch = "Almacén"
+available = "Disponible"
+available_value = "al menos {{ quantity }}"
+hurry = "El stock vuela: haga su pedido ahora para asegurárselo."
+button = "Ver el producto"
+closed = "Nos pidió que le avisáramos; esta alerta queda cerrada."
+text = '''
+Hola, {{ customer_name }}:
+
+Buenas noticias: {{ product_name }} vuelve a estar en stock.
+Almacén: {{ location_name }}
+Disponible: al menos {{ quantity }}
+
+{{ product_url }}
+
+El stock vuela: haga su pedido ahora para asegurárselo.
+
+{{ company_name }}
+'''

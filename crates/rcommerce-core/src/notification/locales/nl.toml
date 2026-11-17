@@ -343,3 +343,27 @@ Kunt u zich niet meer aanmelden? Schrijf dan naar {{ support_email }}.
 
 {{ company_name }}
 '''
+
+[stock_alert]
+subject = "Weer op voorraad: {{ product_name }}"
+heading = "Weer op voorraad"
+intro = "Beste {{ customer_name }}, goed nieuws: {{ product_name }} is weer op voorraad."
+branch = "Depot"
+available = "Beschikbaar"
+available_value = "minstens {{ quantity }}"
+hurry = "De voorraad gaat snel: bestel nu om zeker te zijn."
+button = "Bekijk het product"
+closed = "U vroeg ons om u te verwittigen; deze melding is nu afgesloten."
+text = '''
+Beste {{ customer_name }},
+
+Goed nieuws: {{ product_name }} is weer op voorraad.
+Depot: {{ location_name }}
+Beschikbaar: minstens {{ quantity }}
+
+{{ product_url }}
+
+De voorraad gaat snel: bestel nu om zeker te zijn.
+
+{{ company_name }}
+'''

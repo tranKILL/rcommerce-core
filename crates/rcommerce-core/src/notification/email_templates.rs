@@ -341,6 +341,34 @@ impl EmailNotificationFactory {
         Self::create_notification(recipient_email, &template, vars, branding)
     }
 
+    /// Tell a customer that a product they asked about is in stock at a branch
+    /// (`location_name`), at least `quantity` of it
+    #[allow(clippy::too_many_arguments)]
+    pub fn stock_alert(
+        recipient_email: &str,
+        customer_name: &str,
+        product_name: &str,
+        location_name: &str,
+        quantity: i32,
+        product_url: &str,
+        branding: &crate::config::BrandingConfig,
+        locale: &str,
+    ) -> Result<Notification> {
+        let template = NotificationTemplate::load_localized("stock_alert_html", locale)?;
+
+        let mut vars = TemplateVariables::new();
+        vars.insert("customer_name", customer_name);
+        vars.insert("product_name", product_name);
+        vars.insert("location_name", location_name);
+        vars.insert("quantity", quantity.to_string());
+        vars.insert("product_url", product_url);
+        vars.insert("company_name", &branding.name);
+        vars.insert("support_email", &branding.support_email);
+        vars.insert("accent_color", &branding.accent_color);
+
+        Self::create_notification(recipient_email, &template, vars, branding)
+    }
+
     /// Create notification from template and variables
     fn create_notification(
         recipient_email: &str,
@@ -752,6 +780,34 @@ mod tests {
         assert!(html.contains("123 Main St"));
         assert!(html.contains("New York"));
     }
+    /// The stock alert reads in every language with the product, branch, quantity
+    /// and link filled in
+    #[test]
+    fn stock_alerts_read_in_every_language() {
+        let branding = crate::config::BrandingConfig::default();
+        let url = "https://shop.example/products/ciment-25-kg";
+        for locale in ["en", "fr", "nl", "de", "it", "es", "pt", "tr", "ro", "pl"] {
+            let mail = EmailNotificationFactory::stock_alert(
+                "ann@example.com",
+                "Ann",
+                "Ciment <25 kg>",
+                "North depot",
+                12,
+                url,
+                &branding,
+                locale,
+            )
+            .unwrap();
+            let html = mail.html_body.clone().unwrap();
+            assert!(mail.subject.contains("Ciment <25 kg>"), "{locale}");
+            assert!(html.contains("Ciment &lt;25 kg&gt;") && html.contains("North depot"));
+            assert!(html.contains("12") && html.contains(url) && mail.body.contains(url));
+            for text in [&html, &mail.body, &mail.subject] {
+                assert!(!text.contains("{{"), "{locale}: {text}");
+            }
+        }
+    }
+
     /// Each change the owner is told about reads in every language, with its own
     /// subject and text, and nothing left untranslated or unfilled
     #[test]

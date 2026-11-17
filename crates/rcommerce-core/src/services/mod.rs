@@ -30,6 +30,7 @@ pub mod promotion_service;
 pub mod review_service;
 pub mod staff_service;
 pub mod statistics_service;
+pub mod stock_alerts;
 pub mod stock_availability;
 pub mod subscription_service;
 pub mod two_factor;

@@ -343,3 +343,27 @@ Dacă nu vă mai puteți conecta, scrieți la {{ support_email }}.
 
 {{ company_name }}
 '''
+
+[stock_alert]
+subject = "Din nou în stoc: {{ product_name }}"
+heading = "Din nou în stoc"
+intro = "Bună ziua, {{ customer_name }}, vești bune: {{ product_name }} este din nou în stoc."
+branch = "Depozit"
+available = "Disponibil"
+available_value = "cel puțin {{ quantity }}"
+hurry = "Stocul se epuizează repede: comandați acum ca să fiți sigur."
+button = "Vedeți produsul"
+closed = "Ne-ați cerut să vă anunțăm; această alertă este acum închisă."
+text = '''
+Bună ziua, {{ customer_name }},
+
+Vești bune: {{ product_name }} este din nou în stoc.
+Depozit: {{ location_name }}
+Disponibil: cel puțin {{ quantity }}
+
+{{ product_url }}
+
+Stocul se epuizează repede: comandați acum ca să fiți sigur.
+
+{{ company_name }}
+'''
