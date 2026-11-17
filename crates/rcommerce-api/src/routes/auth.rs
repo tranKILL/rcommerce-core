@@ -363,11 +363,15 @@ pub(crate) async fn sign_in(
     remember_me: bool,
     how: &SignedIn,
 ) -> Result<LoginResponse, Error> {
-    let access_token =
-        state
-            .auth_service
-            .issue_access_token(customer.id, &customer.email, &customer.role, how)?;
-    let refresh_token = start_session(state, customer.id, remember_me, how.mfa()).await?;
+    let (session, refresh_token) =
+        start_session(state, customer.id, remember_me, how.mfa()).await?;
+    let how = how.clone().in_session(Some(session.session_id));
+    let access_token = state.auth_service.issue_access_token(
+        customer.id,
+        &customer.email,
+        &customer.role,
+        &how,
+    )?;
     Ok(LoginResponse {
         access_token,
         refresh_token,
@@ -511,19 +515,20 @@ async fn send_verification_email(
     Ok(())
 }
 
-/// Open a refresh-token session and return its first refresh token; `mfa`: the
-/// sign-in used a second factor
+/// Open a refresh-token session and return it with its first refresh token; `mfa`:
+/// the sign-in used a second factor
 async fn start_session(
     state: &AppState,
     customer_id: Uuid,
     remember_me: bool,
     mfa: bool,
-) -> Result<String, Error> {
+) -> Result<(auth_session::SessionToken, String), Error> {
     let lifetime = state.auth_service.refresh_lifetime(remember_me);
     let session = auth_session::start(state.db.pool(), customer_id, lifetime, mfa).await?;
-    state
+    let token = state
         .auth_service
-        .generate_refresh_token(customer_id, &session)
+        .generate_refresh_token(customer_id, &session)?;
+    Ok((session, token))
 }
 
 /// Decode a refresh token (signature, expiry, type)
@@ -591,7 +596,7 @@ pub async fn refresh_token(
         auth_session::revoke(pool, claims.sub, session.session_id, reason).await?;
         return Err(Error::unauthorized("Sign in again with your second factor"));
     }
-    let how = SignedIn::refreshed(mfa);
+    let how = SignedIn::refreshed(mfa).in_session(Some(session.session_id));
     let access_token =
         state
             .auth_service
@@ -605,8 +610,8 @@ pub async fn refresh_token(
     }))
 }
 
-/// Sign out: end the session of the given refresh token. Access tokens already issued
-/// stay valid until they expire (`security.jwt.expiry_hours`).
+/// Sign out: end the session of the given refresh token, and with it the access
+/// tokens issued in it
 pub async fn logout(
     State(state): State<AppState>,
     Json(payload): Json<RefreshTokenRequest>,
@@ -695,10 +700,11 @@ async fn replace_password(
         .await?;
     let pool = state.db.pool();
     auth_session::revoke_all(pool, customer.id, RevokeReason::PasswordChange).await?;
-    let refresh_token = start_session(state, customer.id, false, mfa).await?;
+    password_changed(state, customer, "change").await;
+    let (session, refresh_token) = start_session(state, customer.id, false, mfa).await?;
     // Not a proof of identity for sensitive changes: those need `/auth/reauth` (a
     // second factor when the account has one), not the password alone
-    let how = SignedIn::refreshed(mfa);
+    let how = SignedIn::refreshed(mfa).in_session(Some(session.session_id));
     let access_token = state.auth_service.issue_access_token(
         customer.id,
         &customer.email,
@@ -711,6 +717,18 @@ async fn replace_password(
         token_type: "Bearer".to_string(),
         expires_in: state.auth_service.access_token_lifetime_secs(),
     })
+}
+
+/// Log a password change or reset (`how`) and tell the account's owner
+async fn password_changed(
+    state: &AppState,
+    customer: &rcommerce_core::models::Customer,
+    how: &str,
+) {
+    use rcommerce_core::services::two_factor::events::{Event, PASSWORD_CHANGED};
+    let detail = serde_json::json!({ "how": how });
+    let event = Event::own(customer.id, PASSWORD_CHANGED, None, detail);
+    super::security_notice::record(state, customer, event).await;
 }
 
 /// Request password reset
@@ -741,9 +759,11 @@ pub async fn request_password_reset(
     let customer = customer.unwrap();
 
     // Generate reset token (short-lived JWT)
-    let reset_token = state
-        .auth_service
-        .generate_password_reset_token(customer.id, &customer.email)?;
+    let reset_token = state.auth_service.generate_password_reset_token(
+        customer.id,
+        &customer.email,
+        customer.password_hash.as_deref(),
+    )?;
 
     // Send reset email via SMTP if configured
     let store_url = &state.storefront_url;
@@ -807,6 +827,18 @@ pub async fn confirm_password_reset(
     let claims = state
         .auth_service
         .verify_password_reset_token(&payload.token)?;
+    // A link works once: after it (or any password change) the password it names is gone
+    let customer = state
+        .customer_service
+        .find_by_id(claims.sub)
+        .await?
+        .ok_or_else(|| Error::unauthorized("Invalid reset link"))?;
+    let current = customer.password_hash.as_deref();
+    if !rcommerce_core::services::AuthService::reset_token_is_current(&claims, current) {
+        return Err(Error::unauthorized(
+            "This reset link was already used or is out of date",
+        ));
+    }
 
     // Hash new password
     let password_hash = state.auth_service.hash_password(&payload.password)?;
@@ -820,6 +852,7 @@ pub async fn confirm_password_reset(
     // A reset means the old password may be known to someone else: end every session.
     let pool = state.db.pool();
     auth_session::revoke_all(pool, claims.sub, RevokeReason::PasswordChange).await?;
+    password_changed(&state, &customer, "reset").await;
 
     // Imported customers proving email access via password reset are marked verified.
     state

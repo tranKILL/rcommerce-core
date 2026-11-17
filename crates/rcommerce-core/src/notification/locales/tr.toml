@@ -305,3 +305,41 @@ status_on_hold = "Beklemede"
 status_completed = "Tamamlandı"
 status_cancelled = "İptal edildi"
 status_refunded = "İade edildi"
+
+[security_notice]
+password_changed_heading = "Şifre değiştirildi"
+password_changed_text = "Hesabınızın şifresi değiştirildi. Oturum açık olan cihazlardan çıkış yapıldı."
+intro = "Merhaba {{ customer_name }}, {{ company_name }} hesabınıza giriş şekliniz değişti."
+when = "Ne zaman"
+not_you_title = "Bunu siz mi yaptınız?"
+not_you = "Siz yapmadıysanız şifrenizi hemen değiştirin, ardından güvenlik ayarlarınızdaki giriş yöntemlerini kontrol edin. Artık giriş yapamıyorsanız {{ support_email }} adresine yazın."
+button = "Güvenlik ayarlarını aç"
+totp_added_heading = "Doğrulama uygulaması açıldı"
+totp_added_text = "Girişlerinizi onaylayan kodları artık bir doğrulama uygulaması veriyor."
+totp_removed_heading = "Doğrulama uygulaması kapatıldı"
+totp_removed_text = "Doğrulama uygulaması artık girişlerinizi onaylamıyor."
+passkey_added_heading = "Yeni geçiş anahtarı eklendi"
+passkey_added_text = "Yeni bir geçiş anahtarıyla artık hesabınıza giriş yapılabilir."
+passkey_removed_heading = "Geçiş anahtarı kaldırıldı"
+passkey_removed_text = "Bir geçiş anahtarı hesabınızdan kaldırıldı; onunla artık giriş yapılamaz."
+recovery_code_used_heading = "Kurtarma kodu kullanıldı"
+recovery_code_used_text = "Kurtarma kodlarınızdan biri bir girişi onaylamak için kullanıldı. Her kod yalnızca bir kez geçerlidir: azaldığında güvenlik ayarlarınızdan yenilerini oluşturun."
+recovery_codes_renewed_heading = "Yeni kurtarma kodları"
+recovery_codes_renewed_text = "Hesabınız için yeni kurtarma kodları oluşturuldu. Öncekiler artık geçerli değil."
+factors_reset_heading = "İki adımlı doğrulama kaldırıldı"
+factors_reset_text = "Bir mağaza yöneticisi doğrulama uygulamanızı, geçiş anahtarlarınızı ve kurtarma kodlarınızı kaldırdı ve tüm oturumlarınızı kapattı. Bir sonraki girişinizde iki adımlı doğrulamayı yeniden kurun."
+text = '''
+Merhaba {{ customer_name }},
+
+{{ heading }}
+{{ change }}
+
+Ne zaman: {{ when }}
+
+Bunu siz mi yaptınız? Siz yapmadıysanız şifrenizi hemen değiştirin, ardından güvenlik ayarlarınızdaki giriş yöntemlerini kontrol edin:
+{{ security_url }}
+
+Artık giriş yapamıyorsanız {{ support_email }} adresine yazın.
+
+{{ company_name }}
+'''

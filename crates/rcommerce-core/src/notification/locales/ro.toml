@@ -305,3 +305,41 @@ status_on_hold = "În așteptare"
 status_completed = "Finalizată"
 status_cancelled = "Anulată"
 status_refunded = "Rambursată"
+
+[security_notice]
+password_changed_heading = "Parolă schimbată"
+password_changed_text = "Parola contului dumneavoastră a fost schimbată. Dispozitivele conectate au fost deconectate."
+intro = "Bună ziua, {{ customer_name }}, modul în care vă conectați la contul de la {{ company_name }} s-a schimbat."
+when = "Când"
+not_you_title = "Nu ați fost dumneavoastră?"
+not_you = "Schimbați imediat parola, apoi verificați metodele de conectare în setările de securitate. Dacă nu vă mai puteți conecta, scrieți la {{ support_email }}."
+button = "Deschideți setările de securitate"
+totp_added_heading = "Aplicație de autentificare activată"
+totp_added_text = "O aplicație de autentificare oferă acum codurile care vă confirmă conectările."
+totp_removed_heading = "Aplicație de autentificare dezactivată"
+totp_removed_text = "Aplicația de autentificare nu vă mai confirmă conectările."
+passkey_added_heading = "Cheie de acces nouă adăugată"
+passkey_added_text = "Cu o cheie de acces nouă se poate face acum conectarea la contul dumneavoastră."
+passkey_removed_heading = "Cheie de acces eliminată"
+passkey_removed_text = "O cheie de acces a fost eliminată din contul dumneavoastră și nu mai poate fi folosită pentru conectare."
+recovery_code_used_heading = "Cod de recuperare folosit"
+recovery_code_used_text = "Unul dintre codurile de recuperare a fost folosit pentru a confirma o conectare. Fiecare cod funcționează o singură dată: creați altele noi în setările de securitate când mai rămân puține."
+recovery_codes_renewed_heading = "Coduri de recuperare noi"
+recovery_codes_renewed_text = "Au fost create coduri de recuperare noi pentru contul dumneavoastră. Cele vechi nu mai funcționează."
+factors_reset_heading = "Verificarea în doi pași a fost eliminată"
+factors_reset_text = "Un administrator al magazinului a eliminat aplicația de autentificare, cheile de acces și codurile de recuperare și v-a deconectat peste tot. Configurați din nou verificarea în doi pași la următoarea conectare."
+text = '''
+Bună ziua, {{ customer_name }},
+
+{{ heading }}
+{{ change }}
+
+Când: {{ when }}
+
+Nu ați fost dumneavoastră? Schimbați imediat parola, apoi verificați metodele de conectare în setările de securitate:
+{{ security_url }}
+
+Dacă nu vă mai puteți conecta, scrieți la {{ support_email }}.
+
+{{ company_name }}
+'''

@@ -115,11 +115,16 @@ POST /api/v1/auth/refresh
   `401`), counted by the login throttle. Every session of the account ends and
   the response carries fresh tokens, in the refresh response's shape.
 - A password reset (`POST /api/v1/auth/password-reset/confirm`) also ends every
-  session.
-- Access tokens are not looked up per request: one already issued stays valid
-  until it expires, even after logout. Keep `security.jwt.expiry_hours` short
-  (for example 1) when sign-out must take effect quickly; apps refresh in the
-  background.
+  session. A reset link names the password it replaces, so it works once: after it
+  is used, or after any password change, it gets `401 Unauthorized`.
+- Access tokens name their session (`sid` claim) and end with it: after a
+  logout, a password change or reset, a replayed refresh token or an admin's
+  2FA reset, they get `401 Unauthorized` on protected and admin routes (optional
+  authentication treats them as absent). Each process caches whether a session
+  is live for 30 seconds; ending a session through the API clears its entry at
+  once on that process, so another process behind the same load balancer can
+  accept the token for up to 30 seconds more. Tokens issued before this change
+  carry no `sid` and stay valid until they expire.
 - Refresh tokens issued before sessions existed are accepted once and exchanged
   for a session that ends when the old token would have expired.
 

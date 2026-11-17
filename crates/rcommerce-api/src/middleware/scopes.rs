@@ -77,6 +77,9 @@ pub async fn require_scope_middleware(
             return Err(StatusCode::UNAUTHORIZED);
         }
     };
+    if !crate::middleware::session_live(state.db.pool(), &claims).await {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
 
     // Check permissions using ScopeChecker
     let scope_checker =

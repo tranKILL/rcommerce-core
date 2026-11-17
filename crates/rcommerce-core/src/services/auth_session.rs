@@ -6,13 +6,85 @@
 //! session means a token was copied: the session is revoked, which also ends the
 //! copy's access to it.
 //!
-//! Access tokens stay stateless (no lookup per request); they end at their own expiry.
+//! Access tokens name their session too (`sid`): a request with one is refused once
+//! the session has ended (sign-out, password change, reset, refresh reuse). Whether a
+//! session is live is cached for 30 seconds per process, and ending a session here
+//! clears its entry at once.
 
 use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::Result;
+
+/// How long a liveness answer is trusted without asking the database again
+const LIVE_FOR: std::time::Duration = std::time::Duration::from_secs(30);
+/// Entries kept at most (the cache is emptied beyond)
+const LIVE_MAX: usize = 100_000;
+
+/// Cached liveness answers, and a counter every revocation bumps: an answer read
+/// from the database before a revocation is not cached after it
+#[derive(Default)]
+struct LiveCache {
+    /// session id -> (live, owner, checked at)
+    answers: HashMap<Uuid, (bool, Uuid, Instant)>,
+    generation: u64,
+}
+
+static LIVE: OnceLock<Mutex<LiveCache>> = OnceLock::new();
+
+fn live_cache() -> &'static Mutex<LiveCache> {
+    LIVE.get_or_init(Mutex::default)
+}
+
+/// Forget cached answers for one session, or for every session of an account
+fn forget(session_id: Option<Uuid>, customer_id: Uuid) {
+    if let Ok(mut cache) = live_cache().lock() {
+        cache.generation += 1;
+        match session_id {
+            Some(id) => {
+                cache.answers.remove(&id);
+            }
+            None => cache
+                .answers
+                .retain(|_, (_, owner, _)| *owner != customer_id),
+        }
+    }
+}
+
+/// Whether session `session_id` of `customer_id` is live: not ended, not expired
+pub async fn is_live(pool: &PgPool, customer_id: Uuid, session_id: Uuid) -> Result<bool> {
+    let mut generation = None;
+    if let Ok(cache) = live_cache().lock() {
+        if let Some((answer, owner, at)) = cache.answers.get(&session_id) {
+            if *owner == customer_id && at.elapsed() < LIVE_FOR {
+                return Ok(*answer);
+            }
+        }
+        generation = Some(cache.generation);
+    }
+    let answer: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM auth_sessions WHERE id = $1 AND customer_id = $2 \
+           AND revoked_at IS NULL AND expires_at > NOW())",
+    )
+    .bind(session_id)
+    .bind(customer_id)
+    .fetch_one(pool)
+    .await?;
+    if let Ok(mut cache) = live_cache().lock() {
+        if Some(cache.generation) == generation {
+            if cache.answers.len() >= LIVE_MAX {
+                cache.answers.clear();
+            }
+            let entry = (answer, customer_id, Instant::now());
+            cache.answers.insert(session_id, entry);
+        }
+    }
+    Ok(answer)
+}
 
 /// The token a session currently accepts, and when the session ends
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +209,7 @@ pub async fn rotate(
     .bind(RevokeReason::Reuse.as_str())
     .execute(pool)
     .await?;
+    forget(Some(session_id), customer_id);
     Ok(if revoked.rows_affected() > 0 {
         Rotation::Reused
     } else {
@@ -151,6 +224,8 @@ pub async fn revoke(
     session_id: Uuid,
     reason: RevokeReason,
 ) -> Result<()> {
+    // Before too: a check that reads the session meanwhile does not cache it as live
+    forget(Some(session_id), customer_id);
     sqlx::query(
         "UPDATE auth_sessions SET revoked_at = NOW(), revoked_reason = $3 \
          WHERE id = $1 AND customer_id = $2 AND revoked_at IS NULL",
@@ -160,6 +235,7 @@ pub async fn revoke(
     .bind(reason.as_str())
     .execute(pool)
     .await?;
+    forget(Some(session_id), customer_id);
     Ok(())
 }
 
@@ -170,6 +246,7 @@ pub async fn revoke_without_mfa(
     customer_id: Uuid,
     reason: RevokeReason,
 ) -> Result<u64> {
+    forget(None, customer_id);
     let done = sqlx::query(
         "UPDATE auth_sessions SET revoked_at = NOW(), revoked_reason = $2 \
          WHERE customer_id = $1 AND NOT mfa AND revoked_at IS NULL AND expires_at > NOW()",
@@ -178,11 +255,15 @@ pub async fn revoke_without_mfa(
     .bind(reason.as_str())
     .execute(pool)
     .await?;
+    end_setups(pool, customer_id).await?;
+    forget(None, customer_id);
     Ok(done.rows_affected())
 }
 
-/// End every live session of `customer_id`; returns how many were ended
+/// End every live session of `customer_id`, and its setup tokens; returns how many
+/// sessions were ended
 pub async fn revoke_all(pool: &PgPool, customer_id: Uuid, reason: RevokeReason) -> Result<u64> {
+    forget(None, customer_id);
     let done = sqlx::query(
         "UPDATE auth_sessions SET revoked_at = NOW(), revoked_reason = $2 \
          WHERE customer_id = $1 AND revoked_at IS NULL AND expires_at > NOW()",
@@ -191,7 +272,21 @@ pub async fn revoke_all(pool: &PgPool, customer_id: Uuid, reason: RevokeReason) 
     .bind(reason.as_str())
     .execute(pool)
     .await?;
+    end_setups(pool, customer_id).await?;
+    forget(None, customer_id);
     Ok(done.rows_affected())
+}
+
+/// Delete the setup tokens of `customer_id` (staff adding a first factor): a
+/// password change or reset, an admin's reset or a first factor ends them
+async fn end_setups(pool: &PgPool, customer_id: Uuid) -> Result<()> {
+    use crate::services::two_factor::challenge::ChallengeKind;
+    sqlx::query("DELETE FROM auth_challenges WHERE customer_id = $1 AND kind = $2")
+        .bind(customer_id)
+        .bind(ChallengeKind::Setup.as_str())
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]

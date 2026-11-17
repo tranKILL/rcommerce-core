@@ -3305,16 +3305,119 @@ async fn test_password_change_and_reset_end_sessions() {
     assert_eq!(post_json(&app, "/auth/login", body, None).await.0, 401);
 
     // A password reset ends the sessions opened since
+    let hash: Option<String> =
+        sqlx::query_scalar("SELECT password_hash FROM customers WHERE id = $1")
+            .bind(customer.id)
+            .fetch_one(&app.db_pool)
+            .await
+            .unwrap();
     let token = app
         .app_state
         .auth_service
-        .generate_password_reset_token(customer.id, &customer.email)
+        .generate_password_reset_token(customer.id, &customer.email, hash.as_deref())
         .unwrap();
     let body = serde_json::json!({ "token": token, "password": "Reset-password-2!" });
     let (status, _) = post_json(&app, "/auth/password-reset/confirm", body, None).await;
     assert_eq!(status, 200);
     assert_eq!(refresh(&app, &fresh.unwrap()).await.0, 401);
     sign_in(&app, &customer.email, "Reset-password-2!").await;
+
+    // The link works once
+    let body = serde_json::json!({ "token": token, "password": "Reset-password-3!" });
+    let (status, _) = post_json(&app, "/auth/password-reset/confirm", body, None).await;
+    assert_eq!(status, 401);
+    sign_in(&app, &customer.email, "Reset-password-2!").await;
+    app.cleanup().await.ok();
+}
+
+/// An access token works only while its session lives: sign-out, refresh reuse, a
+/// password change or an admin reset end it at once, on customer, settings and admin
+/// routes; tokens issued without a session are still accepted until they expire
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_access_tokens_end_with_their_session() {
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let me = |token: String| {
+        let app = &app;
+        async move {
+            admin_api_call(app, &token, Method::GET, "/customers/me", None)
+                .await
+                .0
+        }
+    };
+
+    // Sign-out ends that session's access tokens, not the other device's
+    let (ended, ended_refresh) = sign_in(&app, &customer.email, &password).await;
+    let (kept, kept_refresh) = sign_in(&app, &customer.email, &password).await;
+    assert_eq!(me(ended.clone()).await, 200);
+    let body = serde_json::json!({ "refresh_token": ended_refresh });
+    assert_eq!(post_json(&app, "/auth/logout", body, None).await.0, 204);
+    assert_eq!(me(ended.clone()).await, 401);
+    let security = "/customers/me/security";
+    assert_eq!(
+        admin_api_call(&app, &ended, Method::GET, security, None)
+            .await
+            .0,
+        401
+    );
+    assert_eq!(me(kept.clone()).await, 200);
+
+    // A refresh keeps the session: old and new access tokens both work
+    let body = serde_json::json!({ "refresh_token": kept_refresh });
+    let (status, renewed) = post_json(&app, "/auth/refresh", body, None).await;
+    assert_eq!(status, 200, "{renewed}");
+    let renewed_access = renewed["access_token"].as_str().unwrap().to_string();
+    assert_eq!(me(renewed_access.clone()).await, 200);
+    assert_eq!(me(kept.clone()).await, 200);
+
+    // Replaying a used refresh token ends the session and its access tokens
+    let body = serde_json::json!({ "refresh_token": kept_refresh });
+    assert_eq!(post_json(&app, "/auth/refresh", body, None).await.0, 401);
+    assert_eq!(me(renewed_access).await, 401);
+
+    // A password change ends every session but the one it opens
+    let (old, _) = sign_in(&app, &customer.email, &password).await;
+    let body = serde_json::json!({ "current_password": password, "new_password": "N3w-password!" });
+    let (status, fresh) = post_json(&app, "/customers/me/password", body, Some(&old)).await;
+    assert_eq!(status, 200, "{fresh}");
+    assert_eq!(me(old).await, 401);
+    assert_eq!(
+        me(fresh["access_token"].as_str().unwrap().to_string()).await,
+        200
+    );
+
+    // Older tokens without a session still work until they expire
+    let legacy = app
+        .app_state
+        .auth_service
+        .generate_access_token(customer.id, &customer.email, &customer.role)
+        .unwrap();
+    assert_eq!(me(legacy).await, 200);
+
+    // Admin routes: ending the sessions (here an admin reset) shuts the staff token out
+    let (staff, staff_password) = app.create_test_customer().await.unwrap();
+    make_admin(&app, &staff).await;
+    let (staff_access, _) = sign_in(&app, &staff.email, &staff_password).await;
+    let admin = "/admin/staff/me";
+    assert_eq!(
+        admin_api_call(&app, &staff_access, Method::GET, admin, None)
+            .await
+            .0,
+        200
+    );
+    let pool = &app.db_pool;
+    let reason = rcommerce_core::services::auth_session::RevokeReason::FactorsReset;
+    rcommerce_core::services::auth_session::revoke_all(pool, staff.id, reason)
+        .await
+        .unwrap();
+    assert_eq!(
+        admin_api_call(&app, &staff_access, Method::GET, admin, None)
+            .await
+            .0,
+        401
+    );
     app.cleanup().await.ok();
 }
 
@@ -7518,6 +7621,14 @@ async fn test_authenticator_app_as_second_step() {
         401
     );
     assert!(confirmed["session"]["refresh_token"].is_string());
+    // ... and their access tokens with them
+    let (status, _) = delete_json(&app, "/customers/me/security/totp", &stale).await;
+    assert_eq!(status, 401);
+    // A refreshed token of the new session: live, but no recent proof of identity
+    let body = serde_json::json!({ "refresh_token": confirmed["session"]["refresh_token"] });
+    let (status, renewed) = post_json(&app, "/auth/refresh", body, None).await;
+    assert_eq!(status, 200, "{renewed}");
+    let stale = renewed["access_token"].as_str().unwrap().to_string();
     let code = |t: u64| totp::code_at(&secret, t).unwrap();
 
     // The password alone no longer signs in
@@ -7590,8 +7701,15 @@ async fn test_authenticator_app_as_second_step() {
         "a password change is no proof for removing a factor"
     );
     let password = "N3w-Password-2026!".to_string();
+    // The change ended the other sessions: re-verify in the one it opened
     let body = serde_json::json!({ "recovery_code": codes[1] });
-    let (status, again) = post_json(&app, "/auth/reauth", body, Some(&stale)).await;
+    assert_eq!(
+        post_json(&app, "/auth/reauth", body.clone(), Some(&stale))
+            .await
+            .0,
+        401
+    );
+    let (status, again) = post_json(&app, "/auth/reauth", body, Some(&after_change)).await;
     assert_eq!(status, 200, "{again}");
     let verified = again["access_token"].as_str().unwrap().to_string();
     assert_eq!(
@@ -7601,6 +7719,34 @@ async fn test_authenticator_app_as_second_step() {
         204
     );
     sign_in(&app, &customer.email, &password).await;
+    app.cleanup().await.ok();
+}
+
+/// A setup token ends with the account's sessions: after a password reset (or change,
+/// or an admin's reset) it opens nothing
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_setup_tokens_end_with_a_password_reset() {
+    use rcommerce_core::config::StaffMfaPolicy;
+    use rcommerce_core::services::auth_session::{self, RevokeReason};
+    let app = TestApp::new_with(|s| with_two_factor(s, StaffMfaPolicy::Required))
+        .await
+        .expect("Failed to create test app");
+    let (staff, password) = app.create_test_customer().await.unwrap();
+    make_admin(&app, &staff).await;
+    let step = password_step(&app, &staff.email, &password).await;
+    let setup = step["setup_token"].as_str().unwrap().to_string();
+    let path = "/customers/me/security/totp/setup";
+    let body = serde_json::json!({});
+    assert_eq!(
+        post_json(&app, path, body.clone(), Some(&setup)).await.0,
+        200
+    );
+
+    auth_session::revoke_all(&app.db_pool, staff.id, RevokeReason::PasswordChange)
+        .await
+        .unwrap();
+    assert_eq!(post_json(&app, path, body, Some(&setup)).await.0, 401);
     app.cleanup().await.ok();
 }
 
@@ -7730,16 +7876,15 @@ async fn test_staff_must_sign_in_with_a_second_factor() {
     assert_eq!(post_json(&app, "/auth/refresh", body, None).await.0, 401);
     let step = password_step(&app, &staff.email, &password).await;
     assert_eq!(step["code"], "second_factor_enrolment_required");
-    // An old access token re-verified with the password alone gets no staff powers
+    // The old access token ended with its session: no re-verification, no staff route
     let body = serde_json::json!({ "password": password });
-    let (status, again) = post_json(&app, "/auth/reauth", body, Some(&access)).await;
-    assert_eq!(status, 200, "{again}");
-    let without = again["access_token"].as_str().unwrap();
+    let (status, _) = post_json(&app, "/auth/reauth", body, Some(&access)).await;
+    assert_eq!(status, 401);
     assert_eq!(
-        admin_api_call(&app, without, Method::GET, "/admin/staff/me", None)
+        admin_api_call(&app, &access, Method::GET, "/admin/staff/me", None)
             .await
             .0,
-        403
+        401
     );
     app.cleanup().await.ok();
 }
@@ -7791,6 +7936,13 @@ async fn test_passkeys_sign_in_alone_or_as_second_step() {
     assert_eq!(status, 200, "{added}");
     assert_eq!(added["passkey"]["name"], "Laptop");
     assert_eq!(added["recovery_codes"].as_array().map(Vec::len), Some(10));
+    // The first factor ended the password-only session: carry on in the new one
+    let (status, _) = post_json(&app, verify_path, answer.clone(), Some(&access)).await;
+    assert_eq!(status, 401);
+    let access = added["session"]["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
     // The ceremony works once
     assert_eq!(
         post_json(&app, verify_path, answer, Some(&access)).await.0,

@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 use crate::middleware::{ClientIp, JwtAuth};
 use crate::routes::auth::{login_throttled, sign_in};
+use crate::routes::security_notice;
 use crate::state::AppState;
 use rcommerce_core::config::StaffMfaPolicy;
 use rcommerce_core::models::Customer;
@@ -135,9 +136,13 @@ pub(crate) async fn after_password(
     // No second step: the right password ends the sign-in, so its failures are cleared
     state.login_throttle.clear_pair(ip, &customer.email);
     if staff_required(state, &customer).await.map_err(fail)? {
+        let pool = state.db.pool();
+        let setup_id = challenge::create(pool, ChallengeKind::Setup, Some(customer.id), json!({}))
+            .await
+            .map_err(fail)?;
         let token = state
             .auth_service
-            .generate_mfa_setup_token(customer.id, &customer.email, remember_me)
+            .generate_mfa_setup_token(customer.id, &customer.email, remember_me, setup_id)
             .map_err(fail)?;
         let extra = json!({ "setup_token": token, "methods": enrolment_methods(state) });
         return Err(step(
@@ -284,7 +289,7 @@ pub async fn second_factor(
     state.login_throttle.clear_pair(ip, &customer.email);
     if method == "recovery" {
         let event = Event::own(customer.id, events::RECOVERY_CODE_USED, Some(ip), json!({}));
-        events::record_quietly(pool, event).await;
+        security_notice::record(&state, &customer, event).await;
     }
     finish(&state, &customer, remember_me, &["pwd", method], true, ip).await
 }
@@ -401,9 +406,9 @@ pub async fn passkey_sign_in_verify(
     .await
 }
 
-/// The bearer token of a settings or re-verification request: an access token, or
-/// (settings only) a setup token
-fn bearer(
+/// The bearer token of a settings or re-verification request: an access token of a
+/// live session, or (settings only) a setup token
+async fn bearer(
     state: &AppState,
     headers: &HeaderMap,
     setup_allowed: bool,
@@ -419,6 +424,12 @@ fn bearer(
         .map_err(fail)?;
     if claims.token_type == TokenType::MfaSetup && !setup_allowed {
         return Err(fail(Error::unauthorized("Invalid token type")));
+    }
+    if claims.token_type == TokenType::MfaSetup && !setup_open(state, &claims).await? {
+        return Err(fail(Error::unauthorized("Sign in again")));
+    }
+    if !crate::middleware::session_live(state.db.pool(), &claims).await {
+        return Err(fail(Error::unauthorized("Session has ended")));
     }
     Ok(claims)
 }
@@ -439,7 +450,7 @@ fn fresh(claims: &JwtClaims) -> Result<(), Response> {
 
 /// `GET /customers/me/security`: the account's second factors
 pub async fn security(State(state): State<AppState>, headers: HeaderMap) -> Reply {
-    let claims = bearer(&state, &headers, true)?;
+    let claims = bearer(&state, &headers, true).await?;
     let pool = state.db.pool();
     let customer = customer(&state, claims.sub).await?;
     let (factors, keys) = tokio::try_join!(
@@ -462,6 +473,17 @@ pub async fn security(State(state): State<AppState>, headers: HeaderMap) -> Repl
         "recently_verified": claims.is_fresh(FRESH_SECS),
     }))
     .into_response())
+}
+
+/// Whether a setup token's row still lives (a password change or reset, an admin's
+/// reset or a first factor deletes it)
+async fn setup_open(state: &AppState, claims: &JwtClaims) -> Result<bool, Response> {
+    let Some(id) = claims.jti else {
+        return Ok(false);
+    };
+    challenge::is_open(state.db.pool(), id, ChallengeKind::Setup, claims.sub)
+        .await
+        .map_err(fail)
 }
 
 /// A setup token adds the first factor only: once the account has one, signing in
@@ -513,7 +535,7 @@ async fn after_adding(
 
 /// `POST /customers/me/security/totp/setup`: a new secret for the authenticator app
 pub async fn totp_setup(State(state): State<AppState>, headers: HeaderMap) -> Reply {
-    let claims = bearer(&state, &headers, true)?;
+    let claims = bearer(&state, &headers, true).await?;
     fresh(&claims)?;
     let has = two_factor::factors(state.db.pool(), claims.sub)
         .await
@@ -550,7 +572,7 @@ pub async fn totp_confirm(
     client_ip: Option<Extension<ClientIp>>,
     Json(body): Json<CodeRequest>,
 ) -> Reply {
-    let claims = bearer(&state, &headers, true)?;
+    let claims = bearer(&state, &headers, true).await?;
     let key = state
         .totp_key
         .as_ref()
@@ -574,7 +596,7 @@ pub async fn totp_confirm(
     }
     lockout::succeeded(pool, customer.id).await.map_err(fail)?;
     let event = Event::own(customer.id, events::TOTP_ADDED, Some(ip), json!({}));
-    events::record_quietly(pool, event).await;
+    security_notice::record(&state, &customer, event).await;
     let reply = after_adding(&state, &claims, &customer, had.any(), "otp", ip).await?;
     Ok(Json(reply).into_response())
 }
@@ -604,19 +626,19 @@ pub async fn totp_remove(
     headers: HeaderMap,
     client_ip: Option<Extension<ClientIp>>,
 ) -> Reply {
-    let claims = bearer(&state, &headers, false)?;
+    let claims = bearer(&state, &headers, false).await?;
     fresh(&claims)?;
     let customer = customer(&state, claims.sub).await?;
     let removed = remove_factor(&state, &customer, &Factor::Totp).await?;
     let ip = Some(ip_of(client_ip));
     let event = Event::own(customer.id, events::TOTP_REMOVED, ip, json!({}));
-    events::record_quietly(state.db.pool(), event).await;
+    security_notice::record(&state, &customer, event).await;
     Ok(removed)
 }
 
 /// `POST /customers/me/security/passkeys/options`: add a passkey
 pub async fn passkey_add_options(State(state): State<AppState>, headers: HeaderMap) -> Reply {
-    let claims = bearer(&state, &headers, true)?;
+    let claims = bearer(&state, &headers, true).await?;
     fresh(&claims)?;
     let has = two_factor::factors(state.db.pool(), claims.sub)
         .await
@@ -643,7 +665,7 @@ pub async fn passkey_add_verify(
     client_ip: Option<Extension<ClientIp>>,
     Json(body): Json<PasskeyAnswer>,
 ) -> Reply {
-    let claims = bearer(&state, &headers, true)?;
+    let claims = bearer(&state, &headers, true).await?;
     let customer = customer(&state, claims.sub).await?;
     let pool = state.db.pool();
     let had = two_factor::factors(pool, customer.id).await.map_err(fail)?;
@@ -664,7 +686,7 @@ pub async fn passkey_add_verify(
     let ip = ip_of(client_ip);
     let detail = json!({ "credential_id": added.id });
     let event = Event::own(customer.id, events::PASSKEY_ADDED, Some(ip), detail);
-    events::record_quietly(pool, event).await;
+    security_notice::record(&state, &customer, event).await;
     let mut reply = after_adding(&state, &claims, &customer, had.any(), "hwk", ip).await?;
     reply["passkey"] = json!(added);
     Ok(Json(reply).into_response())
@@ -684,7 +706,7 @@ pub async fn passkey_rename(
     Path(id): Path<String>,
     Json(body): Json<RenameRequest>,
 ) -> Reply {
-    let claims = bearer(&state, &headers, false)?;
+    let claims = bearer(&state, &headers, false).await?;
     let name = body.name.trim();
     if name.is_empty() || name.chars().count() > 100 {
         return Err(fail(Error::validation("Name: 1 to 100 characters")));
@@ -705,10 +727,9 @@ pub async fn passkey_remove(
     client_ip: Option<Extension<ClientIp>>,
     Path(id): Path<String>,
 ) -> Reply {
-    let claims = bearer(&state, &headers, false)?;
+    let claims = bearer(&state, &headers, false).await?;
     fresh(&claims)?;
     let customer = customer(&state, claims.sub).await?;
-    let pool = state.db.pool();
     remove_factor(&state, &customer, &Factor::Passkey(id.clone())).await?;
     let detail = json!({ "credential_id": id });
     let event = Event::own(
@@ -717,7 +738,7 @@ pub async fn passkey_remove(
         Some(ip_of(client_ip)),
         detail,
     );
-    events::record_quietly(pool, event).await;
+    security_notice::record(&state, &customer, event).await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -727,13 +748,14 @@ pub async fn recovery_codes_renew(
     headers: HeaderMap,
     client_ip: Option<Extension<ClientIp>>,
 ) -> Reply {
-    let claims = bearer(&state, &headers, false)?;
+    let claims = bearer(&state, &headers, false).await?;
     fresh(&claims)?;
     let pool = state.db.pool();
     let factors = two_factor::factors(pool, claims.sub).await.map_err(fail)?;
     if !factors.any() {
         return Err(fail(Error::validation("Add a second factor first")));
     }
+    let customer = customer(&state, claims.sub).await?;
     let codes = recovery::replace(pool, claims.sub).await.map_err(fail)?;
     let event = Event::own(
         claims.sub,
@@ -741,7 +763,7 @@ pub async fn recovery_codes_renew(
         Some(ip_of(client_ip)),
         json!({}),
     );
-    events::record_quietly(pool, event).await;
+    security_notice::record(&state, &customer, event).await;
     Ok(Json(json!({ "recovery_codes": codes })).into_response())
 }
 
@@ -759,9 +781,20 @@ pub struct ReauthRequest {
 }
 
 /// A new access token for the proof just given: `methods` (a second factor makes it
-/// `mfa`; a password alone does not, whatever the old token said)
-fn reverified(state: &AppState, customer: &Customer, methods: &[&str], mfa: bool) -> Reply {
-    let how = SignedIn::now(methods, mfa);
+/// `mfa`; a password alone does not, whatever the old token said), in the same session
+fn reverified(
+    state: &AppState,
+    claims: &JwtClaims,
+    customer: &Customer,
+    methods: &[&str],
+    mfa: bool,
+) -> Reply {
+    // Tokens from before sessions were named in them stay outside revocation: they are
+    // not renewed here
+    if claims.sid.is_none() {
+        return Err(fail(Error::unauthorized("Sign in again")));
+    }
+    let how = SignedIn::now(methods, mfa).in_session(claims.sid);
     let token = state
         .auth_service
         .issue_access_token(customer.id, &customer.email, &customer.role, &how)
@@ -796,7 +829,7 @@ pub async fn reauth(
     client_ip: Option<Extension<ClientIp>>,
     Json(body): Json<ReauthRequest>,
 ) -> Reply {
-    let claims = bearer(&state, &headers, false)?;
+    let claims = bearer(&state, &headers, false).await?;
     let ip = ip_of(client_ip);
     let customer = customer(&state, claims.sub).await?;
     if let Err(retry_after) = state.login_throttle.check_attempt(ip, &customer.email) {
@@ -821,16 +854,16 @@ pub async fn reauth(
     state.login_throttle.clear_pair(ip, &customer.email);
     if method == "recovery" {
         let event = Event::own(customer.id, events::RECOVERY_CODE_USED, Some(ip), json!({}));
-        events::record_quietly(pool, event).await;
+        security_notice::record(&state, &customer, event).await;
     }
     let event = Event::own(customer.id, events::REAUTHENTICATED, Some(ip), json!({}));
     events::record_quietly(pool, event).await;
-    reverified(&state, &customer, &[method], method != "pwd")
+    reverified(&state, &claims, &customer, &[method], method != "pwd")
 }
 
 /// `POST /auth/reauth/passkey/options`: confirm it is you with one of your passkeys
 pub async fn reauth_passkey_options(State(state): State<AppState>, headers: HeaderMap) -> Reply {
-    let claims = bearer(&state, &headers, false)?;
+    let claims = bearer(&state, &headers, false).await?;
     let ceremony = passkeys_of(&state)?
         .start_for(state.db.pool(), claims.sub, ChallengeKind::PasskeyReauth)
         .await
@@ -845,7 +878,7 @@ pub async fn reauth_passkey_verify(
     client_ip: Option<Extension<ClientIp>>,
     Json(body): Json<PasskeyAnswer>,
 ) -> Reply {
-    let claims = bearer(&state, &headers, false)?;
+    let claims = bearer(&state, &headers, false).await?;
     let customer = customer(&state, claims.sub).await?;
     let pool = state.db.pool();
     let ip = ip_of(client_ip);
@@ -861,7 +894,7 @@ pub async fn reauth_passkey_verify(
     }
     let event = Event::own(customer.id, events::REAUTHENTICATED, Some(ip), json!({}));
     events::record_quietly(pool, event).await;
-    reverified(&state, &customer, &["hwk"], true)
+    reverified(&state, &claims, &customer, &["hwk"], true)
 }
 
 /// `POST /admin/staff/:id/mfa/reset`: an admin removes every second factor of an
@@ -885,6 +918,8 @@ pub async fn admin_reset(
         ));
     }
     let pool = state.db.pool();
+    let target = state.customer_service.find_by_id(id).await.map_err(fail)?;
+    let target = target.ok_or_else(|| fail(Error::not_found("Account not found")))?;
     let removed = two_factor::reset(pool, id).await.map_err(fail)?;
     auth_session::revoke_all(pool, id, RevokeReason::FactorsReset)
         .await
@@ -896,7 +931,7 @@ pub async fn admin_reset(
         ip: Some(ip_of(client_ip)),
         detail: json!({ "removed": removed }),
     };
-    events::record_quietly(pool, event).await;
+    security_notice::record(&state, &target, event).await;
     Ok(Json(json!({ "removed": removed })).into_response())
 }
 

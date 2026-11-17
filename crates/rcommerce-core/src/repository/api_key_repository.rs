@@ -83,6 +83,11 @@ pub struct PostgresApiKeyRepository {
 }
 
 impl PostgresApiKeyRepository {
+    /// The database pool the keys live in
+    pub fn pool(&self) -> &sqlx::Pool<sqlx::Postgres> {
+        &self.pool
+    }
+
     pub fn new(pool: sqlx::Pool<sqlx::Postgres>) -> Self {
         Self { pool }
     }

@@ -305,3 +305,41 @@ status_on_hold = "Em espera"
 status_completed = "Concluída"
 status_cancelled = "Cancelada"
 status_refunded = "Reembolsada"
+
+[security_notice]
+password_changed_heading = "Palavra-passe alterada"
+password_changed_text = "A palavra-passe da sua conta foi alterada. As sessões dos dispositivos ligados foram terminadas."
+intro = "Olá {{ customer_name }}, a forma de iniciar sessão na sua conta em {{ company_name }} foi alterada."
+when = "Quando"
+not_you_title = "Não reconhece esta alteração?"
+not_you = "Altere já a sua palavra-passe e depois verifique os métodos de início de sessão nas definições de segurança. Se já não conseguir iniciar sessão, escreva para {{ support_email }}."
+button = "Abrir as definições de segurança"
+totp_added_heading = "Aplicação de autenticação ativada"
+totp_added_text = "Uma aplicação de autenticação passa a dar os códigos que confirmam os seus inícios de sessão."
+totp_removed_heading = "Aplicação de autenticação desativada"
+totp_removed_text = "A aplicação de autenticação deixou de confirmar os seus inícios de sessão."
+passkey_added_heading = "Nova chave de acesso adicionada"
+passkey_added_text = "Uma nova chave de acesso já pode iniciar sessão na sua conta."
+passkey_removed_heading = "Chave de acesso removida"
+passkey_removed_text = "Uma chave de acesso foi removida da sua conta e já não pode iniciar sessão."
+recovery_code_used_heading = "Código de recuperação usado"
+recovery_code_used_text = "Um dos seus códigos de recuperação foi usado para confirmar um início de sessão. Cada código só serve uma vez: crie novos nas definições de segurança quando restarem poucos."
+recovery_codes_renewed_heading = "Novos códigos de recuperação"
+recovery_codes_renewed_text = "Foram criados novos códigos de recuperação para a sua conta. Os anteriores deixaram de funcionar."
+factors_reset_heading = "Verificação em dois passos removida"
+factors_reset_text = "Um administrador da loja removeu a sua aplicação de autenticação, as chaves de acesso e os códigos de recuperação, e terminou todas as suas sessões. Configure novamente a verificação em dois passos no próximo início de sessão."
+text = '''
+Olá {{ customer_name }},
+
+{{ heading }}
+{{ change }}
+
+Quando: {{ when }}
+
+Não reconhece esta alteração? Altere já a sua palavra-passe e depois verifique os métodos de início de sessão nas definições de segurança:
+{{ security_url }}
+
+Se já não conseguir iniciar sessão, escreva para {{ support_email }}.
+
+{{ company_name }}
+'''

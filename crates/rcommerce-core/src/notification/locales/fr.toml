@@ -305,3 +305,41 @@ status_on_hold = "En attente"
 status_completed = "Terminée"
 status_cancelled = "Annulée"
 status_refunded = "Remboursée"
+
+[security_notice]
+password_changed_heading = "Mot de passe modifié"
+password_changed_text = "Le mot de passe de votre compte a été modifié. Les appareils qui étaient connectés ont été déconnectés."
+intro = "Bonjour {{ customer_name }}, la façon de vous connecter à votre compte chez {{ company_name }} a changé."
+when = "Quand"
+not_you_title = "Ce n'était pas vous ?"
+not_you = "Changez votre mot de passe tout de suite, puis vérifiez vos moyens de connexion dans vos paramètres de sécurité. Si vous ne pouvez plus vous connecter, écrivez à {{ support_email }}."
+button = "Ouvrir les paramètres de sécurité"
+totp_added_heading = "Application d'authentification activée"
+totp_added_text = "Une application d'authentification donne désormais les codes qui confirment vos connexions."
+totp_removed_heading = "Application d'authentification désactivée"
+totp_removed_text = "L'application d'authentification ne confirme plus vos connexions."
+passkey_added_heading = "Nouvelle clé d'accès ajoutée"
+passkey_added_text = "Une nouvelle clé d'accès peut désormais se connecter à votre compte."
+passkey_removed_heading = "Clé d'accès supprimée"
+passkey_removed_text = "Une clé d'accès a été retirée de votre compte et ne peut plus s'y connecter."
+recovery_code_used_heading = "Code de secours utilisé"
+recovery_code_used_text = "Un de vos codes de secours a servi à confirmer une connexion. Chaque code ne sert qu'une fois : créez-en de nouveaux dans vos paramètres de sécurité quand il en reste peu."
+recovery_codes_renewed_heading = "Nouveaux codes de secours"
+recovery_codes_renewed_text = "De nouveaux codes de secours ont été créés pour votre compte. Les précédents ne fonctionnent plus."
+factors_reset_heading = "Validation en deux étapes supprimée"
+factors_reset_text = "Un administrateur du magasin a retiré votre application d'authentification, vos clés d'accès et vos codes de secours, et vous a déconnecté partout. Configurez à nouveau la validation en deux étapes à votre prochaine connexion."
+text = '''
+Bonjour {{ customer_name }},
+
+{{ heading }}
+{{ change }}
+
+Quand : {{ when }}
+
+Ce n'était pas vous ? Changez votre mot de passe tout de suite, puis vérifiez vos moyens de connexion dans vos paramètres de sécurité :
+{{ security_url }}
+
+Si vous ne pouvez plus vous connecter, écrivez à {{ support_email }}.
+
+{{ company_name }}
+'''

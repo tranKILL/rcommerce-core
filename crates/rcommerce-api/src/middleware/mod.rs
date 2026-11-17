@@ -138,6 +138,33 @@ pub async fn auth_rate_limit_middleware(
     Ok(next.run(request).await)
 }
 
+/// Whether the session an access token names (if any) is still live; tokens issued
+/// without a session (older ones) are accepted until they expire
+pub(crate) async fn session_live(
+    pool: &sqlx::PgPool,
+    claims: &rcommerce_core::services::JwtClaims,
+) -> bool {
+    let Some(sid) = claims.sid else {
+        return true;
+    };
+    match rcommerce_core::services::auth_session::is_live(pool, claims.sub, sid).await {
+        Ok(true) => true,
+        Ok(false) => {
+            // A copy kept after sign-out or a password change: worth noticing
+            tracing::warn!(
+                "Access token of an ended session refused (customer {}, session {})",
+                claims.sub,
+                sid
+            );
+            false
+        }
+        Err(e) => {
+            tracing::error!("Failed to check a session: {}", e);
+            false
+        }
+    }
+}
+
 /// Authentication middleware - validates JWT tokens
 /// Adds JwtAuth to request extensions for downstream handlers
 pub async fn auth_middleware(
@@ -171,6 +198,10 @@ pub async fn auth_middleware(
 
     // Verify token
     match state.auth_service.verify_access_token(token) {
+        Ok(claims) if !session_live(state.db.pool(), &claims).await => {
+            tracing::debug!("Token of an ended session for customer: {}", claims.sub);
+            Err(StatusCode::UNAUTHORIZED)
+        }
         Ok(claims) => {
             tracing::debug!("Token verified for customer: {}", claims.sub);
 
@@ -204,11 +235,14 @@ pub async fn optional_auth_middleware(
         .and_then(|h| h.to_str().ok())
     {
         if let Some(token) = AuthService::extract_bearer_token(header) {
+            // A token of an ended session counts as none
             if let Ok(claims) = state.auth_service.verify_access_token(token) {
-                let policy = state.auth_service.config().security.mfa.staff;
-                let auth = JwtAuth::from_claims(claims, policy);
-                request.extensions_mut().insert(Some(auth));
-                return next.run(request).await;
+                if session_live(state.db.pool(), &claims).await {
+                    let policy = state.auth_service.config().security.mfa.staff;
+                    let auth = JwtAuth::from_claims(claims, policy);
+                    request.extensions_mut().insert(Some(auth));
+                    return next.run(request).await;
+                }
             }
         }
     }
@@ -419,6 +453,10 @@ pub async fn admin_middleware(
         .auth_service
         .verify_access_token(token)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    if !session_live(state.db.pool(), &claims).await {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
 
     // With `[security.mfa] staff = "required"`, admin routes need a second factor
     let policy = state.auth_service.config().security.mfa.staff;

@@ -305,3 +305,41 @@ status_on_hold = "Angehalten"
 status_completed = "Abgeschlossen"
 status_cancelled = "Storniert"
 status_refunded = "Erstattet"
+
+[security_notice]
+password_changed_heading = "Passwort geändert"
+password_changed_text = "Das Passwort Ihres Kontos wurde geändert. Angemeldete Geräte wurden abgemeldet."
+intro = "Hallo {{ customer_name }}, die Anmeldung bei Ihrem Konto bei {{ company_name }} wurde geändert."
+when = "Wann"
+not_you_title = "Waren Sie das nicht?"
+not_you = "Ändern Sie sofort Ihr Passwort und prüfen Sie dann Ihre Anmeldemethoden in den Sicherheitseinstellungen. Wenn Sie sich nicht mehr anmelden können, schreiben Sie an {{ support_email }}."
+button = "Sicherheitseinstellungen öffnen"
+totp_added_heading = "Authenticator-App aktiviert"
+totp_added_text = "Eine Authenticator-App liefert jetzt die Codes, mit denen Sie Ihre Anmeldungen bestätigen."
+totp_removed_heading = "Authenticator-App deaktiviert"
+totp_removed_text = "Die Authenticator-App bestätigt Ihre Anmeldungen nicht mehr."
+passkey_added_heading = "Neuer Passkey hinzugefügt"
+passkey_added_text = "Mit einem neuen Passkey kann man sich jetzt bei Ihrem Konto anmelden."
+passkey_removed_heading = "Passkey entfernt"
+passkey_removed_text = "Ein Passkey wurde aus Ihrem Konto entfernt und kann nicht mehr zur Anmeldung verwendet werden."
+recovery_code_used_heading = "Wiederherstellungscode verwendet"
+recovery_code_used_text = "Einer Ihrer Wiederherstellungscodes wurde verwendet, um eine Anmeldung zu bestätigen. Jeder Code gilt nur einmal: Erstellen Sie in den Sicherheitseinstellungen neue, wenn nur noch wenige übrig sind."
+recovery_codes_renewed_heading = "Neue Wiederherstellungscodes"
+recovery_codes_renewed_text = "Für Ihr Konto wurden neue Wiederherstellungscodes erstellt. Die bisherigen gelten nicht mehr."
+factors_reset_heading = "Zwei-Schritt-Bestätigung entfernt"
+factors_reset_text = "Ein Administrator des Shops hat Ihre Authenticator-App, Ihre Passkeys und Wiederherstellungscodes entfernt und Sie überall abgemeldet. Richten Sie die Bestätigung in zwei Schritten bei Ihrer nächsten Anmeldung neu ein."
+text = '''
+Hallo {{ customer_name }},
+
+{{ heading }}
+{{ change }}
+
+Wann: {{ when }}
+
+Waren Sie das nicht? Ändern Sie sofort Ihr Passwort und prüfen Sie dann Ihre Anmeldemethoden in den Sicherheitseinstellungen:
+{{ security_url }}
+
+Wenn Sie sich nicht mehr anmelden können, schreiben Sie an {{ support_email }}.
+
+{{ company_name }}
+'''

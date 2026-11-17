@@ -25,6 +25,9 @@ pub enum ChallengeKind {
     PasskeySecondFactor,
     /// Re-verifying the signed-in person with a passkey
     PasskeyReauth,
+    /// A setup token (staff adding a first factor, 15 minutes): it works while this
+    /// row lives, and ending the account's sessions deletes it
+    Setup,
 }
 
 impl ChallengeKind {
@@ -36,12 +39,16 @@ impl ChallengeKind {
             ChallengeKind::PasskeyRegistration => "passkey_registration",
             ChallengeKind::PasskeySecondFactor => "passkey_second_factor",
             ChallengeKind::PasskeyReauth => "passkey_reauth",
+            ChallengeKind::Setup => "setup",
         }
     }
 
     /// How long the challenge can be answered
     pub fn lifetime(self) -> Duration {
-        Duration::minutes(5)
+        match self {
+            ChallengeKind::Setup => Duration::minutes(15),
+            _ => Duration::minutes(5),
+        }
     }
 }
 
@@ -80,6 +87,25 @@ pub async fn create(
     .execute(pool)
     .await?;
     Ok(id)
+}
+
+/// Whether the challenge `id` of `kind` belongs to `customer_id` and is still live
+pub async fn is_open(
+    pool: &PgPool,
+    id: Uuid,
+    kind: ChallengeKind,
+    customer_id: Uuid,
+) -> Result<bool> {
+    let open: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM auth_challenges \
+         WHERE id = $1 AND kind = $2 AND customer_id = $3 AND expires_at > NOW())",
+    )
+    .bind(id)
+    .bind(kind.as_str())
+    .bind(customer_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(open)
 }
 
 /// Count an attempt on the live challenge `id` of `kind` and return it, before the

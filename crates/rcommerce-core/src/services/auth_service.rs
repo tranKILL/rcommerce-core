@@ -211,7 +211,7 @@ impl AuthService {
             iat: Utc::now().timestamp(),
             iss: "rcommerce".to_string(),
             aud: self.config.security.jwt.audience.clone(),
-            sid: None,
+            sid: signed_in.sid,
             jti: None,
             amr: signed_in.amr.clone(),
             auth_time: signed_in.auth_time,
@@ -307,8 +307,15 @@ impl AuthService {
         auth_header.strip_prefix("Bearer ")
     }
 
-    /// Generate password reset token (short-lived)
-    pub fn generate_password_reset_token(&self, customer_id: Uuid, email: &str) -> Result<String> {
+    /// Generate password reset token (short-lived). It names the password it
+    /// replaces (`current_hash`, a fingerprint in `permissions`), so it stops working
+    /// once the password changes: a link works once.
+    pub fn generate_password_reset_token(
+        &self,
+        customer_id: Uuid,
+        email: &str,
+        current_hash: Option<&str>,
+    ) -> Result<String> {
         // Reset tokens last 1 hour
         let expiration = Utc::now()
             .checked_add_signed(Duration::hours(1))
@@ -319,7 +326,10 @@ impl AuthService {
             sub: customer_id,
             email: email.to_string(),
             token_type: TokenType::PasswordReset,
-            permissions: vec!["password_reset".to_string()],
+            permissions: vec![
+                "password_reset".to_string(),
+                format!("pw:{}", password_fingerprint(current_hash)),
+            ],
             exp: expiration,
             iat: Utc::now().timestamp(),
             iss: "rcommerce".to_string(),
@@ -339,11 +349,14 @@ impl AuthService {
 
     /// Token that only allows adding a second factor (staff who must have one, 15
     /// minutes). `remember_me` of the sign-in is kept for the session that follows.
+    /// `setup_id` (`jti`): its `auth_challenges` row, which ending the account's
+    /// sessions deletes.
     pub fn generate_mfa_setup_token(
         &self,
         customer_id: Uuid,
         email: &str,
         remember_me: bool,
+        setup_id: Uuid,
     ) -> Result<String> {
         let now = Utc::now();
         let mut permissions = vec!["mfa_setup".to_string()];
@@ -360,7 +373,7 @@ impl AuthService {
             iss: "rcommerce".to_string(),
             aud: self.config.security.jwt.audience.clone(),
             sid: None,
-            jti: None,
+            jti: Some(setup_id),
             amr: vec!["pwd".to_string()],
             auth_time: Some(now.timestamp()),
         };
@@ -378,6 +391,12 @@ impl AuthService {
             TokenType::Access | TokenType::MfaSetup => Ok(claims),
             _ => Err(Error::unauthorized("Invalid token type")),
         }
+    }
+
+    /// Whether a reset token's password is still the account's (`current_hash`)
+    pub fn reset_token_is_current(claims: &JwtClaims, current_hash: Option<&str>) -> bool {
+        let expected = format!("pw:{}", password_fingerprint(current_hash));
+        claims.permissions.contains(&expected)
     }
 
     /// Verify password reset token
@@ -493,7 +512,8 @@ pub struct JwtClaims {
     pub iat: i64,    // Issued at
     pub iss: String, // Issuer
     pub aud: String, // Audience
-    /// Refresh tokens only: the session the token belongs to
+    /// The session the token belongs to (refresh tokens, and access tokens issued
+    /// with a session: they end with it)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sid: Option<Uuid>,
     /// Refresh tokens only: the token's id inside its session
@@ -522,11 +542,21 @@ impl JwtClaims {
     }
 }
 
-/// How a sign-in was made: the `amr` and `auth_time` of the access tokens it gives
+/// A short fingerprint of a stored password hash (none: no password yet), for reset
+/// tokens; it reveals nothing about the password
+fn password_fingerprint(hash: Option<&str>) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(hash.unwrap_or("").as_bytes());
+    hex::encode(&digest[..8])
+}
+
+/// How a sign-in was made: the `amr` and `auth_time` of the access tokens it gives,
+/// and their session (`sid`), which they end with
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SignedIn {
     pub amr: Vec<String>,
     pub auth_time: Option<i64>,
+    pub sid: Option<Uuid>,
 }
 
 impl SignedIn {
@@ -539,7 +569,14 @@ impl SignedIn {
         Self {
             amr,
             auth_time: Some(Utc::now().timestamp()),
+            sid: None,
         }
+    }
+
+    /// The same, for the tokens of session `sid`
+    pub fn in_session(mut self, sid: Option<Uuid>) -> Self {
+        self.sid = sid;
+        self
     }
 
     /// Tokens from a refresh: the session's second-factor flag, no recent proof
@@ -551,6 +588,7 @@ impl SignedIn {
                 Vec::new()
             },
             auth_time: None,
+            sid: None,
         }
     }
 
@@ -634,7 +672,7 @@ mod tests {
         let auth = AuthService::new(test_config());
         let id = Uuid::new_v4();
         let setup = auth
-            .generate_mfa_setup_token(id, "a@example.com", true)
+            .generate_mfa_setup_token(id, "a@example.com", true, Uuid::new_v4())
             .unwrap();
         assert!(auth.verify_access_token(&setup).is_err());
         let claims = auth.verify_access_or_setup_token(&setup).unwrap();
@@ -642,9 +680,29 @@ mod tests {
         assert!(claims.permissions.contains(&"remember_me".to_string()));
         assert!(claims.is_fresh(300) && !claims.has_mfa());
         let reset = auth
-            .generate_password_reset_token(id, "a@example.com")
+            .generate_password_reset_token(id, "a@example.com", None)
             .unwrap();
         assert!(auth.verify_access_or_setup_token(&reset).is_err());
+    }
+
+    #[test]
+    fn reset_tokens_work_for_the_password_they_replace_only() {
+        let auth = AuthService::new(test_config());
+        let id = Uuid::new_v4();
+        let token = auth
+            .generate_password_reset_token(id, "a@example.com", Some("$argon2id$old"))
+            .unwrap();
+        let claims = auth.verify_password_reset_token(&token).unwrap();
+        assert!(AuthService::reset_token_is_current(
+            &claims,
+            Some("$argon2id$old")
+        ));
+        assert!(!AuthService::reset_token_is_current(
+            &claims,
+            Some("$argon2id$new")
+        ));
+        assert!(!AuthService::reset_token_is_current(&claims, None));
+        assert!(!claims.permissions.iter().any(|p| p.contains("argon2")));
     }
 
     #[test]
@@ -693,7 +751,7 @@ mod tests {
         assert_eq!(claims.sid, Some(session.session_id));
         assert_eq!(claims.jti, Some(session.token_id));
         let reset = auth
-            .generate_password_reset_token(id, "a@example.com")
+            .generate_password_reset_token(id, "a@example.com", None)
             .unwrap();
         let verify = auth
             .generate_email_verification_token(id, "a@example.com")

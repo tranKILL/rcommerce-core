@@ -305,3 +305,41 @@ status_on_hold = "In sospeso"
 status_completed = "Completato"
 status_cancelled = "Annullato"
 status_refunded = "Rimborsato"
+
+[security_notice]
+password_changed_heading = "Password modificata"
+password_changed_text = "La password del tuo account è stata modificata. I dispositivi connessi sono stati disconnessi."
+intro = "Ciao {{ customer_name }}, il modo in cui accedi al tuo account su {{ company_name }} è cambiato."
+when = "Quando"
+not_you_title = "Non sei stato tu?"
+not_you = "Cambia subito la password, poi controlla i metodi di accesso nelle impostazioni di sicurezza. Se non riesci più ad accedere, scrivi a {{ support_email }}."
+button = "Apri le impostazioni di sicurezza"
+totp_added_heading = "App di autenticazione attivata"
+totp_added_text = "Un'app di autenticazione ora fornisce i codici che confermano i tuoi accessi."
+totp_removed_heading = "App di autenticazione disattivata"
+totp_removed_text = "L'app di autenticazione non conferma più i tuoi accessi."
+passkey_added_heading = "Nuova passkey aggiunta"
+passkey_added_text = "Una nuova passkey ora può accedere al tuo account."
+passkey_removed_heading = "Passkey rimossa"
+passkey_removed_text = "Una passkey è stata rimossa dal tuo account e non può più accedere."
+recovery_code_used_heading = "Codice di recupero usato"
+recovery_code_used_text = "Uno dei tuoi codici di recupero è stato usato per confermare un accesso. Ogni codice vale una sola volta: creane di nuovi nelle impostazioni di sicurezza quando ne restano pochi."
+recovery_codes_renewed_heading = "Nuovi codici di recupero"
+recovery_codes_renewed_text = "Sono stati creati nuovi codici di recupero per il tuo account. Quelli precedenti non funzionano più."
+factors_reset_heading = "Verifica in due passaggi rimossa"
+factors_reset_text = "Un amministratore del negozio ha rimosso la tua app di autenticazione, le passkey e i codici di recupero, e ti ha disconnesso ovunque. Configura di nuovo la verifica in due passaggi al prossimo accesso."
+text = '''
+Ciao {{ customer_name }},
+
+{{ heading }}
+{{ change }}
+
+Quando: {{ when }}
+
+Non sei stato tu? Cambia subito la password, poi controlla i metodi di accesso nelle impostazioni di sicurezza:
+{{ security_url }}
+
+Se non riesci più ad accedere, scrivi a {{ support_email }}.
+
+{{ company_name }}
+'''

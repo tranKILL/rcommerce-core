@@ -305,3 +305,41 @@ status_on_hold = "Wstrzymane"
 status_completed = "Zrealizowane"
 status_cancelled = "Anulowane"
 status_refunded = "Zwrócone"
+
+[security_notice]
+password_changed_heading = "Hasło zmienione"
+password_changed_text = "Hasło do Twojego konta zostało zmienione. Zalogowane urządzenia zostały wylogowane."
+intro = "Dzień dobry, {{ customer_name }}! Zmienił się sposób logowania do Twojego konta w {{ company_name }}."
+when = "Kiedy"
+not_you_title = "To nie Ty?"
+not_you = "Od razu zmień hasło, a potem sprawdź metody logowania w ustawieniach bezpieczeństwa. Jeśli nie możesz się już zalogować, napisz na {{ support_email }}."
+button = "Otwórz ustawienia bezpieczeństwa"
+totp_added_heading = "Aplikacja uwierzytelniająca włączona"
+totp_added_text = "Kody potwierdzające Twoje logowania podaje teraz aplikacja uwierzytelniająca."
+totp_removed_heading = "Aplikacja uwierzytelniająca wyłączona"
+totp_removed_text = "Aplikacja uwierzytelniająca nie potwierdza już Twoich logowań."
+passkey_added_heading = "Dodano nowy klucz dostępu"
+passkey_added_text = "Nowym kluczem dostępu można teraz logować się do Twojego konta."
+passkey_removed_heading = "Usunięto klucz dostępu"
+passkey_removed_text = "Klucz dostępu został usunięty z Twojego konta i nie można już nim się logować."
+recovery_code_used_heading = "Użyto kodu odzyskiwania"
+recovery_code_used_text = "Jeden z Twoich kodów odzyskiwania posłużył do potwierdzenia logowania. Każdy kod działa raz: utwórz nowe w ustawieniach bezpieczeństwa, gdy zostanie ich niewiele."
+recovery_codes_renewed_heading = "Nowe kody odzyskiwania"
+recovery_codes_renewed_text = "Utworzono nowe kody odzyskiwania dla Twojego konta. Poprzednie już nie działają."
+factors_reset_heading = "Usunięto weryfikację dwuetapową"
+factors_reset_text = "Administrator sklepu usunął Twoją aplikację uwierzytelniającą, klucze dostępu i kody odzyskiwania oraz wylogował Cię ze wszystkich urządzeń. Skonfiguruj ponownie weryfikację dwuetapową przy następnym logowaniu."
+text = '''
+Dzień dobry, {{ customer_name }}!
+
+{{ heading }}
+{{ change }}
+
+Kiedy: {{ when }}
+
+To nie Ty? Od razu zmień hasło, a potem sprawdź metody logowania w ustawieniach bezpieczeństwa:
+{{ security_url }}
+
+Jeśli nie możesz się już zalogować, napisz na {{ support_email }}.
+
+{{ company_name }}
+'''

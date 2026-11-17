@@ -293,6 +293,10 @@ pub async fn combined_auth_middleware(
         tracing::debug!("Combined auth: Attempting JWT authentication");
 
         match auth_service.verify_access_token(token) {
+            Ok(claims) if !crate::middleware::session_live(repo.pool(), &claims).await => {
+                tracing::debug!("Combined auth: token of an ended session");
+                return Err(StatusCode::UNAUTHORIZED);
+            }
             Ok(claims) => {
                 // Create JWT auth context
                 let customer_id = claims.sub;

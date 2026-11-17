@@ -31,6 +31,20 @@ pub const RECOVERY_CODES_RENEWED: &str = "recovery_codes_renewed";
 pub const FACTORS_RESET: &str = "factors_reset";
 /// The person re-verified themselves for a sensitive change
 pub const REAUTHENTICATED: &str = "reauthenticated";
+/// The password was changed or reset (`detail.how`: change or reset)
+pub const PASSWORD_CHANGED: &str = "password_changed";
+
+/// Events the account's owner is told about by e-mail: changes to how they sign in
+pub const NOTIFIED: [&str; 8] = [
+    PASSWORD_CHANGED,
+    TOTP_ADDED,
+    TOTP_REMOVED,
+    PASSKEY_ADDED,
+    PASSKEY_REMOVED,
+    RECOVERY_CODE_USED,
+    RECOVERY_CODES_RENEWED,
+    FACTORS_RESET,
+];
 
 /// One event to record
 #[derive(Debug, Clone)]

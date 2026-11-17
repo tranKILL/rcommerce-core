@@ -306,3 +306,41 @@ status_on_hold = "On hold"
 status_completed = "Completed"
 status_cancelled = "Cancelled"
 status_refunded = "Refunded"
+
+[security_notice]
+password_changed_heading = "Password changed"
+password_changed_text = "The password of your account was changed. Devices that were signed in have been signed out."
+intro = "Hi {{ customer_name }}, the way you sign in to your account at {{ company_name }} has changed."
+when = "When"
+not_you_title = "Wasn't you?"
+not_you = "Change your password now, then check the sign-in methods in your security settings. If you can no longer sign in, write to {{ support_email }}."
+button = "Open security settings"
+totp_added_heading = "Authenticator app turned on"
+totp_added_text = "An authenticator app now gives the codes that confirm your sign-ins."
+totp_removed_heading = "Authenticator app turned off"
+totp_removed_text = "The authenticator app no longer confirms your sign-ins."
+passkey_added_heading = "New passkey added"
+passkey_added_text = "A new passkey can now sign in to your account."
+passkey_removed_heading = "Passkey removed"
+passkey_removed_text = "A passkey was removed from your account and can no longer sign in."
+recovery_code_used_heading = "Recovery code used"
+recovery_code_used_text = "One of your recovery codes was used to confirm a sign-in. Each code works once: create new ones in your security settings when few are left."
+recovery_codes_renewed_heading = "New recovery codes"
+recovery_codes_renewed_text = "New recovery codes were created for your account. The previous ones no longer work."
+factors_reset_heading = "Two-step verification removed"
+factors_reset_text = "A store administrator removed your authenticator app, passkeys and recovery codes, and signed you out everywhere. Set up two-step verification again the next time you sign in."
+text = '''
+Hi {{ customer_name }},
+
+{{ heading }}
+{{ change }}
+
+When: {{ when }}
+
+Wasn't you? Change your password now, then check the sign-in methods in your security settings:
+{{ security_url }}
+
+If you can no longer sign in, write to {{ support_email }}.
+
+{{ company_name }}
+'''

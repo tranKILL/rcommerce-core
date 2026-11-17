@@ -305,3 +305,41 @@ status_on_hold = "In de wacht"
 status_completed = "Afgerond"
 status_cancelled = "Geannuleerd"
 status_refunded = "Terugbetaald"
+
+[security_notice]
+password_changed_heading = "Wachtwoord gewijzigd"
+password_changed_text = "Het wachtwoord van uw account is gewijzigd. Apparaten die aangemeld waren, zijn afgemeld."
+intro = "Beste {{ customer_name }}, de manier waarop u zich aanmeldt bij uw account bij {{ company_name }} is gewijzigd."
+when = "Wanneer"
+not_you_title = "Was u dit niet?"
+not_you = "Wijzig meteen uw wachtwoord en controleer daarna uw aanmeldmethoden in uw beveiligingsinstellingen. Kunt u zich niet meer aanmelden? Schrijf dan naar {{ support_email }}."
+button = "Beveiligingsinstellingen openen"
+totp_added_heading = "Authenticator-app ingeschakeld"
+totp_added_text = "Een authenticator-app geeft voortaan de codes waarmee u uw aanmeldingen bevestigt."
+totp_removed_heading = "Authenticator-app uitgeschakeld"
+totp_removed_text = "De authenticator-app bevestigt uw aanmeldingen niet langer."
+passkey_added_heading = "Nieuwe toegangssleutel toegevoegd"
+passkey_added_text = "Met een nieuwe toegangssleutel kunt u zich nu aanmelden bij uw account."
+passkey_removed_heading = "Toegangssleutel verwijderd"
+passkey_removed_text = "Een toegangssleutel is van uw account verwijderd en werkt niet meer om u aan te melden."
+recovery_code_used_heading = "Herstelcode gebruikt"
+recovery_code_used_text = "Een van uw herstelcodes is gebruikt om een aanmelding te bevestigen. Elke code werkt één keer: maak nieuwe aan in uw beveiligingsinstellingen als er nog maar weinig over zijn."
+recovery_codes_renewed_heading = "Nieuwe herstelcodes"
+recovery_codes_renewed_text = "Er zijn nieuwe herstelcodes voor uw account aangemaakt. De vorige werken niet meer."
+factors_reset_heading = "Verificatie in twee stappen verwijderd"
+factors_reset_text = "Een beheerder van de winkel heeft uw authenticator-app, toegangssleutels en herstelcodes verwijderd en u overal afgemeld. Stel de verificatie in twee stappen opnieuw in wanneer u zich weer aanmeldt."
+text = '''
+Beste {{ customer_name }},
+
+{{ heading }}
+{{ change }}
+
+Wanneer: {{ when }}
+
+Was u dit niet? Wijzig meteen uw wachtwoord en controleer daarna uw aanmeldmethoden in uw beveiligingsinstellingen:
+{{ security_url }}
+
+Kunt u zich niet meer aanmelden? Schrijf dan naar {{ support_email }}.
+
+{{ company_name }}
+'''

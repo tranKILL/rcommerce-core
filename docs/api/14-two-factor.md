@@ -73,6 +73,12 @@ Access tokens carry `amr` (RFC 8176: `pwd`, `otp`, `hwk`, `user`, and `mfa` afte
 factors) and `auth_time` (the last proof of identity). Sessions remember `mfa`, so
 refreshed tokens keep it; they carry no `auth_time`.
 
+Access tokens also name their session (`sid`) and end with it. Re-verification
+(`/auth/reauth*`) answers `401` for a token without one (issued before sessions were
+named): sign in again. A setup token is backed by an `auth_challenges` row (`kind`
+setup, its `jti`); a password change or reset, an admin's reset or the first factor
+deletes it, and the token stops working.
+
 ## Settings of the signed-in account
 
 Bearer: an access token, or the setup token where noted. Adding or removing a factor
@@ -124,6 +130,19 @@ Answers of the sign-in and two-step routes carry `Cache-Control: no-store`.
 `security_events` records sign-ins (`detail.method`), wrong second steps, factors added
 and removed, recovery codes used or renewed, re-verifications and resets (`actor_id`
 for a reset by an admin), with the client IP.
+
+## E-mails to the account's owner
+
+When the notification service is configured, the owner gets an e-mail (template
+`security_notice_html`, section `[security_notice]` of the e-mail catalogues, in the
+customer's language) when the password is changed or reset, an authenticator app is
+turned on or off, a passkey is added or removed, a recovery code is used, new recovery
+codes are made, or an admin resets the account's factors (`events::NOTIFIED`). It says
+what changed and when, links to `<storefront_url>/account/security`, and tells the
+owner what to do if it was not them. The greeting keeps only the letters, spaces,
+hyphens and apostrophes of the name (whoever holds the account cannot write a message
+into it). At most one notice per account and kind every 10 minutes, per process. It is
+sent in the background: a failed e-mail does not fail the request.
 
 ## Storage
 

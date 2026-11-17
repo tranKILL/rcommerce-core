@@ -35,6 +35,7 @@ pub mod price_lists;
 pub mod product;
 pub mod promotions;
 pub mod review;
+pub mod security_notice;
 pub mod staff_lists;
 pub mod statistics;
 pub mod subscription;

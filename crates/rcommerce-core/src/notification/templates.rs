@@ -83,6 +83,7 @@ impl NotificationTemplate {
             "dunning_final_html" => Ok(Self::dunning_final_html()),
             "welcome_html" => Ok(Self::welcome_html()),
             "password_reset_html" => Ok(Self::password_reset_html()),
+            "security_notice_html" => Ok(Self::security_notice_html()),
             "verify_email_html" => Ok(Self::verify_email_html()),
             "abandoned_cart_html" => Ok(Self::abandoned_cart_html()),
             _ => Err(Error::not_found("Template not found")),
@@ -172,6 +173,9 @@ impl NotificationTemplate {
             "dunning_final.html" => Ok(include_str!("templates/dunning_final.html").to_string()),
             "welcome.html" => Ok(include_str!("templates/welcome.html").to_string()),
             "password_reset.html" => Ok(include_str!("templates/password_reset.html").to_string()),
+            "security_notice.html" => {
+                Ok(include_str!("templates/security_notice.html").to_string())
+            }
             "abandoned_cart.html" => Ok(include_str!("templates/abandoned_cart.html").to_string()),
             "verify_email.html" => Ok(include_str!("templates/verify_email.html").to_string()),
             _ => Err(Error::not_found("HTML template not found")),
@@ -786,6 +790,32 @@ Questions? {{ contact_support_url }}
                 "reset_url".to_string(),
                 "reset_token".to_string(),
                 "expires_in".to_string(),
+                "company_name".to_string(),
+                "support_email".to_string(),
+            ],
+        }
+    }
+
+    /// Tell an account's owner that its sign-in methods changed; the subject and
+    /// heading are the change's own texts (`heading`, `change`)
+    fn security_notice_html() -> Self {
+        Self {
+            id: "security_notice_html".to_string(),
+            name: "Security Notice HTML".to_string(),
+            subject: "{{ heading }}".to_string(),
+            body: "{{ t.text }}".to_string(),
+            html_body: Some(
+                Self::load_html_template("security_notice.html")
+                    .unwrap_or_else(|_| Self::get_default_html_template()),
+            ),
+            locale: i18n::BASE_LOCALE.to_string(),
+            channel: crate::notification::NotificationChannel::Email,
+            variables: vec![
+                "customer_name".to_string(),
+                "heading".to_string(),
+                "change".to_string(),
+                "when".to_string(),
+                "security_url".to_string(),
                 "company_name".to_string(),
                 "support_email".to_string(),
             ],

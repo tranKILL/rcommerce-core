@@ -305,6 +305,42 @@ impl EmailNotificationFactory {
         Self::create_notification(recipient_email, &template, vars, branding)
     }
 
+    /// Tell an account's owner that its sign-in methods changed. `change` is one of
+    /// `two_factor::events::NOTIFIED`: a factor added or removed, a recovery code
+    /// used, new recovery codes, an admin reset. `when` is already written out.
+    pub fn security_notice(
+        recipient_email: &str,
+        customer_name: &str,
+        change: &str,
+        when: &str,
+        security_url: &str,
+        branding: &crate::config::BrandingConfig,
+        locale: &str,
+    ) -> Result<Notification> {
+        if !crate::services::two_factor::events::NOTIFIED.contains(&change) {
+            return Err(crate::Error::validation(
+                "Not a change the owner is told about",
+            ));
+        }
+        let template = NotificationTemplate::load_localized("security_notice_html", locale)?;
+        let text = |part: &str| {
+            let key = format!("{change}_{part}");
+            i18n::text(&template.locale, "security_notice", &key)
+        };
+
+        let mut vars = TemplateVariables::new();
+        vars.insert("heading", text("heading"));
+        vars.insert("change", text("text"));
+        vars.insert("customer_name", customer_name);
+        vars.insert("when", when);
+        vars.insert("security_url", security_url);
+        vars.insert("company_name", &branding.name);
+        vars.insert("support_email", &branding.support_email);
+        vars.insert("accent_color", &branding.accent_color);
+
+        Self::create_notification(recipient_email, &template, vars, branding)
+    }
+
     /// Create notification from template and variables
     fn create_notification(
         recipient_email: &str,
@@ -715,5 +751,57 @@ mod tests {
         assert!(html.contains("John Doe"));
         assert!(html.contains("123 Main St"));
         assert!(html.contains("New York"));
+    }
+    /// Each change the owner is told about reads in every language, with its own
+    /// subject and text, and nothing left untranslated or unfilled
+    #[test]
+    fn security_notices_name_the_change_in_every_language() {
+        use crate::services::two_factor::events::NOTIFIED;
+        let branding = crate::config::BrandingConfig::default();
+        let url = "https://shop.example/account/security";
+        for locale in ["en", "fr", "nl", "de", "it", "es", "pt", "tr", "ro", "pl"] {
+            let mut subjects = std::collections::HashSet::new();
+            for change in NOTIFIED {
+                let mail = EmailNotificationFactory::security_notice(
+                    "ann@example.com",
+                    "Ann <b>Lee</b>",
+                    change,
+                    "17 Nov 2026 10:00 UTC",
+                    url,
+                    &branding,
+                    locale,
+                )
+                .unwrap();
+                let html = mail.html_body.clone().unwrap();
+                let heading = i18n::text(locale, "security_notice", &format!("{change}_heading"));
+                assert_eq!(mail.subject, heading, "{locale} {change}");
+                assert!(
+                    subjects.insert(mail.subject.clone()),
+                    "{locale}: same subject"
+                );
+                assert!(
+                    html.contains(url) && mail.body.contains(url),
+                    "{locale} {change}"
+                );
+                assert!(
+                    html.contains("Ann &lt;b&gt;Lee"),
+                    "{locale}: name not escaped"
+                );
+                for text in [&html, &mail.body, &mail.subject] {
+                    assert!(!text.contains("{{"), "{locale} {change}: {text}");
+                    assert!(!text.contains("_heading") && !text.contains("_text"));
+                }
+            }
+        }
+        let other = EmailNotificationFactory::security_notice(
+            "ann@example.com",
+            "Ann",
+            "sign_in",
+            "now",
+            url,
+            &branding,
+            "en",
+        );
+        assert!(other.is_err(), "only the listed changes send a notice");
     }
 }

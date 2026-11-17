@@ -305,3 +305,41 @@ status_on_hold = "En espera"
 status_completed = "Completado"
 status_cancelled = "Cancelado"
 status_refunded = "Reembolsado"
+
+[security_notice]
+password_changed_heading = "Contraseña cambiada"
+password_changed_text = "Se ha cambiado la contraseña de su cuenta. Se han cerrado las sesiones de los dispositivos conectados."
+intro = "Hola, {{ customer_name }}: ha cambiado la forma de iniciar sesión en su cuenta de {{ company_name }}."
+when = "Cuándo"
+not_you_title = "¿No ha sido usted?"
+not_you = "Cambie su contraseña ahora y revise después los métodos de inicio de sesión en su configuración de seguridad. Si ya no puede iniciar sesión, escriba a {{ support_email }}."
+button = "Abrir la configuración de seguridad"
+totp_added_heading = "Aplicación de autenticación activada"
+totp_added_text = "Una aplicación de autenticación da ahora los códigos que confirman sus inicios de sesión."
+totp_removed_heading = "Aplicación de autenticación desactivada"
+totp_removed_text = "La aplicación de autenticación ya no confirma sus inicios de sesión."
+passkey_added_heading = "Nueva llave de acceso añadida"
+passkey_added_text = "Una nueva llave de acceso ya puede iniciar sesión en su cuenta."
+passkey_removed_heading = "Llave de acceso eliminada"
+passkey_removed_text = "Se ha eliminado una llave de acceso de su cuenta y ya no puede iniciar sesión."
+recovery_code_used_heading = "Código de recuperación usado"
+recovery_code_used_text = "Se ha usado uno de sus códigos de recuperación para confirmar un inicio de sesión. Cada código sirve una sola vez: cree otros nuevos en su configuración de seguridad cuando le queden pocos."
+recovery_codes_renewed_heading = "Nuevos códigos de recuperación"
+recovery_codes_renewed_text = "Se han creado nuevos códigos de recuperación para su cuenta. Los anteriores ya no funcionan."
+factors_reset_heading = "Verificación en dos pasos eliminada"
+factors_reset_text = "Un administrador de la tienda ha eliminado su aplicación de autenticación, sus llaves de acceso y sus códigos de recuperación, y ha cerrado todas sus sesiones. Vuelva a configurar la verificación en dos pasos la próxima vez que inicie sesión."
+text = '''
+Hola, {{ customer_name }}:
+
+{{ heading }}
+{{ change }}
+
+Cuándo: {{ when }}
+
+¿No ha sido usted? Cambie su contraseña ahora y revise después los métodos de inicio de sesión en su configuración de seguridad:
+{{ security_url }}
+
+Si ya no puede iniciar sesión, escriba a {{ support_email }}.
+
+{{ company_name }}
+'''
