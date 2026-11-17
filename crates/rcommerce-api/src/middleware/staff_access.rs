@@ -79,6 +79,11 @@ pub async fn staff_can(
     resource: Resource,
     action: Action,
 ) -> bool {
+    // With `[security.mfa] staff = "required"`, staff powers need a second factor
+    let policy = state.auth_service.config().security.mfa.staff;
+    if policy == rcommerce_core::config::StaffMfaPolicy::Required && !auth.mfa {
+        return false;
+    }
     if auth.is_admin() {
         return true;
     }

@@ -26,6 +26,7 @@ R Commerce provides a complete API-first ecommerce platform with:
 | [11-price-history.md](11-price-history.md) | Price and promotion history per product, customer and promotion |
 | [12-finance-and-marketing.md](12-finance-and-marketing.md) | Finance and marketing reports, projection, CSV exports |
 | [13-till.md](13-till.md) | Till: sessions and Z reports, scanned codes, card terminal, baskets and sales |
+| [14-two-factor.md](14-two-factor.md) | Two-step sign-in: passkeys, authenticator apps, recovery codes, staff policy |
 
 ## API Endpoints
 

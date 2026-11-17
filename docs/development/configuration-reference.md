@@ -430,12 +430,19 @@ require_special_chars = true
 max_age_days = 90            # Password expiry
 prevent_password_reuse = 5   # Can't reuse last N passwords
 
-# 2FA settings
-[security.two_factor]
-enabled = false
-required_for_admin = false
-issuer = "RCommerce"
-ttl_seconds = 300           # OTP expiry
+# Two-step sign-in (see docs/api/14-two-factor.md)
+[security.mfa]
+staff = "optional"           # "required": staff get no token without a second factor
+encryption_key = ""          # base64 of 32 random bytes; encrypts authenticator secrets
+                             # (openssl rand -base64 32); empty = no authenticator apps
+issuer = "My Store"          # name shown in authenticator apps (default: webauthn.rp_name)
+
+# Passkeys (WebAuthn)
+[security.webauthn]
+rp_id = "example.com"        # registrable domain shared by the storefront and back office;
+                             # unset = no passkeys
+rp_name = "My Store"         # name in the browser's passkey dialogs
+origins = ["https://www.example.com", "https://admin.example.com"]
 
 # CORS settings (duplicate of server.cors for clarity)
 [security.cors]

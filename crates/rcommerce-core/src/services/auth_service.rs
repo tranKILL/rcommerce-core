@@ -172,12 +172,29 @@ impl AuthService {
         Ok(hash_hex == stored_hash)
     }
 
+    /// The store configuration this service signs tokens for
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
     /// Generate JWT access token for a customer with role-based permissions
     pub fn generate_access_token(
         &self,
         customer_id: Uuid,
         email: &str,
         role: &crate::models::CustomerRole,
+    ) -> Result<String> {
+        self.issue_access_token(customer_id, email, role, &SignedIn::default())
+    }
+
+    /// Access token recording how the person signed in (`amr`) and when they last
+    /// proved it (`auth_time`, for sensitive changes)
+    pub fn issue_access_token(
+        &self,
+        customer_id: Uuid,
+        email: &str,
+        role: &crate::models::CustomerRole,
+        signed_in: &SignedIn,
     ) -> Result<String> {
         let expiry_hours = self.config.security.jwt.expiry_hours as i64;
         let expiration = Utc::now()
@@ -196,6 +213,8 @@ impl AuthService {
             aud: self.config.security.jwt.audience.clone(),
             sid: None,
             jti: None,
+            amr: signed_in.amr.clone(),
+            auth_time: signed_in.auth_time,
         };
 
         let header = Header::new(jsonwebtoken::Algorithm::HS256);
@@ -238,6 +257,8 @@ impl AuthService {
             aud: self.config.security.jwt.audience.clone(),
             sid: Some(session.session_id),
             jti: Some(session.token_id),
+            amr: Vec::new(),
+            auth_time: None,
         };
 
         let header = Header::new(jsonwebtoken::Algorithm::HS256);
@@ -305,6 +326,8 @@ impl AuthService {
             aud: self.config.security.jwt.audience.clone(),
             sid: None,
             jti: None,
+            amr: Vec::new(),
+            auth_time: None,
         };
 
         let header = Header::new(jsonwebtoken::Algorithm::HS256);
@@ -312,6 +335,49 @@ impl AuthService {
 
         encode(&header, &claims, &encoding_key)
             .map_err(|e| Error::internal(format!("Failed to generate password reset token: {}", e)))
+    }
+
+    /// Token that only allows adding a second factor (staff who must have one, 15
+    /// minutes). `remember_me` of the sign-in is kept for the session that follows.
+    pub fn generate_mfa_setup_token(
+        &self,
+        customer_id: Uuid,
+        email: &str,
+        remember_me: bool,
+    ) -> Result<String> {
+        let now = Utc::now();
+        let mut permissions = vec!["mfa_setup".to_string()];
+        if remember_me {
+            permissions.push("remember_me".to_string());
+        }
+        let claims = JwtClaims {
+            sub: customer_id,
+            email: email.to_string(),
+            token_type: TokenType::MfaSetup,
+            permissions,
+            exp: (now + Duration::minutes(15)).timestamp(),
+            iat: now.timestamp(),
+            iss: "rcommerce".to_string(),
+            aud: self.config.security.jwt.audience.clone(),
+            sid: None,
+            jti: None,
+            amr: vec!["pwd".to_string()],
+            auth_time: Some(now.timestamp()),
+        };
+        let header = Header::new(jsonwebtoken::Algorithm::HS256);
+        let encoding_key = EncodingKey::from_secret(self.config.security.jwt.secret.as_bytes());
+        encode(&header, &claims, &encoding_key)
+            .map_err(|e| Error::internal(format!("Failed to generate setup token: {}", e)))
+    }
+
+    /// Verify a token allowed on the second-factor settings: an access token or a
+    /// setup token
+    pub fn verify_access_or_setup_token(&self, token: &str) -> Result<JwtClaims> {
+        let claims = self.verify_token(token)?;
+        match claims.token_type {
+            TokenType::Access | TokenType::MfaSetup => Ok(claims),
+            _ => Err(Error::unauthorized("Invalid token type")),
+        }
     }
 
     /// Verify password reset token
@@ -347,6 +413,8 @@ impl AuthService {
             aud: self.config.security.jwt.audience.clone(),
             sid: None,
             jti: None,
+            amr: Vec::new(),
+            auth_time: None,
         };
 
         let header = Header::new(jsonwebtoken::Algorithm::HS256);
@@ -431,6 +499,65 @@ pub struct JwtClaims {
     /// Refresh tokens only: the token's id inside its session
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jti: Option<Uuid>,
+    /// How the person signed in (RFC 8176 values): `pwd`, `otp`, `hwk`, `user`, and
+    /// `mfa` when a second factor was used
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub amr: Vec<String>,
+    /// When the person last proved who they are (unix seconds); absent on tokens
+    /// from a refresh
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_time: Option<i64>,
+}
+
+impl JwtClaims {
+    /// Whether the sign-in used a second factor (or a passkey)
+    pub fn has_mfa(&self) -> bool {
+        self.amr.iter().any(|m| m == "mfa")
+    }
+
+    /// Whether the person proved who they are in the last `secs` seconds
+    pub fn is_fresh(&self, secs: i64) -> bool {
+        self.auth_time
+            .is_some_and(|at| Utc::now().timestamp() - at <= secs)
+    }
+}
+
+/// How a sign-in was made: the `amr` and `auth_time` of the access tokens it gives
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SignedIn {
+    pub amr: Vec<String>,
+    pub auth_time: Option<i64>,
+}
+
+impl SignedIn {
+    /// A sign-in just made with these methods (`mfa` is added for two factors)
+    pub fn now(methods: &[&str], mfa: bool) -> Self {
+        let mut amr: Vec<String> = methods.iter().map(|m| m.to_string()).collect();
+        if mfa {
+            amr.push("mfa".to_string());
+        }
+        Self {
+            amr,
+            auth_time: Some(Utc::now().timestamp()),
+        }
+    }
+
+    /// Tokens from a refresh: the session's second-factor flag, no recent proof
+    pub fn refreshed(mfa: bool) -> Self {
+        Self {
+            amr: if mfa {
+                vec!["mfa".to_string()]
+            } else {
+                Vec::new()
+            },
+            auth_time: None,
+        }
+    }
+
+    /// Whether the sign-in used a second factor
+    pub fn mfa(&self) -> bool {
+        self.amr.iter().any(|m| m == "mfa")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -440,6 +567,8 @@ pub enum TokenType {
     Refresh,
     PasswordReset,
     EmailVerification,
+    /// Staff who must add a second factor: allows only that
+    MfaSetup,
 }
 
 /// Authenticated user extracted from JWT
@@ -483,6 +612,7 @@ mod tests {
             session_id: Uuid::new_v4(),
             token_id: Uuid::new_v4(),
             expires_at: Utc::now() + Duration::days(1),
+            mfa: false,
         };
         let refresh = a.generate_refresh_token(id, &session).unwrap();
         assert!(b.verify_token(&refresh).is_err());
@@ -500,6 +630,48 @@ mod tests {
     }
 
     #[test]
+    fn setup_tokens_only_open_the_second_factor_settings() {
+        let auth = AuthService::new(test_config());
+        let id = Uuid::new_v4();
+        let setup = auth
+            .generate_mfa_setup_token(id, "a@example.com", true)
+            .unwrap();
+        assert!(auth.verify_access_token(&setup).is_err());
+        let claims = auth.verify_access_or_setup_token(&setup).unwrap();
+        assert_eq!(claims.token_type, TokenType::MfaSetup);
+        assert!(claims.permissions.contains(&"remember_me".to_string()));
+        assert!(claims.is_fresh(300) && !claims.has_mfa());
+        let reset = auth
+            .generate_password_reset_token(id, "a@example.com")
+            .unwrap();
+        assert!(auth.verify_access_or_setup_token(&reset).is_err());
+    }
+
+    #[test]
+    fn access_tokens_carry_how_the_person_signed_in() {
+        let auth = AuthService::new(test_config());
+        let role = crate::models::CustomerRole::default();
+        let id = Uuid::new_v4();
+        let passkey = SignedIn::now(&["hwk", "user"], true);
+        let token = auth
+            .issue_access_token(id, "a@example.com", &role, &passkey)
+            .unwrap();
+        let claims = auth.verify_access_token(&token).unwrap();
+        assert!(claims.has_mfa() && claims.is_fresh(300));
+        let refreshed = SignedIn::refreshed(true);
+        let token = auth
+            .issue_access_token(id, "a@example.com", &role, &refreshed)
+            .unwrap();
+        let claims = auth.verify_access_token(&token).unwrap();
+        assert!(claims.has_mfa() && !claims.is_fresh(300));
+        let plain = auth
+            .generate_access_token(id, "a@example.com", &role)
+            .unwrap();
+        let claims = auth.verify_access_token(&plain).unwrap();
+        assert!(!claims.has_mfa() && !claims.is_fresh(300));
+    }
+
+    #[test]
     fn test_only_access_tokens_authenticate_requests() {
         let auth = AuthService::new(test_config());
         let id = Uuid::new_v4();
@@ -514,6 +686,7 @@ mod tests {
             session_id: Uuid::new_v4(),
             token_id: Uuid::new_v4(),
             expires_at: Utc::now() + Duration::days(1),
+            mfa: false,
         };
         let refresh = auth.generate_refresh_token(id, &session).unwrap();
         let claims = auth.verify_token(&refresh).unwrap();

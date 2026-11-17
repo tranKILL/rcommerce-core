@@ -229,6 +229,7 @@ async fn direct_create_order_enforces_ownership_and_store_currency() -> anyhow::
         customer_id,
         email: "customer@example.com".to_string(),
         permissions: vec!["read".to_string()],
+        ..Default::default()
     };
     let customer_order = create(
         &state,
@@ -255,6 +256,7 @@ async fn direct_create_order_enforces_ownership_and_store_currency() -> anyhow::
         customer_id: Uuid::new_v4(),
         email: "admin@example.com".to_string(),
         permissions: vec!["admin".to_string()],
+        ..Default::default()
     };
     let on_behalf_order = create(
         &state,

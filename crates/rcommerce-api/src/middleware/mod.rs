@@ -175,13 +175,10 @@ pub async fn auth_middleware(
             tracing::debug!("Token verified for customer: {}", claims.sub);
 
             // Create JWT auth context and add to request extensions
-            let auth = JwtAuth {
-                customer_id: claims.sub,
-                email: claims.email,
-                permissions: claims.permissions,
-            };
-
-            request.extensions_mut().insert(auth);
+            let policy = state.auth_service.config().security.mfa.staff;
+            request
+                .extensions_mut()
+                .insert(JwtAuth::from_claims(claims, policy));
 
             Ok(next.run(request).await)
         }
@@ -208,11 +205,8 @@ pub async fn optional_auth_middleware(
     {
         if let Some(token) = AuthService::extract_bearer_token(header) {
             if let Ok(claims) = state.auth_service.verify_access_token(token) {
-                let auth = JwtAuth {
-                    customer_id: claims.sub,
-                    email: claims.email,
-                    permissions: claims.permissions,
-                };
+                let policy = state.auth_service.config().security.mfa.staff;
+                let auth = JwtAuth::from_claims(claims, policy);
                 request.extensions_mut().insert(Some(auth));
                 return next.run(request).await;
             }
@@ -426,20 +420,21 @@ pub async fn admin_middleware(
         .verify_access_token(token)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
-    let permissions = if claims.permissions.contains(&"admin".to_string()) {
-        claims.permissions
-    } else {
+    // With `[security.mfa] staff = "required"`, admin routes need a second factor
+    let policy = state.auth_service.config().security.mfa.staff;
+    if policy == rcommerce_core::config::StaffMfaPolicy::Required && !claims.has_mfa() {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let mut auth = JwtAuth::from_claims(claims, policy);
+    if !auth.is_admin() {
         // Owned copies: the request itself is not held across the await
         let (method, path) = (request.method().clone(), request.uri().path().to_owned());
-        staff_permissions(&state, claims.sub, &method, &path).await?
-    };
+        auth.permissions = staff_permissions(&state, auth.customer_id, &method, &path).await?;
+    }
 
     // Admin handlers read the caller from the request, as behind auth_middleware
-    request.extensions_mut().insert(JwtAuth {
-        customer_id: claims.sub,
-        email: claims.email,
-        permissions,
-    });
+    request.extensions_mut().insert(auth);
 
     Ok(next.run(request).await)
 }

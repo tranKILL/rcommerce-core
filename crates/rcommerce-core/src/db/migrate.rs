@@ -334,6 +334,11 @@ impl Migrator {
                 "cart_activity_index",
                 include_str!("../../migrations/047_cart_activity_index.sql"),
             ),
+            (
+                48,
+                "two_factor",
+                include_str!("../../migrations/048_two_factor.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

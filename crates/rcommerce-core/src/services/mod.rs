@@ -32,12 +32,14 @@ pub mod staff_service;
 pub mod statistics_service;
 pub mod stock_availability;
 pub mod subscription_service;
+pub mod two_factor;
 
 pub use api_key_scopes::{presets as scope_presets, Action, Resource, Scope, ScopeChecker};
 pub use auth_service::ApiKey;
 pub use auth_service::AuthService;
 pub use auth_service::AuthenticatedUser;
 pub use auth_service::JwtClaims;
+pub use auth_service::SignedIn;
 pub use auth_service::TokenType;
 pub use bundle_service::BundleService;
 pub use cart_service::CartService;

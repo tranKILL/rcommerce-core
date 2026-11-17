@@ -14,9 +14,10 @@ use crate::middleware::{ClientIp, JwtAuth};
 use crate::state::AppState;
 use rcommerce_core::{
     models::CreateCustomerRequest,
+    models::Customer,
     notification::{Notification, NotificationChannel, NotificationPriority},
     services::auth_session::{self, RevokeReason, Rotation},
-    services::{JwtClaims, TokenType},
+    services::{JwtClaims, SignedIn, TokenType},
     Error,
 };
 
@@ -208,7 +209,7 @@ fn unauthorized() -> Response {
 
 /// Generic throttling response; carries Retry-After but reveals
 /// nothing about which budget tripped or whether the account exists.
-fn login_throttled(retry_after: u64) -> Response {
+pub(crate) fn login_throttled(retry_after: u64) -> Response {
     let mut response = (
         StatusCode::TOO_MANY_REQUESTS,
         Json(json!({
@@ -254,7 +255,7 @@ pub async fn login(
     State(state): State<AppState>,
     client_ip: Option<axum::Extension<ClientIp>>,
     Json(payload): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, Response> {
+) -> Result<Response, Response> {
     // The client IP was resolved (trusted-proxy aware) by client_ip
     // middleware. Hand-constructed routers without it share the unspecified
     // address; throttling then still applies (fail closed), it just cannot
@@ -312,9 +313,9 @@ pub async fn login(
         return Err(unauthorized());
     }
 
-    // Success: clear only this (IP, e-mail) pair's failures. The IP attempt
-    // budget (volume, not correctness) stays, and other pairs are untouched.
-    state.login_throttle.clear_pair(ip, &payload.email);
+    // The pair's failures are cleared once the sign-in is complete (after the second
+    // step when there is one: see `two_factor::after_password`), so a right password
+    // does not reset the budget of second-step guesses.
 
     // Email must be verified before logging in; this is only revealed to
     // someone who proved they hold the password.
@@ -350,27 +351,35 @@ pub async fn login(
         }
     }
 
-    // Generate tokens with role-based permissions
-    let access_token = state
-        .auth_service
-        .generate_access_token(customer.id, &customer.email, &customer.role)
-        .map_err(|e| e.into_response())?;
-    let refresh_token = start_session(&state, customer.id, payload.remember_me)
-        .await
-        .map_err(|e| e.into_response())?;
+    // Tokens, or the second step (accounts with a second factor, staff without one)
+    crate::routes::two_factor::after_password(&state, customer, payload.remember_me, ip).await
+}
 
-    Ok(Json(LoginResponse {
+/// Open a session and give the tokens of a successful sign-in; `how` records the
+/// methods used (`amr`) and when (`auth_time`)
+pub(crate) async fn sign_in(
+    state: &AppState,
+    customer: &Customer,
+    remember_me: bool,
+    how: &SignedIn,
+) -> Result<LoginResponse, Error> {
+    let access_token =
+        state
+            .auth_service
+            .issue_access_token(customer.id, &customer.email, &customer.role, how)?;
+    let refresh_token = start_session(state, customer.id, remember_me, how.mfa()).await?;
+    Ok(LoginResponse {
         access_token,
         refresh_token,
         token_type: "Bearer".to_string(),
         expires_in: state.auth_service.access_token_lifetime_secs(),
         customer: CustomerInfo {
             id: customer.id,
-            email: customer.email,
-            first_name: customer.first_name,
-            last_name: customer.last_name,
+            email: customer.email.clone(),
+            first_name: customer.first_name.clone(),
+            last_name: customer.last_name.clone(),
         },
-    }))
+    })
 }
 
 /// Register endpoint
@@ -502,14 +511,16 @@ async fn send_verification_email(
     Ok(())
 }
 
-/// Open a refresh-token session and return its first refresh token
+/// Open a refresh-token session and return its first refresh token; `mfa`: the
+/// sign-in used a second factor
 async fn start_session(
     state: &AppState,
     customer_id: Uuid,
     remember_me: bool,
+    mfa: bool,
 ) -> Result<String, Error> {
     let lifetime = state.auth_service.refresh_lifetime(remember_me);
-    let session = auth_session::start(state.db.pool(), customer_id, lifetime).await?;
+    let session = auth_session::start(state.db.pool(), customer_id, lifetime, mfa).await?;
     state
         .auth_service
         .generate_refresh_token(customer_id, &session)
@@ -524,11 +535,15 @@ fn refresh_claims(state: &AppState, token: &str) -> Result<JwtClaims, Error> {
     Ok(claims)
 }
 
-/// Use up a refresh token and return its successor.
+/// Use up a refresh token and return its successor, and the session (its id, and
+/// whether its sign-in used a second factor).
 ///
 /// Tokens issued before sessions existed carry no session: they are exchanged once for
 /// a session lasting what remained of their own lifetime.
-async fn rotate_refresh_token(state: &AppState, claims: &JwtClaims) -> Result<String, Error> {
+async fn rotate_refresh_token(
+    state: &AppState,
+    claims: &JwtClaims,
+) -> Result<(String, auth_session::SessionToken), Error> {
     let pool = state.db.pool();
     let session = match (claims.sid, claims.jti) {
         (Some(sid), Some(jti)) => match auth_session::rotate(pool, claims.sub, sid, jti).await? {
@@ -543,12 +558,13 @@ async fn rotate_refresh_token(state: &AppState, claims: &JwtClaims) -> Result<St
         },
         _ => {
             let left = chrono::Duration::seconds(claims.exp - chrono::Utc::now().timestamp());
-            auth_session::start(pool, claims.sub, left).await?
+            auth_session::start(pool, claims.sub, left, false).await?
         }
     };
-    state
+    let token = state
         .auth_service
-        .generate_refresh_token(claims.sub, &session)
+        .generate_refresh_token(claims.sub, &session)?;
+    Ok((token, session))
 }
 
 /// Refresh access token. The refresh token is rotated: each one works once, and
@@ -566,11 +582,20 @@ pub async fn refresh_token(
         .await?
         .ok_or_else(|| Error::unauthorized("Customer not found"))?;
 
-    let refresh_token = rotate_refresh_token(&state, &claims).await?;
+    let (refresh_token, session) = rotate_refresh_token(&state, &claims).await?;
+    let mfa = session.mfa;
+    // Staff who must use a second factor keep only sessions opened with one
+    if !mfa && crate::routes::two_factor::staff_required(&state, &customer).await? {
+        let pool = state.db.pool();
+        let reason = RevokeReason::SecondFactorRequired;
+        auth_session::revoke(pool, claims.sub, session.session_id, reason).await?;
+        return Err(Error::unauthorized("Sign in again with your second factor"));
+    }
+    let how = SignedIn::refreshed(mfa);
     let access_token =
         state
             .auth_service
-            .generate_access_token(claims.sub, &customer.email, &customer.role)?;
+            .issue_access_token(claims.sub, &customer.email, &customer.role, &how)?;
 
     Ok(Json(RefreshTokenResponse {
         access_token,
@@ -644,17 +669,24 @@ pub async fn change_password(
         .map_err(|e| e.into_response())?
         .ok_or_else(|| Error::unauthorized("Customer not found").into_response())?;
     check_current_password(&state, ip, &customer, &payload.current_password).await?;
-    replace_password(&state, &customer, &payload.new_password)
+    // the new session keeps the second factor only while the account still has one
+    let factors = rcommerce_core::services::two_factor::factors(state.db.pool(), customer.id)
+        .await
+        .map_err(|e| e.into_response())?;
+    let mfa = auth.mfa && factors.any();
+    replace_password(&state, &customer, &payload.new_password, mfa)
         .await
         .map(Json)
         .map_err(|e| e.into_response())
 }
 
-/// Store the new password, end every session and sign the caller in again
+/// Store the new password, end every session and sign the caller in again (`mfa`:
+/// the caller's sign-in used a second factor, which the new session keeps)
 async fn replace_password(
     state: &AppState,
     customer: &rcommerce_core::models::Customer,
     password: &str,
+    mfa: bool,
 ) -> Result<RefreshTokenResponse, Error> {
     let hash = state.auth_service.hash_password(password)?;
     state
@@ -663,11 +695,16 @@ async fn replace_password(
         .await?;
     let pool = state.db.pool();
     auth_session::revoke_all(pool, customer.id, RevokeReason::PasswordChange).await?;
-    let refresh_token = start_session(state, customer.id, false).await?;
-    let access_token =
-        state
-            .auth_service
-            .generate_access_token(customer.id, &customer.email, &customer.role)?;
+    let refresh_token = start_session(state, customer.id, false, mfa).await?;
+    // Not a proof of identity for sensitive changes: those need `/auth/reauth` (a
+    // second factor when the account has one), not the password alone
+    let how = SignedIn::refreshed(mfa);
+    let access_token = state.auth_service.issue_access_token(
+        customer.id,
+        &customer.email,
+        &customer.role,
+        &how,
+    )?;
     Ok(RefreshTokenResponse {
         access_token,
         refresh_token,

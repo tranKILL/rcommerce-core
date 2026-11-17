@@ -1707,7 +1707,13 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         // Product catalog
         .merge(crate::routes::product_router())
         // Customer authentication (register/login)
-        .merge(crate::routes::auth_public_router())
+        .merge(
+            crate::routes::auth_public_router().layer(middleware::map_response(
+                crate::routes::two_factor::no_store,
+            )),
+        )
+        // Second step of a sign-in, passkeys, re-verification, second-factor settings
+        .merge(crate::routes::two_factor::router())
         // Public cart operations: guest cart creation and cart access/modification
         // by cart ID (the cart ID acts as the bearer token for guests)
         .merge(crate::routes::cart_public_router())
@@ -1790,6 +1796,7 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         .merge(crate::routes::webhook_router())
         .merge(crate::routes::downloads_admin_router())
         .merge(crate::routes::inventory_admin_router())
+        .merge(crate::routes::two_factor::admin_router())
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             admin_middleware,

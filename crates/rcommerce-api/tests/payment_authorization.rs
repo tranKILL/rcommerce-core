@@ -388,6 +388,7 @@ fn auth(customer_id: Uuid) -> JwtAuth {
         customer_id,
         email: "customer@example.com".to_string(),
         permissions: vec!["read".to_string()],
+        ..Default::default()
     }
 }
 
@@ -396,6 +397,7 @@ fn admin() -> JwtAuth {
         customer_id: Uuid::new_v4(),
         email: "admin@example.com".to_string(),
         permissions: vec!["admin".to_string()],
+        ..Default::default()
     }
 }
 

@@ -23,6 +23,8 @@ pub struct SessionToken {
     pub token_id: Uuid,
     /// Absolute end of the session; rotation does not extend it
     pub expires_at: DateTime<Utc>,
+    /// The sign-in used a second factor (or a passkey): refreshed tokens keep it
+    pub mfa: bool,
 }
 
 /// Why a session was ended
@@ -34,6 +36,12 @@ pub enum RevokeReason {
     Reuse,
     /// The password was changed or reset
     PasswordChange,
+    /// An admin removed the account's second factors
+    FactorsReset,
+    /// Staff must sign in with a second factor; this session had none
+    SecondFactorRequired,
+    /// The account added a second factor: sessions opened without one end
+    SecondFactorAdded,
 }
 
 impl RevokeReason {
@@ -43,6 +51,9 @@ impl RevokeReason {
             RevokeReason::Logout => "logout",
             RevokeReason::Reuse => "reuse",
             RevokeReason::PasswordChange => "password_change",
+            RevokeReason::FactorsReset => "factors_reset",
+            RevokeReason::SecondFactorRequired => "second_factor_required",
+            RevokeReason::SecondFactorAdded => "second_factor_added",
         }
     }
 }
@@ -58,21 +69,29 @@ pub enum Rotation {
     Ended,
 }
 
-/// Open a session for `customer_id` that lasts `lifetime`
-pub async fn start(pool: &PgPool, customer_id: Uuid, lifetime: Duration) -> Result<SessionToken> {
+/// Open a session for `customer_id` that lasts `lifetime`; `mfa`: the sign-in used a
+/// second factor
+pub async fn start(
+    pool: &PgPool,
+    customer_id: Uuid,
+    lifetime: Duration,
+    mfa: bool,
+) -> Result<SessionToken> {
     let token = SessionToken {
         session_id: Uuid::new_v4(),
         token_id: Uuid::new_v4(),
         expires_at: Utc::now() + lifetime,
+        mfa,
     };
     sqlx::query(
-        "INSERT INTO auth_sessions (id, customer_id, current_token_id, expires_at) \
-         VALUES ($1, $2, $3, $4)",
+        "INSERT INTO auth_sessions (id, customer_id, current_token_id, expires_at, mfa) \
+         VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(token.session_id)
     .bind(customer_id)
     .bind(token.token_id)
     .bind(token.expires_at)
+    .bind(token.mfa)
     .execute(pool)
     .await?;
     Ok(token)
@@ -89,11 +108,11 @@ pub async fn rotate(
     token_id: Uuid,
 ) -> Result<Rotation> {
     let next = Uuid::new_v4();
-    let expires_at: Option<DateTime<Utc>> = sqlx::query_scalar(
+    let rotated: Option<(DateTime<Utc>, bool)> = sqlx::query_as(
         "UPDATE auth_sessions SET current_token_id = $4, last_used_at = NOW() \
          WHERE id = $1 AND customer_id = $2 AND current_token_id = $3 \
            AND revoked_at IS NULL AND expires_at > NOW() \
-         RETURNING expires_at",
+         RETURNING expires_at, mfa",
     )
     .bind(session_id)
     .bind(customer_id)
@@ -101,11 +120,12 @@ pub async fn rotate(
     .bind(next)
     .fetch_optional(pool)
     .await?;
-    if let Some(expires_at) = expires_at {
+    if let Some((expires_at, mfa)) = rotated {
         return Ok(Rotation::Rotated(SessionToken {
             session_id,
             token_id: next,
             expires_at,
+            mfa,
         }));
     }
     let revoked = sqlx::query(
@@ -143,6 +163,24 @@ pub async fn revoke(
     Ok(())
 }
 
+/// End the live sessions of `customer_id` opened without a second factor (a
+/// password possibly known to someone else); returns how many were ended
+pub async fn revoke_without_mfa(
+    pool: &PgPool,
+    customer_id: Uuid,
+    reason: RevokeReason,
+) -> Result<u64> {
+    let done = sqlx::query(
+        "UPDATE auth_sessions SET revoked_at = NOW(), revoked_reason = $2 \
+         WHERE customer_id = $1 AND NOT mfa AND revoked_at IS NULL AND expires_at > NOW()",
+    )
+    .bind(customer_id)
+    .bind(reason.as_str())
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
+}
+
 /// End every live session of `customer_id`; returns how many were ended
 pub async fn revoke_all(pool: &PgPool, customer_id: Uuid, reason: RevokeReason) -> Result<u64> {
     let done = sqlx::query(
@@ -166,6 +204,9 @@ mod tests {
             RevokeReason::Logout,
             RevokeReason::Reuse,
             RevokeReason::PasswordChange,
+            RevokeReason::FactorsReset,
+            RevokeReason::SecondFactorRequired,
+            RevokeReason::SecondFactorAdded,
         ] {
             assert!(reason.as_str().len() <= 32);
         }

@@ -103,6 +103,8 @@ rcgen = "0.13"
 # For E2E tests
 [dev-dependencies]
 # Additional test dependencies
+# A software passkey for the WebAuthn tests (no OpenSSL)
+webauthn-authenticator-rs = { version = "0.6.2", features = ["softpasskey"] }
 async-trait = { workspace = true }
 redis = { workspace = true }
 rand = { workspace = true }

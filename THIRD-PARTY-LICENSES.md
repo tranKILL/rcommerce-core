@@ -64,6 +64,21 @@ document lists the third-party software included in or used by R Commerce.
 - **Copyright**: Brian Smith
 - **Repository**: https://github.com/briansmith/ring
 
+### webauthn-rs (and webauthn-authenticator-rs, tests only)
+- **License**: MPL-2.0 (file-level copyleft; used unmodified)
+- **Copyright**: The Kanidm Project
+- **Repository**: https://github.com/kanidm/webauthn-rs
+
+### totp-rs
+- **License**: MIT
+- **Copyright**: Cleo Rebert (constantoine)
+- **Repository**: https://github.com/constantoine/totp-rs
+
+### aes-gcm
+- **License**: MIT OR Apache-2.0
+- **Copyright**: The RustCrypto Project Developers
+- **Repository**: https://github.com/RustCrypto/AEADs
+
 ## Serialization & Validation
 
 ### serde_json

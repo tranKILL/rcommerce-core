@@ -202,6 +202,31 @@ pub struct AppState {
     pub storefront_url: String,
     /// Catalogue sync from `[catalogue] source_url` (None when unconfigured)
     pub catalogue_sync: Option<Arc<rcommerce_core::catalogue::CatalogueSync>>,
+    /// Key of authenticator secrets (`[security.mfa] encryption_key`); None = no apps
+    pub totp_key: Option<rcommerce_core::services::two_factor::totp::SecretKey>,
+    /// The store as a passkey relying party (`[security.webauthn]`); None = no passkeys
+    pub passkeys: Option<rcommerce_core::services::two_factor::passkeys::Passkeys>,
+}
+
+/// Authenticator-app key and passkey relying party from `[security]`; a bad setting
+/// turns the feature off (logged), it does not stop the store
+fn two_factor_settings(
+    auth: &AuthService,
+) -> (
+    Option<rcommerce_core::services::two_factor::totp::SecretKey>,
+    Option<rcommerce_core::services::two_factor::passkeys::Passkeys>,
+) {
+    use rcommerce_core::services::two_factor::{passkeys::Passkeys, totp::SecretKey};
+    let security = &auth.config().security;
+    let key = SecretKey::from_config(&security.mfa).unwrap_or_else(|e| {
+        tracing::error!("Authenticator apps disabled: {}", e);
+        None
+    });
+    let passkeys = Passkeys::from_config(&security.webauthn).unwrap_or_else(|e| {
+        tracing::error!("Passkeys disabled: {}", e);
+        None
+    });
+    (key, passkeys)
 }
 
 impl AppState {
@@ -333,6 +358,7 @@ impl AppState {
             }
         });
         let pool = params.db.pool().clone();
+        let (totp_key, passkeys) = two_factor_settings(&params.auth_service);
 
         Self {
             product_service: params.product_service,
@@ -397,6 +423,8 @@ impl AppState {
             store_slug: "default".to_string(),
             storefront_url: "http://localhost:3000".to_string(),
             catalogue_sync: None,
+            totp_key,
+            passkeys,
         }
     }
 }

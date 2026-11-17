@@ -122,6 +122,10 @@ lru = "0.12"
 printpdf = { version = "0.11", features = ["images"] }
 # Logos: decoded, shrunk and compressed for documents
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+# Two-step sign-in: authenticator codes (RFC 6238), secrets encrypted at rest, passkeys (WebAuthn)
+totp-rs = { version = "6.0", features = ["otpauth"] }
+aes-gcm = "0.11"
+webauthn-rs = { version = "0.6.2", features = ["danger-allow-state-serialisation", "conditional-ui"] }
 
 [dev-dependencies]
 tempfile = "3.8"

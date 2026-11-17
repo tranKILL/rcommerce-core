@@ -127,6 +127,15 @@ secret = "change_this_to_a_secure_random_string_at_least_32_chars_long"
 # Token expiry time in hours (default: 24)
 expiry_hours = 24
 
+# Two-step sign-in: authenticator apps and passkeys (docs/api/14-two-factor.md)
+# [security.mfa]
+# staff = "required"                 # staff need a second factor (default: "optional")
+# encryption_key = "<openssl rand -base64 32>"   # encrypts authenticator secrets
+# [security.webauthn]
+# rp_id = "example.com"
+# rp_name = "My Store"
+# origins = ["https://www.example.com", "https://admin.example.com"]
+
 # =============================================================================
 # CACHE & PERFORMANCE
 # =============================================================================

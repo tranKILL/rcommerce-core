@@ -707,6 +707,14 @@ pub struct SecurityConfig {
 
     #[serde(default)]
     pub jwt: JwtConfig,
+
+    /// Two-step sign-in (authenticator codes, passkeys)
+    #[serde(default)]
+    pub mfa: MfaConfig,
+
+    /// Passkeys (WebAuthn): who the store is to the browser
+    #[serde(default)]
+    pub webauthn: WebauthnConfig,
 }
 
 impl Default for SecurityConfig {
@@ -715,8 +723,82 @@ impl Default for SecurityConfig {
             api_key_prefix_length: default_api_key_prefix_length(),
             api_key_secret_length: default_api_secret_length(),
             jwt: JwtConfig::default(),
+            mfa: MfaConfig::default(),
+            webauthn: WebauthnConfig::default(),
         }
     }
+}
+
+/// Whether staff (accounts with the Admin or Manager role or a staff role) must
+/// sign in with a second factor
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StaffMfaPolicy {
+    /// Staff choose, like customers (the default: today's behaviour)
+    #[default]
+    Optional,
+    /// Staff without a second factor must add one before they get a token
+    Required,
+}
+
+/// `[security.mfa]`
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct MfaConfig {
+    /// `optional` (default) or `required`
+    #[serde(default)]
+    pub staff: StaffMfaPolicy,
+    /// Key (base64 of 32 bytes) that encrypts authenticator secrets at rest.
+    /// Without it, authenticator apps cannot be set up (passkeys still can).
+    #[serde(default)]
+    pub encryption_key: Option<String>,
+    /// Name the authenticator app shows for this store; default: the WebAuthn
+    /// `rp_name`
+    #[serde(default)]
+    pub issuer: Option<String>,
+}
+
+/// The encryption key never shows in debug output (`rcommerce config`, logs)
+impl std::fmt::Debug for MfaConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MfaConfig")
+            .field("staff", &self.staff)
+            .field(
+                "encryption_key",
+                &self.encryption_key.as_ref().map(|_| "(set)"),
+            )
+            .field("issuer", &self.issuer)
+            .finish()
+    }
+}
+
+/// `[security.webauthn]`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebauthnConfig {
+    /// The registrable domain the storefront and back office share
+    /// (`example.com` for `www.example.com` and `admin.example.com`);
+    /// unset = passkeys are off
+    #[serde(default)]
+    pub rp_id: Option<String>,
+    /// The store's name in the browser's passkey dialogs
+    #[serde(default = "default_rp_name")]
+    pub rp_name: String,
+    /// Every origin allowed to use passkeys (`https://www.example.com`, ...)
+    #[serde(default)]
+    pub origins: Vec<String>,
+}
+
+impl Default for WebauthnConfig {
+    fn default() -> Self {
+        Self {
+            rp_id: None,
+            rp_name: default_rp_name(),
+            origins: Vec::new(),
+        }
+    }
+}
+
+fn default_rp_name() -> String {
+    "Store".to_string()
 }
 
 fn default_api_key_prefix_length() -> usize {

@@ -295,17 +295,15 @@ pub async fn combined_auth_middleware(
         match auth_service.verify_access_token(token) {
             Ok(claims) => {
                 // Create JWT auth context
-                let auth = JwtAuth {
-                    customer_id: claims.sub,
-                    email: claims.email,
-                    permissions: claims.permissions,
-                };
-
-                request.extensions_mut().insert(auth);
+                let customer_id = claims.sub;
+                let policy = auth_service.config().security.mfa.staff;
+                request
+                    .extensions_mut()
+                    .insert(JwtAuth::from_claims(claims, policy));
 
                 tracing::debug!(
                     "Combined auth: JWT authenticated for customer: {}",
-                    claims.sub
+                    customer_id
                 );
 
                 return Ok(next.run(request).await);
@@ -322,14 +320,45 @@ pub async fn combined_auth_middleware(
 }
 
 /// JWT authentication context (for combined auth)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct JwtAuth {
     pub customer_id: uuid::Uuid,
     pub email: String,
     pub permissions: Vec<String>,
+    /// The sign-in used a second factor (or a passkey)
+    pub mfa: bool,
+    /// When the person last proved who they are (unix seconds)
+    pub auth_time: Option<i64>,
 }
 
 impl JwtAuth {
+    /// The caller of a verified access token. With `[security.mfa] staff = "required"`,
+    /// a token without a second factor keeps a customer's powers only (`read`): staff
+    /// and admin powers need two factors. This is the one place that narrows them.
+    pub fn from_claims(
+        claims: rcommerce_core::services::JwtClaims,
+        staff_mfa: rcommerce_core::config::StaffMfaPolicy,
+    ) -> Self {
+        let mfa = claims.has_mfa();
+        let mut permissions = claims.permissions;
+        if staff_mfa == rcommerce_core::config::StaffMfaPolicy::Required && !mfa {
+            permissions.retain(|p| p == "read");
+        }
+        Self {
+            customer_id: claims.sub,
+            email: claims.email,
+            permissions,
+            mfa,
+            auth_time: claims.auth_time,
+        }
+    }
+
+    /// Whether the person proved who they are in the last `secs` seconds
+    pub fn is_fresh(&self, secs: i64) -> bool {
+        self.auth_time
+            .is_some_and(|at| chrono::Utc::now().timestamp() - at <= secs)
+    }
+
     /// Check if this JWT has permission for a specific resource and action
     pub fn can(&self, resource: Resource, action: Action) -> bool {
         match ScopeChecker::new(&self.permissions) {
@@ -474,6 +503,7 @@ mod tests {
             customer_id: uuid::Uuid::new_v4(),
             email: "test@example.com".to_string(),
             permissions: vec!["read".to_string(), "write".to_string()],
+            ..Default::default()
         };
 
         assert!(auth.can_read(Resource::Products));

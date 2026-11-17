@@ -1387,6 +1387,7 @@ mod tests {
             customer_id: Uuid::new_v4(),
             email: "actor@example.com".to_string(),
             permissions: permissions.iter().map(|p| p.to_string()).collect(),
+            ..Default::default()
         }
     }
 

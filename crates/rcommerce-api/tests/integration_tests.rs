@@ -7403,3 +7403,518 @@ async fn test_inactive_carts_deleted_after_months() {
     assert_eq!(lines, 0, "their lines went with them");
     app.cleanup().await.ok();
 }
+
+// =============================================================================
+// Two-step sign-in: authenticator apps, passkeys, staff
+// =============================================================================
+
+/// 32 bytes of 0x2A, base64: the test key of authenticator secrets
+const TEST_MFA_KEY: &str = "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=";
+const TEST_ORIGIN: &str = "https://shop.test";
+
+/// Turn on authenticator apps and passkeys (`shop.test`), with this staff policy
+fn with_two_factor(state: &mut AppState, staff: rcommerce_core::config::StaffMfaPolicy) {
+    use rcommerce_core::services::two_factor::{passkeys::Passkeys, totp::SecretKey};
+    let mut config = state.auth_service.config().clone();
+    config.security.mfa.encryption_key = Some(TEST_MFA_KEY.to_string());
+    config.security.mfa.staff = staff;
+    config.security.webauthn.rp_id = Some("shop.test".to_string());
+    config.security.webauthn.origins = vec![TEST_ORIGIN.to_string()];
+    state.totp_key = SecretKey::from_config(&config.security.mfa).unwrap();
+    state.passkeys = Passkeys::from_config(&config.security.webauthn).unwrap();
+    state.auth_service = AuthService::new(config);
+}
+
+/// DELETE with a bearer token; returns the status and the JSON body
+async fn delete_json(app: &TestApp, path: &str, bearer: &str) -> (u16, serde_json::Value) {
+    let response = app
+        .http_client
+        .delete(format!("{}/api/v1{}", app.base_url(), path))
+        .bearer_auth(bearer)
+        .send()
+        .await
+        .expect("request failed");
+    let status = response.status().as_u16();
+    (status, response.json().await.unwrap_or_default())
+}
+
+/// The password step: the 403 body of a sign-in that needs more
+async fn password_step(app: &TestApp, email: &str, password: &str) -> serde_json::Value {
+    let body = serde_json::json!({ "email": email, "password": password });
+    let (status, step) = post_json(app, "/auth/login", body, None).await;
+    assert_eq!(status, 403, "{step}");
+    step["error"].clone()
+}
+
+/// Set up an authenticator app with `bearer` (access or setup token); returns the
+/// base32 secret, the confirmation's answer and the time of the code used
+async fn add_authenticator(app: &TestApp, bearer: &str) -> (String, serde_json::Value, u64) {
+    use rcommerce_core::services::two_factor::totp;
+    let (status, setup) = post_json(
+        app,
+        "/customers/me/security/totp/setup",
+        serde_json::json!({}),
+        Some(bearer),
+    )
+    .await;
+    assert_eq!(status, 200, "{setup}");
+    let secret = setup["secret"].as_str().unwrap().to_string();
+    assert!(setup["otpauth_uri"]
+        .as_str()
+        .unwrap()
+        .starts_with("otpauth://totp/"));
+    let now = chrono::Utc::now().timestamp() as u64;
+    // the previous step's code (still valid): the current one stays free for a sign-in
+    let code = totp::code_at(&secret, now - 30).unwrap();
+    let body = serde_json::json!({ "code": code });
+    let (status, confirmed) = post_json(
+        app,
+        "/customers/me/security/totp/confirm",
+        body,
+        Some(bearer),
+    )
+    .await;
+    assert_eq!(status, 200, "{confirmed}");
+    (secret, confirmed, now)
+}
+
+/// An authenticator app becomes the second step; codes and recovery codes work once;
+/// removing the app needs a recent proof of identity
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_authenticator_app_as_second_step() {
+    use rcommerce_core::config::StaffMfaPolicy;
+    use rcommerce_core::services::two_factor::totp;
+    let app = TestApp::new_with(|s| with_two_factor(s, StaffMfaPolicy::Optional))
+        .await
+        .expect("Failed to create test app");
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let (access, refresh_token) = sign_in(&app, &customer.email, &password).await;
+
+    // A token from a refresh is no recent proof of identity
+    let body = serde_json::json!({ "refresh_token": refresh_token });
+    let (_, refreshed) = post_json(&app, "/auth/refresh", body, None).await;
+    let stale = refreshed["access_token"].as_str().unwrap().to_string();
+    let (status, body) = post_json(
+        &app,
+        "/customers/me/security/totp/setup",
+        serde_json::json!({}),
+        Some(&stale),
+    )
+    .await;
+    assert_eq!(
+        (status, body["error"]["code"].as_str()),
+        (403, Some("reauth_required"))
+    );
+
+    let (secret, confirmed, now) = add_authenticator(&app, &access).await;
+    let codes: Vec<String> = serde_json::from_value(confirmed["recovery_codes"].clone()).unwrap();
+    assert_eq!(codes.len(), 10);
+    // Sessions opened with the password alone ended; the answer brings a new one
+    assert_eq!(
+        refresh(&app, refreshed["refresh_token"].as_str().unwrap())
+            .await
+            .0,
+        401
+    );
+    assert!(confirmed["session"]["refresh_token"].is_string());
+    let code = |t: u64| totp::code_at(&secret, t).unwrap();
+
+    // The password alone no longer signs in
+    let step = password_step(&app, &customer.email, &password).await;
+    assert_eq!(step["code"], "second_factor_required");
+    let methods = step["methods"].to_string();
+    assert!(
+        methods.contains("totp") && methods.contains("recovery_code"),
+        "{methods}"
+    );
+    let challenge = step["challenge"].clone();
+    // The code used to confirm the app is spent, a code from the future is refused, and
+    // so is a malformed one
+    for wrong in [code(now - 30), code(now + 60), "12345".to_string()] {
+        let body = serde_json::json!({ "challenge": challenge, "code": wrong });
+        assert_eq!(
+            post_json(&app, "/auth/login/second-factor", body, None)
+                .await
+                .0,
+            401
+        );
+    }
+    // The current code works, and the challenge only once
+    let body = serde_json::json!({ "challenge": challenge, "code": code(now) });
+    let (status, tokens) = post_json(&app, "/auth/login/second-factor", body.clone(), None).await;
+    assert_eq!(status, 200, "{tokens}");
+    let claims = app
+        .app_state
+        .auth_service
+        .verify_access_token(tokens["access_token"].as_str().unwrap())
+        .unwrap();
+    assert!(claims.has_mfa() && claims.is_fresh(60));
+    assert_eq!(
+        post_json(&app, "/auth/login/second-factor", body, None)
+            .await
+            .0,
+        401
+    );
+
+    // A recovery code works once
+    for expected in [200, 401] {
+        let step = password_step(&app, &customer.email, &password).await;
+        let body = serde_json::json!({ "challenge": step["challenge"], "recovery_code": codes[0].to_lowercase() });
+        assert_eq!(
+            post_json(&app, "/auth/login/second-factor", body, None)
+                .await
+                .0,
+            expected
+        );
+    }
+
+    // Removing the app needs a recent proof: a recovery code re-verifies
+    let (status, _) = delete_json(&app, "/customers/me/security/totp", &stale).await;
+    assert_eq!(status, 403);
+    let body = serde_json::json!({ "password": password });
+    assert_eq!(
+        post_json(&app, "/auth/reauth", body, Some(&stale)).await.0,
+        400,
+        "a password is not enough"
+    );
+    // Changing the password is no proof either
+    let body =
+        serde_json::json!({ "current_password": password, "new_password": "N3w-Password-2026!" });
+    let (status, changed) = post_json(&app, "/customers/me/password", body, Some(&stale)).await;
+    assert_eq!(status, 200, "{changed}");
+    let after_change = changed["access_token"].as_str().unwrap().to_string();
+    let (status, _) = delete_json(&app, "/customers/me/security/totp", &after_change).await;
+    assert_eq!(
+        status, 403,
+        "a password change is no proof for removing a factor"
+    );
+    let password = "N3w-Password-2026!".to_string();
+    let body = serde_json::json!({ "recovery_code": codes[1] });
+    let (status, again) = post_json(&app, "/auth/reauth", body, Some(&stale)).await;
+    assert_eq!(status, 200, "{again}");
+    let verified = again["access_token"].as_str().unwrap().to_string();
+    assert_eq!(
+        delete_json(&app, "/customers/me/security/totp", &verified)
+            .await
+            .0,
+        204
+    );
+    sign_in(&app, &customer.email, &password).await;
+    app.cleanup().await.ok();
+}
+
+/// Make `customer` an admin
+async fn make_admin(app: &TestApp, customer: &Customer) {
+    sqlx::query("UPDATE customers SET role = 'admin' WHERE id = $1")
+        .bind(customer.id)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+}
+
+/// A staff sign-in under `staff = "required"`: enrol an authenticator app with the
+/// setup token; returns the session (access and refresh tokens)
+async fn enrol_staff(app: &TestApp, email: &str, password: &str) -> serde_json::Value {
+    let step = password_step(app, email, password).await;
+    assert_eq!(step["code"], "second_factor_enrolment_required", "{step}");
+    let setup = step["setup_token"].as_str().unwrap().to_string();
+    let (_, confirmed, _) = add_authenticator(app, &setup).await;
+    confirmed["session"].clone()
+}
+
+/// With `[security.mfa] staff = "required"`, staff get no token without a second
+/// factor, keep one, and an admin can reset a lost one
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_staff_must_sign_in_with_a_second_factor() {
+    use rcommerce_core::config::StaffMfaPolicy;
+    use reqwest::Method;
+    let app = TestApp::new_with(|s| with_two_factor(s, StaffMfaPolicy::Required))
+        .await
+        .expect("Failed to create test app");
+    let (staff, password) = app.create_test_customer().await.unwrap();
+    make_admin(&app, &staff).await;
+
+    // The setup token opens nothing but the second-factor settings
+    let step = password_step(&app, &staff.email, &password).await;
+    let setup = step["setup_token"].as_str().unwrap().to_string();
+    let used_setup = setup.clone();
+    let (status, _) = admin_api_call(&app, &setup, Method::GET, "/admin/staff/me", None).await;
+    assert_eq!(status, 401);
+    // A token signed with the password alone reaches no staff route
+    let role = rcommerce_core::models::CustomerRole::Admin;
+    let plain = app
+        .app_state
+        .auth_service
+        .generate_access_token(staff.id, &staff.email, &role)
+        .unwrap();
+    let (status, _) = admin_api_call(&app, &plain, Method::GET, "/admin/staff/me", None).await;
+    assert_eq!(status, 403);
+
+    // Adding an authenticator app signs the staff member in, with staff powers
+    let session = enrol_staff(&app, &staff.email, &password).await;
+    let access = session["access_token"].as_str().unwrap().to_string();
+    let (status, _) = admin_api_call(&app, &access, Method::GET, "/admin/staff/me", None).await;
+    assert_eq!(status, 200);
+    // Once a factor exists, the setup token adds no other one
+    let (status, _) = post_json(
+        &app,
+        "/customers/me/security/totp/setup",
+        serde_json::json!({}),
+        Some(&used_setup),
+    )
+    .await;
+    assert_eq!(status, 401);
+    let (status, _) = post_json(
+        &app,
+        "/customers/me/security/passkeys/options",
+        serde_json::json!({}),
+        Some(&used_setup),
+    )
+    .await;
+    assert_eq!(status, 401);
+    // The last second factor stays; an unknown passkey is 404, not the last-one rule
+    let (status, body) = delete_json(&app, "/customers/me/security/totp", &access).await;
+    assert_eq!(status, 409, "{body}");
+    let (status, _) = delete_json(&app, "/customers/me/security/passkeys/AAAA", &access).await;
+    assert_eq!(status, 404);
+    // A Manager's token without a second factor writes nothing
+    sqlx::query("UPDATE customers SET role = 'manager' WHERE id = $1")
+        .bind(staff.id)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    let role = rcommerce_core::models::CustomerRole::Manager;
+    let manager = app
+        .app_state
+        .auth_service
+        .generate_access_token(staff.id, &staff.email, &role)
+        .unwrap();
+    let (status, _) = admin_api_call(
+        &app,
+        &manager,
+        Method::POST,
+        "/products",
+        Some(staff_test_product()),
+    )
+    .await;
+    assert!(status == 401 || status == 403, "status {status}");
+    make_admin(&app, &staff).await;
+    // A refreshed session keeps the second factor
+    let refresh_token = session["refresh_token"].as_str().unwrap();
+    let body = serde_json::json!({ "refresh_token": refresh_token });
+    let (status, refreshed) = post_json(&app, "/auth/refresh", body, None).await;
+    assert_eq!(status, 200);
+    let renewed = refreshed["access_token"].as_str().unwrap();
+    assert_eq!(
+        admin_api_call(&app, renewed, Method::GET, "/admin/staff/me", None)
+            .await
+            .0,
+        200
+    );
+
+    // The setup token stops at the first factor: it cannot add another one
+    let step = password_step(&app, &staff.email, &password).await;
+    assert_eq!(step["code"], "second_factor_required");
+
+    // Another admin resets the lost phone: sessions end, the next sign-in enrols again
+    let (admin, admin_password) = app.create_test_customer().await.unwrap();
+    make_admin(&app, &admin).await;
+    let admin_session = enrol_staff(&app, &admin.email, &admin_password).await;
+    let admin_token = admin_session["access_token"].as_str().unwrap();
+    let path = format!("/admin/staff/{}/mfa/reset", staff.id);
+    let (status, body) = admin_api_call(&app, admin_token, Method::POST, &path, None).await;
+    assert_eq!(status, 200, "{body}");
+    let body = serde_json::json!({ "refresh_token": refreshed["refresh_token"] });
+    assert_eq!(post_json(&app, "/auth/refresh", body, None).await.0, 401);
+    let step = password_step(&app, &staff.email, &password).await;
+    assert_eq!(step["code"], "second_factor_enrolment_required");
+    // An old access token re-verified with the password alone gets no staff powers
+    let body = serde_json::json!({ "password": password });
+    let (status, again) = post_json(&app, "/auth/reauth", body, Some(&access)).await;
+    assert_eq!(status, 200, "{again}");
+    let without = again["access_token"].as_str().unwrap();
+    assert_eq!(
+        admin_api_call(&app, without, Method::GET, "/admin/staff/me", None)
+            .await
+            .0,
+        403
+    );
+    app.cleanup().await.ok();
+}
+
+/// Registration options for the software passkey. The API asks for a discoverable
+/// credential (checked here); the software passkey keeps none, so it is asked for a
+/// server-side one, which the store cannot tell apart.
+fn soft_registration(
+    options: &serde_json::Value,
+) -> rcommerce_core::services::two_factor::passkeys::CreationChallengeResponse {
+    let mut options = options.clone();
+    let selection = &mut options["publicKey"]["authenticatorSelection"];
+    assert_eq!(selection["residentKey"], "required");
+    assert_eq!(selection["requireResidentKey"], true);
+    selection["residentKey"] = serde_json::json!("discouraged");
+    selection["requireResidentKey"] = serde_json::json!(false);
+    serde_json::from_value(options).unwrap()
+}
+
+/// A passkey is added, then signs in after a password or on its own; a passkey from
+/// another site is refused
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_passkeys_sign_in_alone_or_as_second_step() {
+    use rcommerce_core::config::StaffMfaPolicy;
+    use rcommerce_core::services::two_factor::passkeys::RequestChallengeResponse;
+    use webauthn_authenticator_rs::{softpasskey::SoftPasskey, WebauthnAuthenticator};
+    let app = TestApp::new_with(|s| with_two_factor(s, StaffMfaPolicy::Optional))
+        .await
+        .expect("Failed to create test app");
+    let origin = url::Url::parse(TEST_ORIGIN).unwrap();
+    let mut device = SoftPasskey::new(true);
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let (access, _) = sign_in(&app, &customer.email, &password).await;
+
+    let options_path = "/customers/me/security/passkeys/options";
+    let (status, ceremony) =
+        post_json(&app, options_path, serde_json::json!({}), Some(&access)).await;
+    assert_eq!(status, 200, "{ceremony}");
+    let options = soft_registration(&ceremony["options"]);
+    let credential = device
+        .do_registration(origin.clone(), options)
+        .expect("registration");
+    let answer = serde_json::json!({
+        "state_id": ceremony["state_id"], "credential": credential, "name": "Laptop",
+    });
+    let verify_path = "/customers/me/security/passkeys/verify";
+    let (status, added) = post_json(&app, verify_path, answer.clone(), Some(&access)).await;
+    assert_eq!(status, 200, "{added}");
+    assert_eq!(added["passkey"]["name"], "Laptop");
+    assert_eq!(added["recovery_codes"].as_array().map(Vec::len), Some(10));
+    // The ceremony works once
+    assert_eq!(
+        post_json(&app, verify_path, answer, Some(&access)).await.0,
+        400
+    );
+
+    // Password, then the passkey
+    let step = password_step(&app, &customer.email, &password).await;
+    assert!(step["methods"].to_string().contains("passkey"), "{step}");
+    let body = serde_json::json!({ "challenge": step["challenge"] });
+    let (status, ceremony) = post_json(
+        &app,
+        "/auth/login/second-factor/passkey/options",
+        body,
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{ceremony}");
+    let options: RequestChallengeResponse =
+        serde_json::from_value(ceremony["options"].clone()).unwrap();
+    let credential = device
+        .do_authentication(origin.clone(), options)
+        .expect("authentication");
+    let answer = serde_json::json!({
+        "challenge": step["challenge"], "state_id": ceremony["state_id"], "credential": credential,
+    });
+    let (status, tokens) = post_json(
+        &app,
+        "/auth/login/second-factor/passkey/verify",
+        answer,
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{tokens}");
+
+    // The passkey alone, no e-mail typed. The software passkey only answers for a named
+    // credential and returns no user handle: the test plays the discoverable part (the
+    // signature covers neither).
+    let (status, ceremony) =
+        post_json(&app, "/auth/passkey/options", serde_json::json!({}), None).await;
+    assert_eq!(status, 200, "{ceremony}");
+    let mut options = ceremony["options"].clone();
+    assert_eq!(
+        options["publicKey"]["allowCredentials"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or(0),
+        0
+    );
+    options["publicKey"]["allowCredentials"] =
+        serde_json::json!([{ "type": "public-key", "id": added["passkey"]["id"] }]);
+    let options: RequestChallengeResponse = serde_json::from_value(options).unwrap();
+    let credential = device
+        .do_authentication(origin.clone(), options)
+        .expect("discoverable");
+    let (_, security) = admin_api_call(
+        &app,
+        &access,
+        reqwest::Method::GET,
+        "/customers/me/security",
+        None,
+    )
+    .await;
+    let mut credential = serde_json::to_value(credential).unwrap();
+    credential["response"]["userHandle"] = security["webauthn_user_id"].clone();
+    let answer = serde_json::json!({ "state_id": ceremony["state_id"], "credential": credential });
+    let (status, tokens) = post_json(&app, "/auth/passkey/verify", answer, None).await;
+    assert_eq!(status, 200, "{tokens}");
+    let claims = app
+        .app_state
+        .auth_service
+        .verify_access_token(tokens["access_token"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(claims.sub, customer.id);
+    assert!(claims.has_mfa());
+
+    // A credential made on an origin the store does not list (a sub-domain the
+    // authenticator accepts for this relying party) does not register
+    let (_, ceremony) = post_json(&app, options_path, serde_json::json!({}), Some(&access)).await;
+    let options = soft_registration(&ceremony["options"]);
+    let mut other = SoftPasskey::new(true);
+    let elsewhere = url::Url::parse("https://evil.shop.test").unwrap();
+    let credential = other
+        .do_registration(elsewhere, options)
+        .expect("registration");
+    let answer = serde_json::json!({ "state_id": ceremony["state_id"], "credential": credential });
+    assert_eq!(
+        post_json(&app, verify_path, answer, Some(&access)).await.0,
+        400
+    );
+    app.cleanup().await.ok();
+}
+
+/// Wrong codes are counted per account, whatever the address: after 10 in a row the
+/// account's codes are refused for a while; a right code starts the count again
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_second_step_codes_lock_per_account() {
+    use rcommerce_core::services::two_factor::lockout::{self, Attempt, MAX_FAILURES};
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let (customer, _) = app.create_test_customer().await.unwrap();
+    let pool = &app.db_pool;
+    for _ in 0..MAX_FAILURES {
+        assert_eq!(
+            lockout::reserve(pool, customer.id).await.unwrap(),
+            Attempt::Allowed
+        );
+    }
+    assert!(
+        matches!(lockout::reserve(pool, customer.id).await.unwrap(), Attempt::Locked(s) if s > 800)
+    );
+    assert!(matches!(
+        lockout::reserve(pool, customer.id).await.unwrap(),
+        Attempt::Locked(_)
+    ));
+    let (other, _) = app.create_test_customer().await.unwrap();
+    assert_eq!(
+        lockout::reserve(pool, other.id).await.unwrap(),
+        Attempt::Allowed
+    );
+    lockout::succeeded(pool, other.id).await.unwrap();
+    assert_eq!(
+        lockout::reserve(pool, other.id).await.unwrap(),
+        Attempt::Allowed
+    );
+    app.cleanup().await.ok();
+}

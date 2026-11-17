@@ -1040,6 +1040,7 @@ mod tests {
             customer_id: uuid::Uuid::new_v4(),
             email: "c@example.com".to_string(),
             permissions: vec!["read".to_string()],
+            ..Default::default()
         };
         let admin = JwtAuth {
             permissions: vec!["read".to_string(), "write".to_string(), "admin".to_string()],
@@ -1065,6 +1066,7 @@ mod tests {
             customer_id: uuid::Uuid::new_v4(),
             email: "s@example.com".to_string(),
             permissions: permissions.iter().map(|p| p.to_string()).collect(),
+            ..Default::default()
         };
         assert!(require_product_write(&with(&["read", "write", "admin"])).is_ok());
         assert!(require_product_write(&with(&["products:write"])).is_ok());
