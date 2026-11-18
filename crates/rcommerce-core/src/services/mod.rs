@@ -19,6 +19,7 @@ pub mod digital_product_service;
 pub mod dunning_service;
 pub mod location_service;
 pub mod loyalty_service;
+pub mod marketing_consent;
 pub mod newsletter_service;
 pub mod order_events;
 pub mod order_service;

@@ -19,6 +19,7 @@ pub mod invoice;
 pub mod invoices;
 pub mod location;
 pub mod loyalty;
+pub mod marketing;
 pub mod newsletter;
 pub mod order;
 pub mod order_delivery;

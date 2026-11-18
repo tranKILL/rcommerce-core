@@ -344,6 +344,11 @@ impl Migrator {
                 "stock_alerts",
                 include_str!("../../migrations/049_stock_alerts.sql"),
             ),
+            (
+                50,
+                "marketing_consents",
+                include_str!("../../migrations/050_marketing_consents.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

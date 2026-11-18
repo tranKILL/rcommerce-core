@@ -1740,6 +1740,8 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         )
         // Second step of a sign-in, passkeys, re-verification, second-factor settings
         .merge(crate::routes::two_factor::router())
+        // The unsubscribe link of commercial e-mails
+        .merge(crate::routes::marketing::router())
         // Public cart operations: guest cart creation and cart access/modification
         // by cart ID (the cart ID acts as the bearer token for guests)
         .merge(crate::routes::cart_public_router())
@@ -1794,6 +1796,8 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         .merge(crate::routes::loyalty::protected_router())
         // Stock alerts of the signed-in customer
         .merge(crate::routes::stock_alerts::protected_router())
+        // The customer's choice about commercial e-mails, with its history
+        .merge(crate::routes::marketing::protected_router())
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,
@@ -1825,6 +1829,7 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         .merge(crate::routes::downloads_admin_router())
         .merge(crate::routes::inventory_admin_router())
         .merge(crate::routes::two_factor::admin_router())
+        .merge(crate::routes::marketing::admin_router())
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             admin_middleware,

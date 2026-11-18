@@ -101,6 +101,12 @@ pub struct RegisterRequest {
     /// the request's `Accept-Language`
     #[serde(default)]
     pub locale: Option<String>,
+    /// Accepts commercial e-mails: an unticked box the customer ticked (recorded
+    /// with `marketing_wording`, the version of the text shown)
+    #[serde(default)]
+    pub accepts_marketing: bool,
+    #[serde(default)]
+    pub marketing_wording: Option<String>,
 }
 
 impl RegisterRequest {
@@ -108,6 +114,20 @@ impl RegisterRequest {
     /// and the other fields must fit the `customers` columns (email 255,
     /// names 100, phone 50) or the insert fails with a database error.
     fn validate(&self) -> Result<(), Error> {
+        if self
+            .marketing_wording
+            .as_deref()
+            .is_some_and(|w| w.chars().count() > 32)
+        {
+            return Err(Error::validation(
+                "marketing_wording: at most 32 characters",
+            ));
+        }
+        if self.accepts_marketing && self.marketing_wording.is_none() {
+            return Err(Error::validation(
+                "marketing_wording: the version of the text shown is needed with a yes",
+            ));
+        }
         if self.password.len() < 8 {
             return Err(Error::validation("Password must be at least 8 characters"));
         }
@@ -390,6 +410,7 @@ pub(crate) async fn sign_in(
 pub async fn register(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
+    client_ip: Option<axum::Extension<crate::middleware::ClientIp>>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), Error> {
     payload.validate()?;
@@ -412,6 +433,28 @@ pub async fn register(
         )
         .await?;
     let customer = remember_locale(&state, customer, locale).await;
+    if payload.accepts_marketing {
+        let ip = super::marketing::ip_of(client_ip);
+        let wording = payload.marketing_wording.as_deref();
+        let source = rcommerce_core::services::marketing_consent::Source::Register;
+        let recorded = super::marketing::record_choice(
+            &state,
+            customer.id,
+            true,
+            source,
+            wording,
+            ip,
+            &headers,
+        )
+        .await;
+        if let Err(e) = recorded {
+            tracing::error!(
+                "Failed to record the marketing consent of {}: {}",
+                customer.id,
+                e
+            );
+        }
+    }
 
     // Send welcome email with verification link
     if let Err(e) = send_verification_email(&state, &customer, None).await {
@@ -959,6 +1002,8 @@ mod tests {
             last_name: "Doe".to_string(),
             phone: Some("+32 2 000 00 00".to_string()),
             locale: None,
+            accepts_marketing: false,
+            marketing_wording: None,
         }
     }
 

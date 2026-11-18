@@ -148,6 +148,8 @@ pub struct CustomerQuery {
     pub sort: Option<String>,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
+    /// Only those who accept commercial e-mails (`true`) or do not (`false`)
+    pub marketing: Option<bool>,
 }
 
 /// Columns the staff customer list can be sorted on
@@ -188,6 +190,9 @@ fn customer_filters(qb: &mut QueryBuilder<'_, Postgres>, query: &CustomerQuery) 
             .push(" OR phone ILIKE ")
             .push_bind(pattern)
             .push(")");
+    }
+    if let Some(marketing) = query.marketing {
+        qb.push(" AND accepts_marketing = ").push_bind(marketing);
     }
 }
 

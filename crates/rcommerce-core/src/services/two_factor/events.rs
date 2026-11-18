@@ -33,6 +33,9 @@ pub const FACTORS_RESET: &str = "factors_reset";
 pub const REAUTHENTICATED: &str = "reauthenticated";
 /// The password was changed or reset (`detail.how`: change or reset)
 pub const PASSWORD_CHANGED: &str = "password_changed";
+/// A staff member exported the marketing e-mail list (`detail.audience`, `lang`,
+/// `rows`)
+pub const MARKETING_EXPORT: &str = "marketing_export";
 
 /// Events the account's owner is told about by e-mail: changes to how they sign in
 pub const NOTIFIED: [&str; 8] = [

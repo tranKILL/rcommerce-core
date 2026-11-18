@@ -1,5 +1,6 @@
 //! The reports as CSV files: comma-separated, a dot for decimals, UTF-8 with
-//! a byte order mark so spreadsheets pick the encoding up.
+//! a byte order mark so spreadsheets pick the encoding up. Every cell is guarded
+//! against spreadsheet formulas ([`formula_safe`]).
 
 use rust_decimal::{Decimal, RoundingStrategy};
 
@@ -21,15 +22,68 @@ const MONTH_NAMES: [&str; 12] = [
     "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
 ];
 
-/// Rows written to a CSV text
-fn write_csv(header: &[&str], rows: Vec<Vec<String>>) -> Result<String> {
+/// A cell a spreadsheet will not run as a formula (OWASP CSV injection): text
+/// starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a `'` in
+/// front, and so does each part after a `;` or a tab (spreadsheets set to `;` as
+/// separator split there); plain numbers (`-12.30`) stay as they are
+pub fn formula_safe(cell: &str) -> std::borrow::Cow<'_, str> {
+    if cell.parse::<f64>().is_ok() {
+        return std::borrow::Cow::Borrowed(cell);
+    }
+    let risky = |c: char| matches!(c, '=' | '+' | '-' | '@' | '\t' | '\r');
+    let mut out = String::with_capacity(cell.len() + 2);
+    // At the start of the cell, or of a part after `;` or a tab (spaces and quotes
+    // skipped): a spreadsheet using `;` as separator starts a new cell there
+    let mut at_start = true;
+    for c in cell.chars() {
+        if at_start && risky(c) {
+            out.push('\'');
+            at_start = false;
+        } else if !matches!(c, ' ' | '"' | '\'') {
+            at_start = false;
+        }
+        out.push(c);
+        if matches!(c, ';' | '\t') {
+            at_start = true;
+        }
+    }
+    if out.len() == cell.len() {
+        std::borrow::Cow::Borrowed(cell)
+    } else {
+        std::borrow::Cow::Owned(out)
+    }
+}
+
+/// Rows written to a CSV text, each cell guarded by [`formula_safe`]
+pub(crate) fn write_csv(header: &[&str], rows: Vec<Vec<String>>) -> Result<String> {
+    write_csv_keeping(header, rows, |_, _| false)
+}
+
+/// Rows written to a CSV text, each cell guarded by [`formula_safe`] unless `keep`
+/// (column index, cell) says it is safe as it is
+pub(crate) fn write_csv_keeping(
+    header: &[&str],
+    rows: Vec<Vec<String>>,
+    keep: impl Fn(usize, &str) -> bool,
+) -> Result<String> {
     let mut writer = csv::Writer::from_writer(Vec::new());
     writer
         .write_record(header)
         .map_err(|e| Error::internal(format!("CSV: {e}")))?;
     for row in rows {
+        let row: Vec<_> = row
+            .iter()
+            .enumerate()
+            .map(|(i, cell)| {
+                if keep(i, cell) {
+                    std::borrow::Cow::Borrowed(cell.as_str())
+                } else {
+                    formula_safe(cell)
+                }
+            })
+            .collect();
         writer
-            .write_record(&row)
+            .write_record(row.iter().map(|cell| cell.as_ref()))
             .map_err(|e| Error::internal(format!("CSV: {e}")))?;
     }
     let bytes = writer
@@ -253,6 +307,28 @@ fn promotions_csv(report: &MarketingReport) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cells_that_look_like_formulas_are_kept_as_text() {
+        for (cell, safe) in [
+            ("=HYPERLINK(\"http://x\")", "'=HYPERLINK(\"http://x\")"),
+            ("+1+1", "'+1+1"),
+            ("@SUM(A1)", "'@SUM(A1)"),
+            ("-2+3", "'-2+3"),
+            ("\tcmd", "'\tcmd"),
+            ("-12.30", "-12.30"),
+            ("+32", "+32"),
+            ("Anne", "Anne"),
+            ("x;=1+1;", "x;'=1+1;"),
+            ("a; =HYPERLINK(1)", "a; '=HYPERLINK(1)"),
+            ("Smith; Jr", "Smith; Jr"),
+            ("", ""),
+        ] {
+            assert_eq!(formula_safe(cell), safe, "{cell}");
+        }
+        let csv = write_csv(&["name"], vec![vec!["=1+2".to_string()]]).unwrap();
+        assert!(csv.contains("'=1+2"), "{csv}");
+    }
 
     #[test]
     fn csv_has_a_bom_a_header_and_quotes_commas() {

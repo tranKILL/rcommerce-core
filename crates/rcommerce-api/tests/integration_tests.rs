@@ -3438,7 +3438,8 @@ async fn test_customer_updates_own_profile() {
     };
 
     let response = put(serde_json::json!({
-        "first_name": " Ann ", "phone": "+32 470 00 00 00", "accepts_marketing": true
+        "first_name": " Ann ", "phone": "+32 470 00 00 00", "accepts_marketing": true,
+        "marketing_wording": "2026-11/fr"
     }))
     .await
     .unwrap();
@@ -7927,6 +7928,168 @@ async fn test_stock_alerts_fire_when_stock_reaches_the_branch() {
     );
     assert_eq!(
         admin_api_call(&app, &token, Method::DELETE, &close, None)
+            .await
+            .0,
+        404
+    );
+    app.cleanup().await.ok();
+}
+
+/// Commercial e-mails: the sign-up box and account changes are recorded with their
+/// source and wording (a repeat records nothing); the unsubscribe link turns them
+/// off. The staff export lists customers who said yes with a confirmed address,
+/// guards formula cells, carries each row's unsubscribe link, needs a recent proof
+/// of identity, and is logged.
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_marketing_consent_is_recorded_and_exported() {
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let email = format!("optin-{}@example.com", Uuid::new_v4().simple());
+    let body = serde_json::json!({
+        "email": email, "password": "Secure-pass-2026!", "first_name": "=HYPERLINK(\"x\")",
+        "last_name": "Optin", "accepts_marketing": true, "marketing_wording": "2026-11",
+    });
+    let (status, created) = post_json(&app, "/auth/register", body, None).await;
+    assert_eq!(status, 201, "{created}");
+    let id: Uuid = serde_json::from_value(created["customer"]["id"].clone()).unwrap();
+    sqlx::query("UPDATE customers SET email_verified = true WHERE id = $1")
+        .bind(id)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    let (token, _) = sign_in(&app, &email, "Secure-pass-2026!").await;
+    let mine = || admin_api_call(&app, &token, Method::GET, "/customers/me/marketing", None);
+    let (_, consent) = mine().await;
+    assert_eq!(consent["accepts_marketing"], true);
+    assert_eq!(consent["history"][0]["source"], "register");
+    assert_eq!(consent["history"][0]["wording_version"], "2026-11");
+
+    // Account changes: off, off again (nothing new), on
+    for granted in [false, false, true] {
+        let body =
+            serde_json::json!({ "accepts_marketing": granted, "marketing_wording": "2026-11/fr" });
+        let (status, _) =
+            admin_api_call(&app, &token, Method::PUT, "/customers/me", Some(body)).await;
+        assert_eq!(status, 200);
+    }
+    // A yes without the wording shown is no proof: refused
+    let off = serde_json::json!({ "accepts_marketing": false });
+    admin_api_call(&app, &token, Method::PUT, "/customers/me", Some(off)).await;
+    let bare = serde_json::json!({ "accepts_marketing": true });
+    let (status, _) = admin_api_call(&app, &token, Method::PUT, "/customers/me", Some(bare)).await;
+    assert_eq!(status, 400);
+    let yes = serde_json::json!({ "accepts_marketing": true, "marketing_wording": "2026-11/fr" });
+    admin_api_call(&app, &token, Method::PUT, "/customers/me", Some(yes)).await;
+    let (_, consent) = mine().await;
+    let history = consent["history"].as_array().unwrap();
+    assert_eq!(history.len(), 5, "{consent}");
+    assert_eq!(
+        (&history[0]["granted"], &history[0]["source"]),
+        (&serde_json::json!(true), &serde_json::json!("account"))
+    );
+
+    // Someone who said yes but never confirmed the address is left out
+    let (unconfirmed, _) = app.create_test_customer().await.unwrap();
+    sqlx::query(
+        "UPDATE customers SET accepts_marketing = true, email_verified = false WHERE id = $1",
+    )
+    .bind(unconfirmed.id)
+    .execute(&app.db_pool)
+    .await
+    .unwrap();
+
+    // A yes set before consents were recorded is no proof: left out
+    let (legacy, _) = app.create_test_customer().await.unwrap();
+    sqlx::query(
+        "UPDATE customers SET accepts_marketing = true, email_verified = true WHERE id = $1",
+    )
+    .bind(legacy.id)
+    .execute(&app.db_pool)
+    .await
+    .unwrap();
+
+    // The export: staff with a fresh proof of identity
+    let (staff, staff_password) = app.create_test_customer().await.unwrap();
+    make_admin(&app, &staff).await;
+    let (admin, admin_refresh) = sign_in(&app, &staff.email, &staff_password).await;
+    let (status, count) = admin_api_call(
+        &app,
+        &admin,
+        Method::GET,
+        "/admin/exports/marketing/count?audience=retail",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{count}");
+    assert!(count["count"].as_i64().unwrap() >= 1);
+    let csv_of = |bearer: String| {
+        let url = format!("{}/api/v1/admin/exports/marketing.csv", app.base_url());
+        let client = app.http_client.clone();
+        async move {
+            let response = client.get(url).bearer_auth(bearer).send().await.unwrap();
+            (response.status().as_u16(), response.text().await.unwrap())
+        }
+    };
+    let (status, csv) = csv_of(admin.clone()).await;
+    assert_eq!(status, 200, "{csv}");
+    let line = csv
+        .lines()
+        .find(|l| l.contains(&email))
+        .expect("the customer who said yes");
+    assert!(line.contains("'=HYPERLINK"), "formula guarded: {line}");
+    assert!(
+        !csv.contains(&unconfirmed.email),
+        "unconfirmed address left out"
+    );
+    assert!(
+        !csv.contains(&legacy.email),
+        "no consent on record: left out"
+    );
+    let logged: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM security_events WHERE kind = 'marketing_export' AND customer_id = $1",
+    )
+    .bind(staff.id)
+    .fetch_one(&app.db_pool)
+    .await
+    .unwrap();
+    assert_eq!(logged, 1);
+
+    // Without a recent proof of identity (a refreshed token): refused
+    let (_, renewed) = refresh(&app, &admin_refresh).await;
+    let body = serde_json::json!({ "refresh_token": renewed.unwrap() });
+    let (_, fresh) = post_json(&app, "/auth/refresh", body, None).await;
+    let stale = fresh["access_token"].as_str().unwrap().to_string();
+    let (status, refused) = csv_of(stale).await;
+    assert_eq!(status, 403);
+    assert!(refused.contains("reauth_required"), "{refused}");
+
+    // The row's unsubscribe link
+    let link = line.split(',').find(|c| c.contains("token=")).unwrap();
+    let unsubscribe_token = link.split("token=").nth(1).unwrap().trim().to_string();
+    let path = format!("/marketing/unsubscribe?token={unsubscribe_token}");
+    let response = app
+        .http_client
+        .get(format!("{}/api/v1{path}", app.base_url()))
+        .send()
+        .await
+        .unwrap();
+    let preview: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(preview["accepts_marketing"], true, "{preview}");
+    assert!(preview["email"].as_str().unwrap().starts_with("o***@e***."));
+    let body = serde_json::json!({ "token": unsubscribe_token });
+    assert_eq!(
+        post_json(&app, "/marketing/unsubscribe", body, None)
+            .await
+            .0,
+        200
+    );
+    let (_, consent) = mine().await;
+    assert_eq!(consent["accepts_marketing"], false);
+    assert_eq!(consent["history"][0]["source"], "unsubscribe");
+    let forged = serde_json::json!({ "token": format!("{id}.AAAA") });
+    assert_eq!(
+        post_json(&app, "/marketing/unsubscribe", forged, None)
             .await
             .0,
         404

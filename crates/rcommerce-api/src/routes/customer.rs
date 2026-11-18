@@ -91,6 +91,9 @@ pub struct UpdateProfileRequest {
     #[validate(length(max = 50))]
     pub phone: Option<String>,
     pub accepts_marketing: Option<bool>,
+    /// The version of the consent text shown with `accepts_marketing`
+    #[validate(length(max = 32))]
+    pub marketing_wording: Option<String>,
     /// Language of the customer's e-mails (`fr`, `nl-BE`); empty = the
     /// store's default
     pub locale: Option<String>,
@@ -100,6 +103,8 @@ pub struct UpdateProfileRequest {
 pub async fn update_current_customer(
     Extension(auth): Extension<JwtAuth>,
     State(state): State<AppState>,
+    client_ip: Option<Extension<crate::middleware::ClientIp>>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<UpdateProfileRequest>,
 ) -> Result<Json<serde_json::Value>, Error> {
     request
@@ -115,19 +120,50 @@ pub async fn update_current_customer(
             ));
         }
     }
+    let consent = request.accepts_marketing;
     let update = UpdateCustomerRequest {
         email: None,
         first_name: request.first_name.map(|s| s.trim().to_string()),
         last_name: request.last_name.map(|s| s.trim().to_string()),
         phone: request.phone.map(|s| s.trim().to_string()),
-        accepts_marketing: request.accepts_marketing,
+        accepts_marketing: None,
         tax_exempt: None,
         locale,
     };
+    let nothing_else = update.first_name.is_none()
+        && update.last_name.is_none()
+        && update.phone.is_none()
+        && update.locale.is_none();
+    if nothing_else && consent.is_none() {
+        return Err(Error::validation("No fields to update"));
+    }
+    if !nothing_else {
+        state
+            .customer_service
+            .update_customer(auth.customer_id, update)
+            .await?;
+    }
+    // Then a change of mind about commercial e-mails, recorded as proof
+    if let Some(granted) = consent {
+        let source = rcommerce_core::services::marketing_consent::Source::Account;
+        let ip = super::marketing::ip_of(client_ip);
+        let wording = request.marketing_wording.as_deref();
+        super::marketing::record_choice(
+            &state,
+            auth.customer_id,
+            granted,
+            source,
+            wording,
+            ip,
+            &headers,
+        )
+        .await?;
+    }
     let customer = state
         .customer_service
-        .update_customer(auth.customer_id, update)
-        .await?;
+        .find_by_id(auth.customer_id)
+        .await?
+        .ok_or_else(|| Error::not_found("Customer not found"))?;
     Ok(Json(
         serde_json::json!({ "customer": customer_json(&customer) }),
     ))

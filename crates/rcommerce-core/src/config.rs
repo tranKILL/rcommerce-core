@@ -374,6 +374,14 @@ impl Config {
                 "JWT secret must be at least 32 bytes long".to_string(),
             ));
         }
+        if let Some(key) = &self.security.unsubscribe_key {
+            if key.0.len() < 32 || key.0 == self.security.jwt.secret {
+                return Err(Error::Config(
+                    "security.unsubscribe_key: at least 32 bytes, and not the JWT secret"
+                        .to_string(),
+                ));
+            }
+        }
 
         Ok(())
     }
@@ -715,6 +723,11 @@ pub struct SecurityConfig {
     /// Passkeys (WebAuthn): who the store is to the browser
     #[serde(default)]
     pub webauthn: WebauthnConfig,
+
+    /// Key of the unsubscribe links of commercial e-mails. Set it so links already
+    /// sent keep working when `jwt.secret` changes; unset, they are keyed with it.
+    #[serde(default)]
+    pub unsubscribe_key: Option<Secret>,
 }
 
 impl Default for SecurityConfig {
@@ -725,7 +738,19 @@ impl Default for SecurityConfig {
             jwt: JwtConfig::default(),
             mfa: MfaConfig::default(),
             webauthn: WebauthnConfig::default(),
+            unsubscribe_key: None,
         }
+    }
+}
+
+/// A secret from the configuration: it never shows in debug output
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(pub String);
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("(set)")
     }
 }
 

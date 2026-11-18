@@ -430,6 +430,11 @@ require_special_chars = true
 max_age_days = 90            # Password expiry
 prevent_password_reuse = 5   # Can't reuse last N passwords
 
+# Key of the unsubscribe links in the e-mail list (see docs/api/16-marketing-consent.md);
+# set it so links already sent keep working when jwt.secret changes. Unset: the JWT secret.
+# It goes in [security] itself, before the [security.*] tables:
+#   unsubscribe_key = "…"   # openssl rand -base64 32
+
 # Two-step sign-in (see docs/api/14-two-factor.md)
 [security.mfa]
 staff = "optional"           # "required": staff get no token without a second factor
