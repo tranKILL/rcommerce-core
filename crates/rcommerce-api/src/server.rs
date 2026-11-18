@@ -98,6 +98,7 @@ pub async fn build_app(config: &Config) -> Result<Router> {
         spawn_abandoned_order_sweeper(config, &app_state);
         spawn_cart_cleanup(config, &app_state);
         spawn_stock_alerts(&app_state);
+        spawn_cart_reminders(&app_state);
         spawn_catalogue_sync_loop(config, &app_state);
         spawn_subscription_billing_loop(config, &app_state);
         spawn_peppol_loop(config, &app_state);
@@ -136,6 +137,7 @@ async fn build_multi_store_router(
         spawn_abandoned_order_sweeper(&store.config, &app_state);
         spawn_cart_cleanup(&store.config, &app_state);
         spawn_stock_alerts(&app_state);
+        spawn_cart_reminders(&app_state);
         spawn_catalogue_sync_loop(&store.config, &app_state);
         spawn_subscription_billing_loop(&store.config, &app_state);
         spawn_peppol_loop(&store.config, &app_state);
@@ -298,6 +300,7 @@ async fn run_tls_server(config: Config) -> Result<()> {
     spawn_abandoned_order_sweeper(&config, &app_state);
     spawn_cart_cleanup(&config, &app_state);
     spawn_stock_alerts(&app_state);
+    spawn_cart_reminders(&app_state);
     spawn_catalogue_sync_loop(&config, &app_state);
     spawn_subscription_billing_loop(&config, &app_state);
     spawn_state_cleanup(&app_state);
@@ -1147,6 +1150,7 @@ async fn create_app_state(config: &Config) -> Result<AppState> {
     );
     app_state.pos_terminal =
         rcommerce_core::services::pos::terminal::from_config(&config.pos.terminal);
+    app_state.push = rcommerce_core::push::PushSender::from_config(&config.push)?;
     app_state.branding.pdf_logo = pdf_logo(config);
     app_state.branding.address_lines = config.invoicing.seller.address_lines();
     app_state.branding.issues_invoices = config.invoicing.enabled;
@@ -1406,6 +1410,38 @@ fn spawn_stock_alerts(app_state: &AppState) {
                 Err(e) => warn!("stock alerts failed: {}", e),
             }
             tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        }
+    });
+}
+
+/// Send the reminders of carts left without an order (`[carts]
+/// reminder_after_hours`), every 15 minutes (first run 2 minutes after start), one
+/// store instance at a time. Nothing runs without a schedule or a notification
+/// service.
+fn spawn_cart_reminders(app_state: &AppState) {
+    let carts = &app_state.auth_service.config().carts;
+    if app_state.notification_service.is_none()
+        || rcommerce_core::services::cart_reminders::schedule(&carts.reminder_after_hours)
+            .is_empty()
+    {
+        return;
+    }
+    info!(
+        "cart reminders enabled: {:?} hour(s) after the last change",
+        carts.reminder_after_hours
+    );
+    let state = app_state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+        loop {
+            let pool = state.db.pool().clone();
+            let run = crate::routes::cart_reminders::send_due(&state);
+            match run_exclusive(&pool, job_names::CART_REMINDERS, run).await {
+                Ok(Some(n)) if n > 0 => info!("cart reminders: {} sent", n),
+                Ok(_) => {}
+                Err(e) => warn!("cart reminders failed: {}", e),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(900)).await;
         }
     });
 }
@@ -1796,6 +1832,7 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         .merge(crate::routes::loyalty::protected_router())
         // Stock alerts of the signed-in customer
         .merge(crate::routes::stock_alerts::protected_router())
+        .merge(crate::routes::push::protected_router())
         // The customer's choice about commercial e-mails, with its history
         .merge(crate::routes::marketing::protected_router())
         .route_layer(middleware::from_fn_with_state(
@@ -1830,6 +1867,7 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         .merge(crate::routes::inventory_admin_router())
         .merge(crate::routes::two_factor::admin_router())
         .merge(crate::routes::marketing::admin_router())
+        .merge(crate::routes::cart_reminders::admin_router())
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             admin_middleware,

@@ -368,3 +368,31 @@ Stock moves fast: order now to be sure of it.
 
 {{ company_name }}
 '''
+
+[cart_reminder]
+subject = "Your cart is waiting for you"
+heading = "Your cart is waiting for you"
+intro = "Hello {{ customer_name }}, you left these items in your cart. Here they are at today's prices."
+total = "Total"
+vat_included = "Current prices, VAT included. Price and stock are checked again when you order."
+vat_excluded = "Current prices, excluding VAT. Price and stock are checked again when you order."
+more = "and {{ count }} more item(s)"
+button = "View my cart"
+why = "You get this e-mail because you agreed to receive offers from {{ company_name }} by e-mail."
+unsubscribe = "Unsubscribe"
+push_title = "Your cart is waiting for you"
+push_body = "{{ count }} item(s) · {{ total }}. Tap to complete your order."
+text = '''
+Hello {{ customer_name }},
+
+You left these items in your cart (today's prices):
+{{ lines_text }}
+
+Total: {{ cart_total }}
+{{ price_note }}
+
+{{ cart_url }}
+
+{{ company_name }}
+Unsubscribe: {{ unsubscribe_url }}
+'''

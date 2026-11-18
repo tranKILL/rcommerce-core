@@ -19,6 +19,7 @@ pub mod order;
 pub mod payment;
 pub mod peppol;
 pub mod performance;
+pub mod push;
 pub mod repository;
 pub mod search;
 pub mod services;

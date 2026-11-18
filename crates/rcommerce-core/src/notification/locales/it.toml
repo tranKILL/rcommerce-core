@@ -367,3 +367,31 @@ Le scorte vanno via in fretta: ordina ora per essere sicuro di averlo.
 
 {{ company_name }}
 '''
+
+[cart_reminder]
+subject = "Il tuo carrello ti aspetta"
+heading = "Il tuo carrello ti aspetta"
+intro = "Ciao {{ customer_name }}, hai lasciato questi articoli nel carrello. Eccoli ai prezzi di oggi."
+total = "Totale"
+vat_included = "Prezzi attuali, IVA inclusa. Prezzo e disponibilità vengono verificati di nuovo all'ordine."
+vat_excluded = "Prezzi attuali, IVA esclusa. Prezzo e disponibilità vengono verificati di nuovo all'ordine."
+more = "e altri {{ count }} articoli"
+button = "Vedi il mio carrello"
+why = "Ricevi questa e-mail perché hai accettato di ricevere le offerte di {{ company_name }} via e-mail."
+unsubscribe = "Annulla l'iscrizione"
+push_title = "Il tuo carrello ti aspetta"
+push_body = "{{ count }} articoli · {{ total }}. Tocca per completare l'ordine."
+text = '''
+Ciao {{ customer_name }},
+
+Hai lasciato questi articoli nel carrello (prezzi di oggi):
+{{ lines_text }}
+
+Totale: {{ cart_total }}
+{{ price_note }}
+
+{{ cart_url }}
+
+{{ company_name }}
+Annulla l'iscrizione: {{ unsubscribe_url }}
+'''

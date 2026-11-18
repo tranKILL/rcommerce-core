@@ -27,6 +27,10 @@ R Commerce provides a complete API-first ecommerce platform with:
 | [12-finance-and-marketing.md](12-finance-and-marketing.md) | Finance and marketing reports, projection, CSV exports |
 | [13-till.md](13-till.md) | Till: sessions and Z reports, scanned codes, card terminal, baskets and sales |
 | [14-two-factor.md](14-two-factor.md) | Two-step sign-in: passkeys, authenticator apps, recovery codes, staff policy |
+| [15-stock-alerts.md](15-stock-alerts.md) | Stock alerts: told when a product is in stock at a branch |
+| [16-marketing-consent.md](16-marketing-consent.md) | Marketing consent with proof, unsubscribe links, the e-mail list |
+| [17-cart-reminders.md](17-cart-reminders.md) | Reminders of carts left without an order, and what they brought |
+| [18-push-notifications.md](18-push-notifications.md) | Push notifications to the mobile apps: devices, Firebase Cloud Messaging |
 
 ## API Endpoints
 

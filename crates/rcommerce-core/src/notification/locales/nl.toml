@@ -367,3 +367,31 @@ De voorraad gaat snel: bestel nu om zeker te zijn.
 
 {{ company_name }}
 '''
+
+[cart_reminder]
+subject = "Je winkelmandje wacht op je"
+heading = "Je winkelmandje wacht op je"
+intro = "Hallo {{ customer_name }}, je hebt deze artikelen in je winkelmandje laten staan. Hier zijn ze tegen de prijzen van vandaag."
+total = "Totaal"
+vat_included = "Actuele prijzen, inclusief btw. Prijs en voorraad worden opnieuw gecontroleerd bij je bestelling."
+vat_excluded = "Actuele prijzen, exclusief btw. Prijs en voorraad worden opnieuw gecontroleerd bij je bestelling."
+more = "en nog {{ count }} artikel(en)"
+button = "Bekijk mijn winkelmandje"
+why = "Je ontvangt deze e-mail omdat je ermee instemde aanbiedingen van {{ company_name }} per e-mail te ontvangen."
+unsubscribe = "Uitschrijven"
+push_title = "Je winkelmandje wacht op je"
+push_body = "{{ count }} artikel(en) · {{ total }}. Tik om je bestelling af te ronden."
+text = '''
+Hallo {{ customer_name }},
+
+Je hebt deze artikelen in je winkelmandje laten staan (prijzen van vandaag):
+{{ lines_text }}
+
+Totaal: {{ cart_total }}
+{{ price_note }}
+
+{{ cart_url }}
+
+{{ company_name }}
+Uitschrijven: {{ unsubscribe_url }}
+'''

@@ -367,3 +367,31 @@ Le stock part vite : commandez maintenant pour être sûr de l'avoir.
 
 {{ company_name }}
 '''
+
+[cart_reminder]
+subject = "Votre panier vous attend"
+heading = "Votre panier vous attend"
+intro = "Bonjour {{ customer_name }}, vous avez laissé ces articles dans votre panier. Les voici aux prix d'aujourd'hui."
+total = "Total"
+vat_included = "Prix actuels, TVA comprise. Le prix et le stock sont vérifiés à nouveau à la commande."
+vat_excluded = "Prix actuels, hors TVA. Le prix et le stock sont vérifiés à nouveau à la commande."
+more = "et {{ count }} autre(s) article(s)"
+button = "Voir mon panier"
+why = "Vous recevez cet e-mail car vous avez accepté de recevoir les offres de {{ company_name }} par e-mail."
+unsubscribe = "Se désabonner"
+push_title = "Votre panier vous attend"
+push_body = "{{ count }} article(s) · {{ total }}. Touchez pour finaliser votre commande."
+text = '''
+Bonjour {{ customer_name }},
+
+Vous avez laissé ces articles dans votre panier (prix d'aujourd'hui) :
+{{ lines_text }}
+
+Total : {{ cart_total }}
+{{ price_note }}
+
+{{ cart_url }}
+
+{{ company_name }}
+Se désabonner : {{ unsubscribe_url }}
+'''

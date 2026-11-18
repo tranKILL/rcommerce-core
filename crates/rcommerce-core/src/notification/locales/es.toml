@@ -367,3 +367,31 @@ El stock vuela: haga su pedido ahora para asegurárselo.
 
 {{ company_name }}
 '''
+
+[cart_reminder]
+subject = "Tu carrito te espera"
+heading = "Tu carrito te espera"
+intro = "Hola {{ customer_name }}, dejaste estos artículos en tu carrito. Aquí los tienes a los precios de hoy."
+total = "Total"
+vat_included = "Precios actuales, IVA incluido. El precio y el stock se comprueban de nuevo al hacer el pedido."
+vat_excluded = "Precios actuales, sin IVA. El precio y el stock se comprueban de nuevo al hacer el pedido."
+more = "y {{ count }} artículo(s) más"
+button = "Ver mi carrito"
+why = "Recibes este correo porque aceptaste recibir las ofertas de {{ company_name }} por correo electrónico."
+unsubscribe = "Darse de baja"
+push_title = "Tu carrito te espera"
+push_body = "{{ count }} artículo(s) · {{ total }}. Toca para completar tu pedido."
+text = '''
+Hola {{ customer_name }}:
+
+Dejaste estos artículos en tu carrito (precios de hoy):
+{{ lines_text }}
+
+Total: {{ cart_total }}
+{{ price_note }}
+
+{{ cart_url }}
+
+{{ company_name }}
+Darse de baja: {{ unsubscribe_url }}
+'''

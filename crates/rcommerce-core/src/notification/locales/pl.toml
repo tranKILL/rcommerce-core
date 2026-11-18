@@ -367,3 +367,31 @@ Zapasy szybko się kończą: zamów teraz, aby mieć pewność.
 
 {{ company_name }}
 '''
+
+[cart_reminder]
+subject = "Twój koszyk na Ciebie czeka"
+heading = "Twój koszyk na Ciebie czeka"
+intro = "Dzień dobry {{ customer_name }}, te produkty zostały w Twoim koszyku. Oto one w dzisiejszych cenach."
+total = "Razem"
+vat_included = "Aktualne ceny z VAT. Cena i dostępność są sprawdzane ponownie przy zamówieniu."
+vat_excluded = "Aktualne ceny bez VAT. Cena i dostępność są sprawdzane ponownie przy zamówieniu."
+more = "i jeszcze {{ count }} produkt(y)"
+button = "Zobacz mój koszyk"
+why = "Otrzymujesz ten e-mail, ponieważ zgodziłeś się otrzymywać oferty {{ company_name }} e-mailem."
+unsubscribe = "Wypisz się"
+push_title = "Twój koszyk na Ciebie czeka"
+push_body = "{{ count }} produkt(y) · {{ total }}. Dotknij, aby dokończyć zamówienie."
+text = '''
+Dzień dobry {{ customer_name }},
+
+Te produkty zostały w Twoim koszyku (dzisiejsze ceny):
+{{ lines_text }}
+
+Razem: {{ cart_total }}
+{{ price_note }}
+
+{{ cart_url }}
+
+{{ company_name }}
+Wypisz się: {{ unsubscribe_url }}
+'''

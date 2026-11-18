@@ -105,6 +105,24 @@ impl SmtpConfig {
     }
 }
 
+/// Headers a notification may add (`metadata.headers`): the list headers of
+/// commercial e-mails (RFC 2369, RFC 8058), single-line values only
+const LIST_HEADERS: [&str; 2] = ["List-Unsubscribe", "List-Unsubscribe-Post"];
+
+/// The list headers of `notification`, from `metadata.headers`
+fn list_headers(notification: &Notification) -> Vec<(&'static str, String)> {
+    let Some(headers) = notification.metadata.get("headers") else {
+        return Vec::new();
+    };
+    LIST_HEADERS
+        .iter()
+        .filter_map(|name| {
+            let value = headers.get(*name)?.as_str()?;
+            (!value.contains(['\r', '\n'])).then(|| (*name, value.to_string()))
+        })
+        .collect()
+}
+
 /// Email notification channel
 #[derive(Clone)]
 pub struct EmailChannel {
@@ -242,6 +260,15 @@ impl EmailChannel {
                     .parse()
                     .map_err(|e| Error::notification_error(format!("Invalid recipient: {}", e)))?)
                 .subject(notification.subject.clone());
+        let message_builder = list_headers(notification).into_iter().fold(
+            message_builder,
+            |builder, (name, value)| {
+                builder.raw_header(header::HeaderValue::new(
+                    header::HeaderName::new_from_ascii_str(name),
+                    value,
+                ))
+            },
+        );
 
         let message = if notification.attachments.is_empty() {
             if let Some(ref html_body) = notification.html_body {
@@ -340,6 +367,13 @@ impl EmailChannel {
 
         if let Some(ref html_body) = notification.html_body {
             payload["HtmlBody"] = json!(html_body);
+        }
+        let headers: Vec<serde_json::Value> = list_headers(notification)
+            .into_iter()
+            .map(|(name, value)| json!({ "Name": name, "Value": value }))
+            .collect();
+        if !headers.is_empty() {
+            payload["Headers"] = json!(headers);
         }
 
         if !notification.attachments.is_empty() {

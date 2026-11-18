@@ -367,3 +367,31 @@ Stocul se epuizează repede: comandați acum ca să fiți sigur.
 
 {{ company_name }}
 '''
+
+[cart_reminder]
+subject = "Coșul tău te așteaptă"
+heading = "Coșul tău te așteaptă"
+intro = "Bună, {{ customer_name }}, ai lăsat aceste produse în coș. Iată-le la prețurile de azi."
+total = "Total"
+vat_included = "Prețuri actuale, cu TVA inclus. Prețul și stocul sunt verificate din nou la comandă."
+vat_excluded = "Prețuri actuale, fără TVA. Prețul și stocul sunt verificate din nou la comandă."
+more = "și încă {{ count }} produs(e)"
+button = "Vezi coșul meu"
+why = "Primești acest e-mail pentru că ai acceptat să primești ofertele {{ company_name }} prin e-mail."
+unsubscribe = "Dezabonare"
+push_title = "Coșul tău te așteaptă"
+push_body = "{{ count }} produs(e) · {{ total }}. Atinge pentru a finaliza comanda."
+text = '''
+Bună, {{ customer_name }},
+
+Ai lăsat aceste produse în coș (prețurile de azi):
+{{ lines_text }}
+
+Total: {{ cart_total }}
+{{ price_note }}
+
+{{ cart_url }}
+
+{{ company_name }}
+Dezabonare: {{ unsubscribe_url }}
+'''

@@ -85,6 +85,7 @@ impl NotificationTemplate {
             "password_reset_html" => Ok(Self::password_reset_html()),
             "security_notice_html" => Ok(Self::security_notice_html()),
             "stock_alert_html" => Ok(Self::stock_alert_html()),
+            "cart_reminder_html" => Ok(Self::cart_reminder_html()),
             "verify_email_html" => Ok(Self::verify_email_html()),
             "abandoned_cart_html" => Ok(Self::abandoned_cart_html()),
             _ => Err(Error::not_found("Template not found")),
@@ -178,6 +179,7 @@ impl NotificationTemplate {
                 Ok(include_str!("templates/security_notice.html").to_string())
             }
             "stock_alert.html" => Ok(include_str!("templates/stock_alert.html").to_string()),
+            "cart_reminder.html" => Ok(include_str!("templates/cart_reminder.html").to_string()),
             "abandoned_cart.html" => Ok(include_str!("templates/abandoned_cart.html").to_string()),
             "verify_email.html" => Ok(include_str!("templates/verify_email.html").to_string()),
             _ => Err(Error::not_found("HTML template not found")),
@@ -843,6 +845,33 @@ Questions? {{ contact_support_url }}
                 "location_name".to_string(),
                 "quantity".to_string(),
                 "product_url".to_string(),
+                "company_name".to_string(),
+            ],
+        }
+    }
+
+    /// A signed-in customer's cart left without an order (commercial: with the
+    /// unsubscribe link)
+    fn cart_reminder_html() -> Self {
+        Self {
+            id: "cart_reminder_html".to_string(),
+            name: "Cart Reminder HTML".to_string(),
+            subject: "{{ t.subject }}".to_string(),
+            body: "{{ t.text }}".to_string(),
+            html_body: Some(
+                Self::load_html_template("cart_reminder.html")
+                    .unwrap_or_else(|_| Self::get_default_html_template()),
+            ),
+            locale: i18n::BASE_LOCALE.to_string(),
+            channel: crate::notification::NotificationChannel::Email,
+            variables: vec![
+                "customer_name".to_string(),
+                "cart_items".to_string(),
+                "lines_text".to_string(),
+                "cart_total".to_string(),
+                "price_note".to_string(),
+                "cart_url".to_string(),
+                "unsubscribe_url".to_string(),
                 "company_name".to_string(),
             ],
         }

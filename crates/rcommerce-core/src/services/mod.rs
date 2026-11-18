@@ -5,6 +5,7 @@ pub mod auth_session;
 pub mod bundle_service;
 pub mod cart_cleanup;
 pub(crate) mod cart_mutation;
+pub mod cart_reminders;
 pub mod cart_service;
 pub mod checkout_pickup;
 pub mod checkout_service;

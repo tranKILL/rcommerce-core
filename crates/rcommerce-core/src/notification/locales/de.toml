@@ -367,3 +367,31 @@ Der Bestand ist schnell weg: Bestellen Sie jetzt, um sicherzugehen.
 
 {{ company_name }}
 '''
+
+[cart_reminder]
+subject = "Ihr Warenkorb wartet auf Sie"
+heading = "Ihr Warenkorb wartet auf Sie"
+intro = "Hallo {{ customer_name }}, Sie haben diese Artikel in Ihrem Warenkorb gelassen. Hier sind sie zu den heutigen Preisen."
+total = "Gesamt"
+vat_included = "Aktuelle Preise inkl. MwSt. Preis und Bestand werden bei der Bestellung erneut geprüft."
+vat_excluded = "Aktuelle Preise ohne MwSt. Preis und Bestand werden bei der Bestellung erneut geprüft."
+more = "und {{ count }} weitere(r) Artikel"
+button = "Meinen Warenkorb ansehen"
+why = "Sie erhalten diese E-Mail, weil Sie zugestimmt haben, Angebote von {{ company_name }} per E-Mail zu erhalten."
+unsubscribe = "Abmelden"
+push_title = "Ihr Warenkorb wartet auf Sie"
+push_body = "{{ count }} Artikel · {{ total }}. Tippen Sie, um Ihre Bestellung abzuschließen."
+text = '''
+Hallo {{ customer_name }},
+
+Sie haben diese Artikel in Ihrem Warenkorb gelassen (heutige Preise):
+{{ lines_text }}
+
+Gesamt: {{ cart_total }}
+{{ price_note }}
+
+{{ cart_url }}
+
+{{ company_name }}
+Abmelden: {{ unsubscribe_url }}
+'''

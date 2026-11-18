@@ -53,7 +53,7 @@ pub(crate) async fn record_choice(
 }
 
 /// The key of the unsubscribe links
-fn unsubscribe_key(state: &AppState) -> Vec<u8> {
+pub(crate) fn unsubscribe_key(state: &AppState) -> Vec<u8> {
     let security = &state.auth_service.config().security;
     match &security.unsubscribe_key {
         Some(key) => key.0.as_bytes().to_vec(),

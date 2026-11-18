@@ -206,6 +206,8 @@ pub struct AppState {
     pub totp_key: Option<rcommerce_core::services::two_factor::totp::SecretKey>,
     /// The store as a passkey relying party (`[security.webauthn]`); None = no passkeys
     pub passkeys: Option<rcommerce_core::services::two_factor::passkeys::Passkeys>,
+    /// Push notifications to the mobile apps (`[push]`); None = no push
+    pub push: Option<Arc<rcommerce_core::push::PushSender>>,
 }
 
 /// Authenticator-app key and passkey relying party from `[security]`; a bad setting
@@ -425,6 +427,7 @@ impl AppState {
             catalogue_sync: None,
             totp_key,
             passkeys,
+            push: None,
         }
     }
 }

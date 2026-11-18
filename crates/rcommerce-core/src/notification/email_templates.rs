@@ -13,6 +13,23 @@ use crate::Result;
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
+/// What a cart reminder says
+#[derive(Debug, Clone)]
+pub struct CartReminderMail<'a> {
+    pub recipient: &'a str,
+    pub customer_name: &'a str,
+    pub locale: &'a str,
+    pub currency: &'a str,
+    /// The lines shown, at today's prices (VAT included when `vat_included`)
+    pub lines: &'a [crate::services::cart_reminders::ReminderLine],
+    /// Lines not shown
+    pub more: i64,
+    pub total: Decimal,
+    pub vat_included: bool,
+    pub cart_url: &'a str,
+    pub unsubscribe_url: &'a str,
+}
+
 /// Email template types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmailTemplateType {
@@ -367,6 +384,99 @@ impl EmailNotificationFactory {
         vars.insert("accent_color", &branding.accent_color);
 
         Self::create_notification(recipient_email, &template, vars, branding)
+    }
+
+    /// Remind a customer of a cart left without an order: its lines at today's
+    /// prices, a link to the cart, and the unsubscribe link (in the text and in the
+    /// `List-Unsubscribe` header)
+    pub fn cart_reminder(
+        reminder: &CartReminderMail<'_>,
+        branding: &crate::config::BrandingConfig,
+    ) -> Result<Notification> {
+        let locale = reminder.locale;
+        let template = NotificationTemplate::load_localized("cart_reminder_html", locale)?;
+        let (rows, text_lines) = Self::cart_reminder_lines(reminder);
+        let note = if reminder.vat_included {
+            "vat_included"
+        } else {
+            "vat_excluded"
+        };
+
+        let mut vars = TemplateVariables::new();
+        vars.insert("customer_name", reminder.customer_name);
+        vars.insert("cart_items", &rows);
+        vars.insert("lines_text", text_lines.trim_end());
+        vars.insert(
+            "cart_total",
+            i18n::money(locale, reminder.total, reminder.currency),
+        );
+        vars.insert("price_note", i18n::text(locale, "cart_reminder", note));
+        vars.insert("cart_url", reminder.cart_url);
+        vars.insert("unsubscribe_url", reminder.unsubscribe_url);
+        vars.insert("company_name", &branding.name);
+        vars.insert("support_email", &branding.support_email);
+        vars.insert("accent_color", &branding.accent_color);
+
+        let mut mail = Self::create_notification(reminder.recipient, &template, vars, branding)?;
+        mail.metadata["headers"] = serde_json::json!({
+            "List-Unsubscribe": format!("<{}>", reminder.unsubscribe_url),
+        });
+        Ok(mail)
+    }
+
+    /// A reminder's lines as HTML rows (data escaped) and as text, with the count
+    /// of the lines not shown
+    fn cart_reminder_lines(reminder: &CartReminderMail<'_>) -> (String, String) {
+        let locale = reminder.locale;
+        let money = |amount: Decimal| i18n::money(locale, amount, reminder.currency);
+        let mut rows = String::new();
+        let mut text = String::new();
+        for line in reminder.lines {
+            let name = match &line.variant_title {
+                Some(variant) if !variant.is_empty() => format!("{} – {variant}", line.title),
+                _ => line.title.clone(),
+            };
+            rows.push_str(&format!(
+                "<tr><td width=\"64\" style=\"padding:8px 8px 8px 0;border-bottom:1px solid #eeeeee;\">{}</td>\
+                 <td style=\"padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;line-height:1.4;color:#1a1a1a;\">{}\
+                 <div style=\"font-size:12px;color:#999999;\">× {}</div></td>\
+                 <td align=\"right\" style=\"padding:8px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#1a1a1a;white-space:nowrap;\">{}</td></tr>",
+                Self::line_picture(line.image_url.as_deref()),
+                escape_html(&name),
+                line.quantity,
+                escape_html(&money(line.total))
+            ));
+            text.push_str(&format!(
+                "- {} × {}: {}\n",
+                line.quantity,
+                name,
+                money(line.total)
+            ));
+        }
+        if reminder.more > 0 {
+            let more = i18n::text(locale, "cart_reminder", "more")
+                .replace("{{ count }}", &reminder.more.to_string());
+            rows.push_str(&format!(
+                "<tr><td></td><td colspan=\"2\" style=\"padding:8px 0;font-size:13px;color:#777777;\">{}</td></tr>",
+                escape_html(&more)
+            ));
+            text.push_str(&format!("{more}\n"));
+        }
+        (rows, text)
+    }
+
+    /// A line's picture; only absolute web addresses (a relative one shows as a
+    /// broken image)
+    fn line_picture(url: Option<&str>) -> String {
+        url.filter(|u| u.starts_with("https://") || u.starts_with("http://"))
+            .map(|u| {
+                format!(
+                    "<img src=\"{}\" width=\"56\" height=\"56\" alt=\"\" \
+                     style=\"display:block;width:56px;height:56px;object-fit:cover;border:1px solid #eeeeee;\">",
+                    escape_html(u)
+                )
+            })
+            .unwrap_or_default()
     }
 
     /// Create notification from template and variables
@@ -802,6 +912,72 @@ mod tests {
             assert!(mail.subject.contains("Ciment <25 kg>"), "{locale}");
             assert!(html.contains("Ciment &lt;25 kg&gt;") && html.contains("North depot"));
             assert!(html.contains("12") && html.contains(url) && mail.body.contains(url));
+            for text in [&html, &mail.body, &mail.subject] {
+                assert!(!text.contains("{{"), "{locale}: {text}");
+            }
+        }
+    }
+
+    /// The cart reminder reads in every language: lines (escaped), prices, the cart
+    /// link, the unsubscribe link in the text and in the `List-Unsubscribe` header
+    #[test]
+    fn cart_reminders_read_in_every_language() {
+        use crate::services::cart_reminders::ReminderLine;
+        let branding = crate::config::BrandingConfig::default();
+        let lines = vec![
+            ReminderLine {
+                id: Uuid::new_v4(),
+                title: "Ciment <25 kg>".into(),
+                variant_title: None,
+                quantity: 3,
+                total: Decimal::new(1599, 2),
+                image_url: Some("https://cdn.example/c.jpg".into()),
+            },
+            ReminderLine {
+                id: Uuid::new_v4(),
+                title: "Sable".into(),
+                variant_title: Some("0/2".into()),
+                quantity: 1,
+                total: Decimal::new(500, 2),
+                image_url: Some("/uploads/relative.jpg".into()),
+            },
+        ];
+        let unsubscribe = "https://shop.example/account/unsubscribe?token=abc.def";
+        for locale in ["en", "fr", "nl", "de", "it", "es", "pt", "tr", "ro", "pl"] {
+            let reminder = CartReminderMail {
+                recipient: "ann@example.com",
+                customer_name: "Ann",
+                locale,
+                currency: "EUR",
+                lines: &lines,
+                more: 2,
+                total: Decimal::new(2099, 2),
+                vat_included: true,
+                cart_url: "https://shop.example/cart?lang=fr",
+                unsubscribe_url: unsubscribe,
+            };
+            let mail = EmailNotificationFactory::cart_reminder(&reminder, &branding).unwrap();
+            let html = mail.html_body.clone().unwrap();
+            assert!(html.contains("Ciment &lt;25 kg&gt;") && html.contains("Sable – 0/2"));
+            assert!(html.contains("https://cdn.example/c.jpg"), "{locale}");
+            assert!(
+                !html.contains("/uploads/relative.jpg"),
+                "relative images left out"
+            );
+            assert!(html.contains("cart?lang=fr") && html.contains(unsubscribe));
+            assert!(mail.body.contains(unsubscribe) && mail.body.contains("Ciment <25 kg>"));
+            assert!(html.contains('2'), "{locale}: lines not shown are counted");
+            assert_eq!(
+                mail.metadata["headers"]["List-Unsubscribe"],
+                format!("<{unsubscribe}>")
+            );
+            // The push notification's texts, with their placeholders
+            let push_body = i18n::text(locale, "cart_reminder", "push_body");
+            assert_ne!(
+                i18n::text(locale, "cart_reminder", "push_title"),
+                "push_title"
+            );
+            assert!(push_body.contains("{{ count }}") && push_body.contains("{{ total }}"));
             for text in [&html, &mail.body, &mail.subject] {
                 assert!(!text.contains("{{"), "{locale}: {text}");
             }

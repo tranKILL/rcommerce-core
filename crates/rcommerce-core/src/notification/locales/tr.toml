@@ -367,3 +367,31 @@ Stok hızlı tükenir: emin olmak için şimdi sipariş verin.
 
 {{ company_name }}
 '''
+
+[cart_reminder]
+subject = "Sepetiniz sizi bekliyor"
+heading = "Sepetiniz sizi bekliyor"
+intro = "Merhaba {{ customer_name }}, bu ürünleri sepetinizde bıraktınız. İşte bugünkü fiyatlarıyla."
+total = "Toplam"
+vat_included = "Güncel fiyatlar, KDV dahil. Fiyat ve stok sipariş sırasında yeniden kontrol edilir."
+vat_excluded = "Güncel fiyatlar, KDV hariç. Fiyat ve stok sipariş sırasında yeniden kontrol edilir."
+more = "ve {{ count }} ürün daha"
+button = "Sepetimi gör"
+why = "Bu e-postayı, {{ company_name }} tekliflerini e-posta ile almayı kabul ettiğiniz için alıyorsunuz."
+unsubscribe = "Abonelikten çık"
+push_title = "Sepetiniz sizi bekliyor"
+push_body = "{{ count }} ürün · {{ total }}. Siparişinizi tamamlamak için dokunun."
+text = '''
+Merhaba {{ customer_name }},
+
+Bu ürünleri sepetinizde bıraktınız (bugünkü fiyatlar):
+{{ lines_text }}
+
+Toplam: {{ cart_total }}
+{{ price_note }}
+
+{{ cart_url }}
+
+{{ company_name }}
+Abonelikten çık: {{ unsubscribe_url }}
+'''

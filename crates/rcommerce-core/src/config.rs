@@ -79,6 +79,10 @@ pub struct Config {
     #[serde(default)]
     pub carts: CartsConfig,
 
+    /// Push notifications to the store's mobile apps
+    #[serde(default)]
+    pub push: crate::push::PushConfig,
+
     #[serde(default)]
     pub subscriptions: SubscriptionsConfig,
 
@@ -227,6 +231,14 @@ pub struct CartsConfig {
     /// those already turned into orders), once a day. None (the default)
     /// keeps every cart.
     pub delete_inactive_after_months: Option<u32>,
+    /// Remind signed-in customers of a cart left without an order, this many
+    /// hours after their last change to it (`[4, 48]`: two reminders). Only
+    /// customers who accept commercial e-mails. Empty (the default): none.
+    #[serde(default)]
+    pub reminder_after_hours: Vec<u32>,
+    /// Carts whose subtotal (excluding VAT) is below this get no reminder
+    #[serde(default)]
+    pub reminder_min_subtotal: Option<rust_decimal::Decimal>,
 }
 
 /// Order lifecycle settings

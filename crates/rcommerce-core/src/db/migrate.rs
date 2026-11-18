@@ -349,6 +349,16 @@ impl Migrator {
                 "marketing_consents",
                 include_str!("../../migrations/050_marketing_consents.sql"),
             ),
+            (
+                51,
+                "cart_reminders",
+                include_str!("../../migrations/051_cart_reminders.sql"),
+            ),
+            (
+                52,
+                "push_devices",
+                include_str!("../../migrations/052_push_devices.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

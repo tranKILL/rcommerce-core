@@ -367,3 +367,31 @@ O stock esgota depressa: encomende já para garantir.
 
 {{ company_name }}
 '''
+
+[cart_reminder]
+subject = "O seu carrinho está à sua espera"
+heading = "O seu carrinho está à sua espera"
+intro = "Olá {{ customer_name }}, deixou estes artigos no seu carrinho. Aqui estão aos preços de hoje."
+total = "Total"
+vat_included = "Preços atuais, IVA incluído. O preço e o stock são verificados novamente na encomenda."
+vat_excluded = "Preços atuais, sem IVA. O preço e o stock são verificados novamente na encomenda."
+more = "e mais {{ count }} artigo(s)"
+button = "Ver o meu carrinho"
+why = "Recebe este e-mail porque aceitou receber as ofertas de {{ company_name }} por e-mail."
+unsubscribe = "Cancelar a subscrição"
+push_title = "O seu carrinho está à sua espera"
+push_body = "{{ count }} artigo(s) · {{ total }}. Toque para concluir a encomenda."
+text = '''
+Olá {{ customer_name }},
+
+Deixou estes artigos no seu carrinho (preços de hoje):
+{{ lines_text }}
+
+Total: {{ cart_total }}
+{{ price_note }}
+
+{{ cart_url }}
+
+{{ company_name }}
+Cancelar a subscrição: {{ unsubscribe_url }}
+'''

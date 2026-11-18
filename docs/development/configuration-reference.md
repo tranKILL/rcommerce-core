@@ -232,6 +232,13 @@ base_url = "https://erp.dianxiaomi.com"
 ```toml
 [carts]                        # cart retention
 delete_inactive_after_months = 6  # daily: carts unchanged that long are deleted with their lines; unset keeps all
+reminder_after_hours = [4, 48]    # cart reminders (docs/api/17-cart-reminders.md); empty or unset: none
+reminder_min_subtotal = "20.00"   # carts below this subtotal (excl. VAT) get no reminder
+
+[push]                         # push notifications to the mobile apps (docs/api/18-push-notifications.md)
+provider = "fcm"               # "fcm", "log" (development: logged only); unset: no push
+fcm_project_id = "my-store"    # the Firebase project
+fcm_credentials_file = "/run/secrets/firebase.json"  # its service account key (JSON)
 
 [invoicing]                    # legal invoices (docs/architecture/peppol.md)
 enabled = false

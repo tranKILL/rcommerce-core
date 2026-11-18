@@ -8417,3 +8417,292 @@ async fn test_second_step_codes_lock_per_account() {
     );
     app.cleanup().await.ok();
 }
+
+/// Cart reminders: only signed-in carts of customers who accept commercial e-mails
+/// with a consent on record; the latest step due; once per idle period (the
+/// repricing before a reminder keeps the period, a change by the customer starts a
+/// new one); never after an order; a failed send waits; staff see the figures
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_cart_reminders_follow_the_schedule_and_the_consent() {
+    use rcommerce_core::services::cart_reminders;
+    use rcommerce_core::services::marketing_consent::{self as consent, Choice, Source};
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let pool = &app.db_pool;
+    let (customer, _) = app.create_test_customer().await.unwrap();
+    let product = app
+        .create_test_product("Reminder Test Cement", Decimal::from(9), 10)
+        .await
+        .unwrap();
+    let cart: Uuid = sqlx::query_scalar(
+        "INSERT INTO carts (customer_id, currency, subtotal, total, updated_at) \
+         VALUES ($1, 'EUR', 18, 18, NOW() - INTERVAL '5 hours') RETURNING id",
+    )
+    .bind(customer.id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO cart_items (cart_id, product_id, quantity, unit_price, original_price, \
+           subtotal, total, title) VALUES ($1, $2, 2, 9, 9, 18, 18, 'Reminder Test Cement')",
+    )
+    .bind(cart)
+    .bind(product)
+    .execute(pool)
+    .await
+    .unwrap();
+    let schedule = cart_reminders::schedule(&[4, 48]);
+    let due = || async {
+        cart_reminders::due(pool, &schedule, Decimal::ZERO, 10_000)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|d| d.cart_id == cart)
+    };
+    // A cart last changed `hours` ago (the table's trigger sets `updated_at` on
+    // every update: skipped for this one)
+    let idle = |hours: i32| async move {
+        let mut tx = pool.begin().await?;
+        sqlx::query("SET LOCAL session_replication_role = replica")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "UPDATE carts SET updated_at = NOW() - make_interval(hours => $2) WHERE id = $1",
+        )
+        .bind(cart)
+        .bind(hours)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await
+    };
+
+    // No yes on record: nothing, even with the flag set
+    sqlx::query("UPDATE customers SET accepts_marketing = true WHERE id = $1")
+        .bind(customer.id)
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(due().await.is_none(), "a yes without a record");
+    let yes = Choice {
+        granted: true,
+        source: Source::Account,
+        wording: Some("2026-11/fr"),
+        ip: None,
+        user_agent: None,
+    };
+    sqlx::query("UPDATE customers SET accepts_marketing = false WHERE id = $1")
+        .bind(customer.id)
+        .execute(pool)
+        .await
+        .unwrap();
+    consent::choose(pool, customer.id, &yes).await.unwrap();
+    let first = due().await.expect("5 hours idle: the first step");
+    assert_eq!(first.step, 1);
+    assert!(
+        cart_reminders::due(pool, &schedule, Decimal::from(20), 10_000)
+            .await
+            .unwrap()
+            .iter()
+            .all(|d| d.cart_id != cart),
+        "below the minimum subtotal"
+    );
+
+    // A failed send waits before the next try
+    let seen = cart_reminders::seen_at(pool, cart).await.unwrap().unwrap();
+    cart_reminders::failed(pool, &first, seen).await.unwrap();
+    assert!(due().await.is_none(), "waits 15 minutes");
+    sqlx::query("UPDATE cart_reminders SET next_attempt_at = NOW() WHERE cart_id = $1")
+        .bind(cart)
+        .execute(pool)
+        .await
+        .unwrap();
+    let again = due().await.expect("tried again");
+
+    // Sent after repricing (the cart's updated_at moves): same period, step 1 done
+    sqlx::query("UPDATE carts SET updated_at = NOW() WHERE id = $1")
+        .bind(cart)
+        .execute(pool)
+        .await
+        .unwrap();
+    let seen = cart_reminders::seen_at(pool, cart).await.unwrap().unwrap();
+    cart_reminders::mark_sent(pool, &again, seen).await.unwrap();
+    assert!(due().await.is_none(), "sent once");
+
+    // 48 hours after the customer's last change: step 2, counted from the period
+    // start, not from the repricing; the quiet hours hold it back first
+    sqlx::query(
+        "UPDATE cart_reminders SET period_start = period_start - INTERVAL '44 hours', \
+           sent_at = NOW() - INTERVAL '44 hours' WHERE cart_id = $1",
+    )
+    .bind(cart)
+    .execute(pool)
+    .await
+    .unwrap();
+    let second = due().await.expect("the second step");
+    assert_eq!(second.step, 2);
+    assert_eq!(
+        second.period_start,
+        first.period_start - chrono::Duration::hours(44)
+    );
+
+    // A change by the customer starts a new period: the first step again
+    idle(5).await.unwrap();
+    let fresh = due().await.expect("a new period");
+    assert_eq!(fresh.step, 1);
+    assert_ne!(fresh.period_start, first.period_start);
+
+    // An order since the cart changed stops it; so does a "no"
+    let order: Uuid = sqlx::query_scalar(
+        "INSERT INTO orders (order_number, customer_id, customer_email, total, status, created_at) \
+         VALUES ($1, $2, $3, 21.78, 'confirmed', NOW()) RETURNING id",
+    )
+    .bind(format!("RMD-{}", Uuid::new_v4().simple()))
+    .bind(customer.id)
+    .bind(&customer.email)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(due().await.is_none(), "ordered since");
+
+    // Staff figures: the sent reminder, and the order placed within 7 days
+    sqlx::query("UPDATE orders SET created_at = NOW() - INTERVAL '43 hours' WHERE id = $1")
+        .bind(order)
+        .execute(pool)
+        .await
+        .unwrap();
+    let admin = app.admin_token().await.unwrap();
+    let path = "/admin/analytics/cart-reminders?days=7";
+    let (status, body) = admin_api_call(&app, &admin, Method::GET, path, None).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body["stats"]["sent"].as_i64().unwrap() >= 1, "{body}");
+    assert!(body["stats"]["orders"].as_i64().unwrap() >= 1, "{body}");
+    let (status, _) = admin_api_call(
+        &app,
+        &admin,
+        Method::GET,
+        "/admin/analytics/cart-reminders?days=0",
+        None,
+    )
+    .await;
+    assert_eq!(status, 400);
+    let (customer_token, _) = {
+        let (other, password) = app.create_test_customer().await.unwrap();
+        sign_in(&app, &other.email, &password).await
+    };
+    let (status, _) = admin_api_call(&app, &customer_token, Method::GET, path, None).await;
+    assert!(status == 401 || status == 403, "{status}");
+
+    sqlx::query("DELETE FROM orders WHERE id = $1")
+        .bind(order)
+        .execute(pool)
+        .await
+        .unwrap();
+    let no = Choice {
+        granted: false,
+        source: Source::Unsubscribe,
+        wording: None,
+        ip: None,
+        user_agent: None,
+    };
+    consent::choose(pool, customer.id, &no).await.unwrap();
+    assert!(due().await.is_none(), "said no");
+    app.cleanup().await.ok();
+}
+
+/// Push devices: an app registers its token (once, moved to the customer signed in
+/// last), lists without tokens, forgets it at sign-out; at most 10 per customer;
+/// a message reaches each device of the customer
+#[tokio::test]
+#[ignore = "Requires PostgreSQL database with proper permissions"]
+async fn test_push_devices_register_move_and_receive() {
+    use rcommerce_core::push::{self, PushMessage, PushSender};
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let (ann, ann_password) = app.create_test_customer().await.unwrap();
+    let (bob, bob_password) = app.create_test_customer().await.unwrap();
+    let (ann_token, _) = sign_in(&app, &ann.email, &ann_password).await;
+    let (bob_token, _) = sign_in(&app, &bob.email, &bob_password).await;
+    let path = "/customers/me/push-devices";
+    let phone = format!("fcm-{}", Uuid::new_v4().simple());
+    let body = serde_json::json!({ "platform": "android", "token": phone });
+
+    let (status, saved) =
+        admin_api_call(&app, &ann_token, Method::POST, path, Some(body.clone())).await;
+    assert_eq!(status, 201, "{saved}");
+    assert!(saved.get("token").is_none(), "tokens are not sent back");
+    let (status, again) =
+        admin_api_call(&app, &ann_token, Method::POST, path, Some(body.clone())).await;
+    assert_eq!(
+        (status, &again["id"]),
+        (201, &saved["id"]),
+        "registered once"
+    );
+    let (_, listed) = admin_api_call(&app, &ann_token, Method::GET, path, None).await;
+    assert_eq!(listed["devices"].as_array().unwrap().len(), 1, "{listed}");
+
+    for refused in [
+        serde_json::json!({ "platform": "windows", "token": "x" }),
+        serde_json::json!({ "platform": "ios", "token": "" }),
+        serde_json::json!({ "platform": "ios", "token": "a\nb" }),
+    ] {
+        let (status, _) =
+            admin_api_call(&app, &ann_token, Method::POST, path, Some(refused.clone())).await;
+        assert_eq!(status, 400, "{refused}");
+    }
+    let (status, _) = post_json(&app, path, body.clone(), None).await;
+    assert_eq!(status, 401, "signed in only");
+
+    // The phone signs in as Bob: the device moves to him
+    admin_api_call(&app, &bob_token, Method::POST, path, Some(body.clone())).await;
+    assert!(push::devices(&app.db_pool, ann.id)
+        .await
+        .unwrap()
+        .is_empty());
+    let sender = PushSender::Log;
+    let message = PushMessage {
+        title: "t".into(),
+        body: "b".into(),
+        url: "https://shop.example/cart".into(),
+    };
+    assert_eq!(
+        push::notify_customer(&app.db_pool, &sender, bob.id, &message)
+            .await
+            .unwrap(),
+        1
+    );
+
+    // Ann cannot forget Bob's device; Bob can
+    let forget = serde_json::json!({ "token": phone });
+    let (status, _) =
+        admin_api_call(&app, &ann_token, Method::DELETE, path, Some(forget.clone())).await;
+    assert_eq!(status, 404);
+    let (status, _) = admin_api_call(&app, &bob_token, Method::DELETE, path, Some(forget)).await;
+    assert_eq!(status, 204);
+
+    // At most 10: the oldest goes
+    for _ in 0..12 {
+        let device = serde_json::json!({
+            "platform": "ios",
+            "token": format!("apns-{}", Uuid::new_v4().simple()),
+        });
+        admin_api_call(&app, &ann_token, Method::POST, path, Some(device)).await;
+    }
+    assert_eq!(push::devices(&app.db_pool, ann.id).await.unwrap().len(), 10);
+
+    // Every session ended (a lost phone, a password change): devices forgotten;
+    // adding a second factor keeps them
+    use rcommerce_core::services::auth_session::{self, RevokeReason};
+    auth_session::revoke_all(&app.db_pool, ann.id, RevokeReason::SecondFactorAdded)
+        .await
+        .unwrap();
+    assert_eq!(push::devices(&app.db_pool, ann.id).await.unwrap().len(), 10);
+    auth_session::revoke_all(&app.db_pool, ann.id, RevokeReason::PasswordChange)
+        .await
+        .unwrap();
+    assert!(push::devices(&app.db_pool, ann.id)
+        .await
+        .unwrap()
+        .is_empty());
+    app.cleanup().await.ok();
+}

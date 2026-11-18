@@ -273,6 +273,17 @@ pub async fn revoke_all(pool: &PgPool, customer_id: Uuid, reason: RevokeReason) 
     .execute(pool)
     .await?;
     end_setups(pool, customer_id).await?;
+    // A lost or stolen phone stops getting the account's notifications too; the
+    // apps register again after signing in
+    if !matches!(
+        reason,
+        RevokeReason::SecondFactorRequired | RevokeReason::SecondFactorAdded
+    ) {
+        sqlx::query("DELETE FROM push_devices WHERE customer_id = $1")
+            .bind(customer_id)
+            .execute(pool)
+            .await?;
+    }
     forget(None, customer_id);
     Ok(done.rows_affected())
 }
