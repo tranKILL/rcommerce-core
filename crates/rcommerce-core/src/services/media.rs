@@ -1,12 +1,12 @@
 //! Pictures staff upload for the site (article covers and illustrations, shop
 //! photos, the default share image). An upload (PNG, JPEG or WebP, at most
-//! 8 MB and 8000 pixels a side) is decoded and encoded again, which drops its
+//! 8 MB and 6000 pixels a side) is decoded and encoded again, which drops its
 //! metadata (camera, location) and anything that is not a picture: as JPEG
 //! (quality 85) when it has no transparency, else as PNG. Pictures wider or
 //! taller than 2400 pixels are shrunk to fit.
 //!
 //! Each picture is served at `/media/<id>.jpg` (or `.png`), the address
-//! articles and shops refer to.
+//! articles and shops refer to. The API decodes at most two uploads at a time.
 
 use std::io::Cursor;
 
@@ -24,7 +24,10 @@ use crate::{Error, Result};
 /// Largest upload accepted
 pub const MAX_UPLOAD_BYTES: usize = 8 * 1024 * 1024;
 /// Largest side of an upload, in pixels (bigger pictures are refused unread)
-const MAX_SIDE: u32 = 8_000;
+const MAX_SIDE: u32 = 6_000;
+/// Most memory one decode may take (an 8-bit RGBA picture of the largest
+/// size fits; a 16-bit one of that size is refused)
+const MAX_DECODE_BYTES: u64 = 192 * 1024 * 1024;
 /// Largest side of a stored picture
 const STORED_SIDE: u32 = 2_400;
 
@@ -85,17 +88,28 @@ pub fn process(upload: &[u8]) -> Result<Processed> {
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_SIDE);
     limits.max_image_height = Some(MAX_SIDE);
-    limits.max_alloc = Some(512 * 1024 * 1024);
+    limits.max_alloc = Some(MAX_DECODE_BYTES);
     reader.limits(limits);
     let decoded = reader
         .decode()
         .map_err(|_| Error::validation("The file could not be read as a picture"))?;
-    let fitted = if decoded.width() > STORED_SIDE || decoded.height() > STORED_SIDE {
-        decoded.resize(STORED_SIDE, STORED_SIDE, FilterType::Lanczos3)
+    // 8 bits a channel from here on: half the memory of a 16-bit picture
+    let decoded = DynamicImage::ImageRgba8(decoded.into_rgba8());
+    encode(&fit(decoded))
+}
+
+/// Shrink to fit `STORED_SIDE`: a cheap shrink to twice the size first, so
+/// the fine (Lanczos) pass works on a small picture
+fn fit(picture: DynamicImage) -> DynamicImage {
+    if picture.width() <= STORED_SIDE && picture.height() <= STORED_SIDE {
+        return picture;
+    }
+    let near = if picture.width() > 2 * STORED_SIDE || picture.height() > 2 * STORED_SIDE {
+        picture.thumbnail(2 * STORED_SIDE, 2 * STORED_SIDE)
     } else {
-        decoded
+        picture
     };
-    encode(&fitted)
+    near.resize(STORED_SIDE, STORED_SIDE, FilterType::Lanczos3)
 }
 
 /// JPEG for opaque pictures, PNG when some pixel is transparent

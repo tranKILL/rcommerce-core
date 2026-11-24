@@ -119,8 +119,10 @@ pub struct Article {
     pub products: Vec<LinkedProduct>,
 }
 
-/// A category with its name in every language
+/// A category with its name in every language (`id` is set by the API and
+/// ignored in requests)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Category {
     #[serde(default)]
     pub id: Option<Uuid>,

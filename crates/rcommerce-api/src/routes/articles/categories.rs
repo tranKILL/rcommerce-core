@@ -13,6 +13,7 @@ use rcommerce_core::services::articles::Category;
 use rcommerce_core::Error;
 use serde::Deserialize;
 use sqlx::PgConnection;
+use tracing::info;
 use uuid::Uuid;
 
 use super::{check_category, locales};
@@ -133,6 +134,7 @@ pub async fn create(
     .map_err(slug_taken)?;
     write_names(&mut tx, id, &category.names).await?;
     tx.commit().await?;
+    info!(target: "audit", category = %id, "article category created");
     Ok((
         StatusCode::CREATED,
         Json(Category {
@@ -162,6 +164,7 @@ pub async fn update(
     let kind = kind.ok_or_else(|| Error::not_found("Category not found"))?;
     write_names(&mut tx, id, &category.names).await?;
     tx.commit().await?;
+    info!(target: "audit", category = %id, "article category changed");
     Ok(Json(Category {
         id: Some(id),
         kind,
@@ -179,6 +182,7 @@ pub async fn remove(
         .execute(state.db.pool())
         .await?;
     if done.rows_affected() > 0 {
+        info!(target: "audit", category = %id, "article category deleted");
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(Error::not_found("Category not found"))

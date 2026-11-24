@@ -26,6 +26,8 @@ use rcommerce_core::services::articles::{ArticleInput, Articles, Category, ListQ
 use rcommerce_core::services::media::{self, MediaLibrary};
 use rcommerce_core::Error;
 use serde::Deserialize;
+use tokio::sync::Semaphore;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::middleware::JwtAuth;
@@ -35,6 +37,15 @@ mod categories;
 
 /// Most articles on one page
 const MAX_PER_PAGE: i64 = 50;
+/// Highest page number a list accepts
+const MAX_PAGE: i64 = 10_000;
+/// Uploads decoded at the same time (a decode can take a few hundred MB)
+static DECODES: Semaphore = Semaphore::const_new(2);
+
+/// A page number between 1 and `MAX_PAGE`
+fn page_of(page: Option<i64>) -> i64 {
+    page.unwrap_or(1).clamp(1, MAX_PAGE)
+}
 
 fn articles(state: &AppState) -> Articles {
     Articles::new(state.db.pool().clone())
@@ -84,7 +95,7 @@ async fn list_articles(
     let query = ListQuery {
         kind: params.kind,
         category: params.category,
-        page: params.page.unwrap_or(1).max(1),
+        page: page_of(params.page),
         per_page: params.per_page.unwrap_or(12).clamp(1, MAX_PER_PAGE),
     };
     let (locale, fallback) = locales(&state, params.lang.as_deref());
@@ -127,8 +138,8 @@ async fn product_articles(
     Ok(Json(serde_json::json!({ "data": rows })))
 }
 
-/// `GET /media/:file`: pictures never change (a new upload is a new id), so
-/// browsers keep them a year
+/// `GET /media/:file`: pictures never change (a new upload is a new id);
+/// browsers keep them 30 days, so a deleted one goes from caches in that time
 async fn media_file(
     State(state): State<AppState>,
     Path(file): Path<String>,
@@ -142,7 +153,7 @@ async fn media_file(
     Ok((
         [
             (header::CONTENT_TYPE, content_type),
-            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            (header::CACHE_CONTROL, "public, max-age=2592000"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             (header::CONTENT_SECURITY_POLICY, "default-src 'none'"),
         ],
@@ -165,7 +176,7 @@ async fn admin_list(
     State(state): State<AppState>,
     Query(params): Query<AdminListParams>,
 ) -> Result<Json<serde_json::Value>, Error> {
-    let page = params.page.unwrap_or(1).max(1);
+    let page = page_of(params.page);
     let per_page = params.per_page.unwrap_or(25).clamp(1, MAX_PER_PAGE);
     let (locale, _) = locales(&state, params.lang.as_deref());
     let (rows, total) = articles(&state)
@@ -200,6 +211,7 @@ async fn create_article(
     Json(input): Json<ArticleInput>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), Error> {
     let id = articles(&state).create(&input, auth.customer_id).await?;
+    info!(target: "audit", actor = %auth.customer_id, article = %id, "article created");
     Ok((StatusCode::CREATED, admin_view(&state, id).await?))
 }
 
@@ -214,21 +226,25 @@ async fn admin_get(
 /// `PUT /admin/articles/:id`
 async fn update_article(
     State(state): State<AppState>,
+    Extension(auth): Extension<JwtAuth>,
     Path(id): Path<Uuid>,
     Json(input): Json<ArticleInput>,
 ) -> Result<Json<serde_json::Value>, Error> {
     if !articles(&state).update(id, &input).await? {
         return Err(Error::not_found("Article not found"));
     }
+    info!(target: "audit", actor = %auth.customer_id, article = %id, "article changed");
     admin_view(&state, id).await
 }
 
 /// `DELETE /admin/articles/:id`
 async fn delete_article(
     State(state): State<AppState>,
+    Extension(auth): Extension<JwtAuth>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, Error> {
     if articles(&state).remove(id).await? {
+        info!(target: "audit", actor = %auth.customer_id, article = %id, "article deleted");
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(Error::not_found("Article not found"))
@@ -247,13 +263,18 @@ async fn upload(
     Query(params): Query<UploadParams>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<serde_json::Value>), Error> {
-    // Decoding is CPU work: keep it off the request threads
+    // Decoding is CPU and memory work: off the request threads, two at a time
+    let _permit = DECODES
+        .acquire()
+        .await
+        .map_err(|e| Error::internal(e.to_string()))?;
     let picture = tokio::task::spawn_blocking(move || media::process(&body))
         .await
         .map_err(|e| Error::internal(e.to_string()))??;
     let info = library(&state)
         .store(&picture, params.name.as_deref(), auth.customer_id)
         .await?;
+    info!(target: "audit", actor = %auth.customer_id, media = %info.id, "picture uploaded");
     let mut value = serde_json::to_value(&info).map_err(|e| Error::internal(e.to_string()))?;
     value["url"] = serde_json::json!(info.url());
     Ok((StatusCode::CREATED, Json(value)))
@@ -269,7 +290,7 @@ async fn media_list(
     State(state): State<AppState>,
     Query(params): Query<PageParams>,
 ) -> Result<Json<serde_json::Value>, Error> {
-    let page = params.page.unwrap_or(1).max(1);
+    let page = page_of(params.page);
     let rows = library(&state).list(48, (page - 1) * 48).await?;
     let data: Vec<serde_json::Value> = rows
         .iter()
@@ -285,9 +306,11 @@ async fn media_list(
 /// `DELETE /admin/media/:id`
 async fn media_remove(
     State(state): State<AppState>,
+    Extension(auth): Extension<JwtAuth>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, Error> {
     if library(&state).remove(id).await? {
+        info!(target: "audit", actor = %auth.customer_id, media = %id, "picture deleted");
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(Error::not_found("No such picture"))

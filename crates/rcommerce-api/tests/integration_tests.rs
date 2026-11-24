@@ -5395,7 +5395,7 @@ async fn test_media_uploads() {
     assert!(served.headers()["cache-control"]
         .to_str()
         .unwrap()
-        .contains("immutable"));
+        .contains("max-age=2592000"));
     assert!(served.bytes().await.unwrap().starts_with(&[0xFF, 0xD8]));
     let (status, _) = upload_media(&app, &editor, b"<svg onload=alert(1)></svg>".to_vec()).await;
     assert_eq!(status, 400);

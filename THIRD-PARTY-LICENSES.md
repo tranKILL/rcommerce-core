@@ -69,6 +69,14 @@ document lists the third-party software included in or used by R Commerce.
 - **Copyright**: The Kanidm Project
 - **Repository**: https://github.com/kanidm/webauthn-rs
 
+### ammonia (article HTML cleaning)
+- **License**: MIT OR Apache-2.0
+- **Copyright**: The ammonia contributors
+- **Repository**: https://github.com/rust-ammonia/ammonia
+- Brings in `cssparser` and `dtoa-short`: **MPL-2.0** (file-level copyleft; used
+  unmodified), by The Servo Project Developers (https://github.com/servo/rust-cssparser)
+  and Anthony Ramine (https://github.com/upsuper/dtoa-short)
+
 ### totp-rs
 - **License**: MIT
 - **Copyright**: Cleo Rebert (constantoine)
