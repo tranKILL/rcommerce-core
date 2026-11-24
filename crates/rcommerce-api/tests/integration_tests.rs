@@ -5341,6 +5341,245 @@ async fn test_site_settings_footer_and_meta_blocks() {
     app.cleanup().await.ok();
 }
 
+/// A 4 × 3 opaque PNG
+const SMALL_PNG: [u8; 73] = [
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 4, 0, 0, 0, 3, 8, 2, 0,
+    0, 0, 59, 150, 57, 145, 0, 0, 0, 16, 73, 68, 65, 84, 120, 156, 99, 56, 17, 160, 1, 71, 12, 56,
+    57, 0, 44, 54, 15, 1, 162, 168, 71, 93, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+
+/// Upload `body` to the picture library as `token`: status and answer
+async fn upload_media(app: &TestApp, token: &str, body: Vec<u8>) -> (u16, serde_json::Value) {
+    let response = app
+        .http_client
+        .post(format!("{}/api/v1/admin/media?name=wall", app.base_url()))
+        .bearer_auth(token)
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    (status, response.json().await.unwrap_or_default())
+}
+
+/// Pictures are re-encoded on upload and served with a long cache; anything
+/// else is refused; only staff with `content` upload
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_media_uploads() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (staff, password) = app.create_test_customer().await.unwrap();
+    let editor = app.login(&staff.email, &password).await.unwrap();
+    assert_eq!(upload_media(&app, &editor, SMALL_PNG.to_vec()).await.0, 403);
+    assign_role(&app, &admin, staff.id, serde_json::json!(["content:write"])).await;
+    let (status, picture) = upload_media(&app, &editor, SMALL_PNG.to_vec()).await;
+    assert_eq!(status, 201, "{picture}");
+    assert_eq!(picture["content_type"], "image/jpeg", "opaque: JPEG");
+    assert_eq!(
+        (picture["width"].as_i64(), picture["height"].as_i64()),
+        (Some(4), Some(3))
+    );
+    assert_eq!(picture["name"], "wall");
+    let url = picture["url"].as_str().unwrap().to_string();
+    assert!(url.starts_with("/media/") && url.ends_with(".jpg"), "{url}");
+    let served = app
+        .http_client
+        .get(format!("{}/api/v1{url}", app.base_url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(served.status(), 200);
+    assert_eq!(served.headers()["content-type"], "image/jpeg");
+    assert_eq!(served.headers()["x-content-type-options"], "nosniff");
+    assert!(served.headers()["cache-control"]
+        .to_str()
+        .unwrap()
+        .contains("immutable"));
+    assert!(served.bytes().await.unwrap().starts_with(&[0xFF, 0xD8]));
+    let (status, _) = upload_media(&app, &editor, b"<svg onload=alert(1)></svg>".to_vec()).await;
+    assert_eq!(status, 400);
+    let wrong_type = url.replace(".jpg", ".png");
+    let missing = app
+        .http_client
+        .get(format!("{}/api/v1{wrong_type}", app.base_url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+    let id = picture["id"].as_str().unwrap();
+    let (status, _) = send_json(
+        &app,
+        reqwest::Method::DELETE,
+        &editor,
+        &format!("/admin/media/{id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 204);
+    app.cleanup().await.ok();
+}
+
+/// News and guides: drafts and expired news stay hidden, bodies are cleaned,
+/// categories filter, guides link to products both ways
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_articles_news_and_guides() {
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let tag = &Uuid::new_v4().simple().to_string()[..8];
+    let product = app
+        .create_test_product("Guide blocks", Decimal::new(500, 2), 0)
+        .await
+        .unwrap();
+    let category = serde_json::json!({"kind": "wiki", "slug": format!("masonry-{tag}"),
+        "names": {"fr": "Maçonnerie", "en": "Masonry"}});
+    let (status, created) = send_json(
+        &app,
+        Method::POST,
+        &admin,
+        "/admin/article-categories",
+        Some(category),
+    )
+    .await;
+    assert_eq!(status, 201, "{created}");
+    let category_id = created["id"].as_str().unwrap().to_string();
+    let guide = serde_json::json!({
+        "kind": "wiki", "slug": format!("build-a-wall-{tag}"), "category_id": category_id,
+        "is_published": true, "product_ids": [product.to_string()],
+        "texts": {"fr": {"title": "Monter un mur", "summary": "Bloc par bloc",
+            "body_html": "<h2>Étapes</h2><script>alert(1)</script><p onclick=\"x()\">Posez les blocs</p>"}}});
+    let (status, body) = send_json(
+        &app,
+        Method::POST,
+        &token,
+        "/admin/articles",
+        Some(guide.clone()),
+    )
+    .await;
+    assert_eq!(status, 403, "customers cannot write: {body}");
+    let (status, saved) = send_json(
+        &app,
+        Method::POST,
+        &admin,
+        "/admin/articles",
+        Some(guide.clone()),
+    )
+    .await;
+    assert_eq!(status, 201, "{saved}");
+    let body = saved["texts"]["fr"]["body_html"].as_str().unwrap();
+    assert!(
+        !body.contains("script") && !body.contains("onclick") && body.contains("<h2>Étapes</h2>"),
+        "{body}"
+    );
+    let (status, _) = send_json(&app, Method::POST, &admin, "/admin/articles", Some(guide)).await;
+    assert_eq!(status, 400, "slug taken");
+
+    let now = chrono::Utc::now();
+    let draft = serde_json::json!({"kind": "news", "slug": format!("draft-{tag}"), "is_published": false,
+        "texts": {"fr": {"title": "Brouillon"}}});
+    let expired = serde_json::json!({"kind": "news", "slug": format!("old-{tag}"), "is_published": true,
+        "published_at": now - chrono::Duration::days(3), "expires_at": now - chrono::Duration::days(1),
+        "texts": {"fr": {"title": "Ancienne promo"}}});
+    let live = serde_json::json!({"kind": "news", "slug": format!("live-{tag}"), "is_published": true,
+        "expires_at": now + chrono::Duration::days(7), "texts": {"fr": {"title": "Nouveau dépôt"}}});
+    for article in [draft, expired, live] {
+        let (status, body) =
+            send_json(&app, Method::POST, &admin, "/admin/articles", Some(article)).await;
+        assert_eq!(status, 201, "{body}");
+    }
+
+    let public = |path: String| {
+        let url = format!("{}/api/v1{path}", app.base_url());
+        let client = app.http_client.clone();
+        async move { client.get(url).send().await.unwrap() }
+    };
+    let news: serde_json::Value = public("/articles?kind=news&lang=fr&per_page=50".into())
+        .await
+        .json()
+        .await
+        .unwrap();
+    let slugs: Vec<&str> = news["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a["slug"].as_str())
+        .collect();
+    assert!(slugs.contains(&format!("live-{tag}").as_str()), "{slugs:?}");
+    assert!(
+        !slugs
+            .iter()
+            .any(|s| s.ends_with(&format!("draft-{tag}")) || s.ends_with(&format!("old-{tag}"))),
+        "{slugs:?}"
+    );
+    assert!(
+        news["data"][0].get("body_html").is_none(),
+        "lists carry no body"
+    );
+    let in_category: serde_json::Value = public(format!(
+        "/articles?kind=wiki&category=masonry-{tag}&lang=fr"
+    ))
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(in_category["meta"]["total"], 1, "{in_category}");
+    assert_eq!(in_category["data"][0]["category_name"], "Maçonnerie");
+    let other: serde_json::Value = public("/articles?kind=wiki&category=nothing-here".into())
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(other["meta"]["total"], 0);
+
+    let read: serde_json::Value = public(format!("/articles/build-a-wall-{tag}?lang=en"))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(read["locale"], "fr", "only written in French: {read}");
+    assert_eq!(read["products"][0]["id"], product.to_string());
+    assert!(!read["body_html"].as_str().unwrap().contains("script"));
+    assert_eq!(public(format!("/articles/draft-{tag}")).await.status(), 404);
+    let guides: serde_json::Value = public(format!("/products/{product}/articles"))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(guides["data"][0]["slug"], format!("build-a-wall-{tag}"));
+    let categories: serde_json::Value = public("/article-categories?kind=wiki&lang=en".into())
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(categories["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["name"] == "Masonry"));
+
+    let id = saved["id"].as_str().unwrap();
+    let (status, _) = send_json(
+        &app,
+        Method::DELETE,
+        &admin,
+        &format!("/admin/articles/{id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 204);
+    assert_eq!(
+        public(format!("/articles/build-a-wall-{tag}"))
+            .await
+            .status(),
+        404
+    );
+    app.cleanup().await.ok();
+}
+
 /// Create a promotion as staff; its id
 async fn new_promotion(app: &TestApp, admin: &str, body: serde_json::Value) -> String {
     let (status, created) = call_json(app, admin, "/admin/promotions", Some(body)).await;

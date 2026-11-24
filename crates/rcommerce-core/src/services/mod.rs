@@ -1,5 +1,6 @@
 pub mod analytics;
 pub mod api_key_scopes;
+pub mod articles;
 pub mod auth_service;
 pub mod auth_session;
 pub mod bundle_service;
@@ -22,6 +23,7 @@ pub mod dunning_service;
 pub mod location_service;
 pub mod loyalty_service;
 pub mod marketing_consent;
+pub mod media;
 pub mod newsletter_service;
 pub mod order_events;
 pub mod order_service;

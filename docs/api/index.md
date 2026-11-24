@@ -33,6 +33,7 @@ R Commerce provides a complete API-first ecommerce platform with:
 | [18-push-notifications.md](18-push-notifications.md) | Push notifications to the mobile apps: devices, Firebase Cloud Messaging |
 | [19-shop-orders.md](19-shop-orders.md) | Web orders e-mailed to the shop that prepares them, with a printable order slip |
 | [20-content-blocks.md](20-content-blocks.md) | Storefront texts staff edit: home banner and sections, footer, titles and descriptions |
+| [21-articles-and-media.md](21-articles-and-media.md) | News, building guides, their categories and products, uploaded pictures |
 
 ## API Endpoints
 

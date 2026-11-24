@@ -16,13 +16,15 @@ pub const FOOTER: &str = "footer";
 pub const SITE_META: &str = "site_meta";
 
 /// Sections a home page can show
-pub const HOME_SECTIONS: [&str; 6] = [
+pub const HOME_SECTIONS: [&str; 8] = [
     "hero",
     "departments",
     "best_sellers",
     "promotions",
     "featured",
     "branches",
+    "news",
+    "wiki",
 ];
 /// Most products a home page section lists
 const MAX_SECTION_PRODUCTS: u32 = 48;

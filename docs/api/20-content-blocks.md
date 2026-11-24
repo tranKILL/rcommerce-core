@@ -36,7 +36,7 @@ Saved under the language `und` only (`400` under any other).
 
 | Field | Rule |
 |---|---|
-| `home_sections` | The home page sections, top to bottom, comma-separated, each once: `hero`, `departments`, `best_sellers`, `promotions`, `featured`, `branches`. Product sections take a count of 1 to 48: `hero, best_sellers:8, branches`. |
+| `home_sections` | The home page sections, top to bottom, comma-separated, each once: `hero`, `departments`, `best_sellers`, `promotions`, `featured`, `branches`, `news`, `wiki`. Product, news and guide sections take a count of 1 to 48: `hero, best_sellers:8, branches`. |
 | `google_verification`, `bing_verification` | The verification code alone (letters, digits, `-`, `_`, at most 100), for the `google-site-verification` and `msvalidate.01` meta tags. |
 
 ### `footer`, per language

@@ -1824,6 +1824,8 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         .merge(crate::routes::location_router())
         // Storefront texts staff edit (home banner...)
         .merge(crate::routes::content::router())
+        // News, building guides and uploaded pictures
+        .merge(crate::routes::articles::router())
         // Digital downloads: the token in the path is the credential
         .merge(crate::routes::downloads_router())
         .route_layer(middleware::from_fn_with_state(
@@ -1895,6 +1897,7 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         .merge(crate::routes::marketing::admin_router())
         .merge(crate::routes::cart_reminders::admin_router())
         .merge(crate::routes::shop_orders::admin_router())
+        .merge(crate::routes::articles::admin_router())
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             admin_middleware,

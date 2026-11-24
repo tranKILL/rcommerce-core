@@ -1,6 +1,7 @@
 pub mod accounting;
 pub mod admin;
 pub mod analytics;
+pub mod articles;
 pub mod auth;
 pub mod cart;
 pub mod cart_reminders;
