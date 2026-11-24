@@ -240,6 +240,10 @@ provider = "fcm"               # "fcm", "log" (development: logged only); unset:
 fcm_project_id = "my-store"    # the Firebase project
 fcm_credentials_file = "/run/secrets/firebase.json"  # its service account key (JSON)
 
+[link_check]                   # outside links of products, articles and footers (docs/api/22-product-links.md)
+enabled = false                # true: check them every hour (outside requests); off by default
+batch = 200                    # addresses checked per run
+
 [invoicing]                    # legal invoices (docs/architecture/peppol.md)
 enabled = false
 number_prefix = "F"            # F2026-00001

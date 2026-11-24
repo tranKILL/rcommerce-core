@@ -83,6 +83,11 @@ pub struct Config {
     #[serde(default)]
     pub push: crate::push::PushConfig,
 
+    /// Checking the outside links the store shows (product documents,
+    /// article and footer links)
+    #[serde(default)]
+    pub link_check: LinkCheckConfig,
+
     #[serde(default)]
     pub subscriptions: SubscriptionsConfig,
 
@@ -239,6 +244,30 @@ pub struct CartsConfig {
     /// Carts whose subtotal (excluding VAT) is below this get no reminder
     #[serde(default)]
     pub reminder_min_subtotal: Option<rust_decimal::Decimal>,
+}
+
+/// The link checker: off by default (it makes outside requests)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkCheckConfig {
+    /// Check the store's outside links in the background, every hour
+    #[serde(default)]
+    pub enabled: bool,
+    /// Addresses checked per hourly run
+    #[serde(default = "default_link_batch")]
+    pub batch: u32,
+}
+
+fn default_link_batch() -> u32 {
+    200
+}
+
+impl Default for LinkCheckConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            batch: default_link_batch(),
+        }
+    }
 }
 
 /// Order lifecycle settings

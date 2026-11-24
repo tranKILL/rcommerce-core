@@ -26,6 +26,8 @@ pub mod job_names {
     pub const SHOP_ORDER_NOTICES: &str = "shop_order_notices";
     /// Reminders of carts left without an order (background loop)
     pub const CART_REMINDERS: &str = "cart_reminders";
+    /// Checks of the store's outside links (background loop)
+    pub const LINK_CHECKS: &str = "link_checks";
 }
 
 /// Run `job` unless another database session is running the job of the same

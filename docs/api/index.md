@@ -34,6 +34,8 @@ R Commerce provides a complete API-first ecommerce platform with:
 | [19-shop-orders.md](19-shop-orders.md) | Web orders e-mailed to the shop that prepares them, with a printable order slip |
 | [20-content-blocks.md](20-content-blocks.md) | Storefront texts staff edit: home banner and sections, footer, titles and descriptions |
 | [21-articles-and-media.md](21-articles-and-media.md) | News, building guides, their categories and products, uploaded pictures |
+| [22-product-links.md](22-product-links.md) | Product documents (technical sheets, declarations...) and the outside link checker |
+| [23-promotion-preview.md](23-promotion-preview.md) | What a draft promotion would do: reach, prices, example carts, overlaps |
 
 ## API Endpoints
 

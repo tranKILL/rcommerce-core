@@ -5580,6 +5580,329 @@ async fn test_articles_news_and_guides() {
     app.cleanup().await.ok();
 }
 
+/// The link checker against a local server: answers, redirects, a timeout,
+/// and private addresses refused, also behind a redirect
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_link_checker_outcomes() {
+    use axum::http::{header, StatusCode};
+    use axum::routing::get;
+    use rcommerce_core::services::link_check::{check, Outcome, Policy};
+    let site = axum::Router::new()
+        .route("/ok", get(|| async { "ok" }))
+        .route("/gone", get(|| async { (StatusCode::GONE, "") }))
+        .route(
+            "/moved",
+            get(|| async { (StatusCode::MOVED_PERMANENTLY, [(header::LOCATION, "/ok")]) }),
+        )
+        .route(
+            "/temporary",
+            get(|| async { (StatusCode::FOUND, [(header::LOCATION, "/ok")]) }),
+        )
+        .route(
+            "/slow",
+            get(|| async {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                "late"
+            }),
+        )
+        .route(
+            "/to-private",
+            get(|| async { (StatusCode::FOUND, [(header::LOCATION, "http://10.0.0.1/x")]) }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, site).await.ok() });
+    let local = Policy {
+        allow_loopback: true,
+        timeout: std::time::Duration::from_secs(1),
+    };
+    assert_eq!(check(&format!("{base}/ok"), local).await, Outcome::Ok(200));
+    assert_eq!(
+        check(&format!("{base}/gone"), local).await,
+        Outcome::Gone(410)
+    );
+    match check(&format!("{base}/moved"), local).await {
+        Outcome::Moved { status: 301, to } => assert!(to.ends_with("/ok"), "{to}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        check(&format!("{base}/temporary"), local).await,
+        Outcome::Ok(200)
+    );
+    assert_eq!(
+        check(&format!("{base}/slow"), local).await,
+        Outcome::Timeout
+    );
+    assert!(matches!(
+        check(&format!("{base}/to-private"), local).await,
+        Outcome::NotAllowed(_)
+    ));
+    assert!(
+        matches!(
+            check(&format!("{base}/ok"), Policy::default()).await,
+            Outcome::NotAllowed(_)
+        ),
+        "loopback is refused outside tests"
+    );
+    assert!(matches!(
+        check("http://169.254.169.254/latest/meta-data", Policy::default()).await,
+        Outcome::NotAllowed(_)
+    ));
+    assert!(matches!(
+        check("ftp://example.com/a", local).await,
+        Outcome::NotAllowed(_)
+    ));
+}
+
+/// Product documents: staff set them, shoppers see their language first and
+/// never a broken one; the report says where a broken link is shown, and a
+/// replacement reaches every place
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_product_links_and_link_report() {
+    use rcommerce_core::services::link_check::{LinkChecks, Outcome};
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let tag = &Uuid::new_v4().simple().to_string()[..8];
+    let product = app
+        .create_test_product("Linked blocks", Decimal::new(300, 2), 0)
+        .await
+        .unwrap();
+    let path = format!("/admin/products/{product}/links");
+    let (fr, nl, any) = (
+        format!("https://maker-{tag}.example/fiche-fr.pdf"),
+        format!("https://maker-{tag}.example/blad-nl.pdf"),
+        format!("https://maker-{tag}.example/video"),
+    );
+    let bad =
+        serde_json::json!({"links": [{"kind": "technical_sheet", "url": "javascript:alert(1)"}]});
+    assert_eq!(
+        send_json(&app, Method::PUT, &admin, &path, Some(bad))
+            .await
+            .0,
+        400
+    );
+    let body = serde_json::json!({"links": [
+        {"kind": "technical_sheet", "url": fr, "locale": "fr", "label": "Fiche technique"},
+        {"kind": "video", "url": any},
+        {"kind": "technical_sheet", "url": nl, "locale": "nl"}]});
+    let (status, saved) = send_json(&app, Method::PUT, &admin, &path, Some(body)).await;
+    assert_eq!(status, 200, "{saved}");
+    let public = |lang: &str| {
+        let url = format!(
+            "{}/api/v1/products/{product}/links?lang={lang}",
+            app.base_url()
+        );
+        let client = app.http_client.clone();
+        async move {
+            let v: serde_json::Value = client.get(url).send().await.unwrap().json().await.unwrap();
+            v["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|l| l["url"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        public("nl").await,
+        [nl.clone(), any.clone(), fr.clone()],
+        "Dutch first, then any language"
+    );
+    let checks = LinkChecks::new(app.db_pool.clone());
+    checks.record(&fr, &Outcome::Gone(404)).await.unwrap();
+    assert!(
+        !public("fr").await.contains(&fr),
+        "a broken document is hidden"
+    );
+    let (status, report) =
+        send_json(&app, Method::GET, &admin, "/admin/links?state=broken", None).await;
+    assert_eq!(status, 200, "{report}");
+    let row = report["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["url"] == fr)
+        .expect("listed")
+        .clone();
+    assert_eq!(row["used_in"][0]["kind"], "product");
+    let new = format!("https://maker-{tag}.example/new-fiche.pdf");
+    let replace = serde_json::json!({"old": fr, "new": new});
+    let (status, done) = send_json(
+        &app,
+        Method::POST,
+        &admin,
+        "/admin/links/replace",
+        Some(replace),
+    )
+    .await;
+    assert_eq!(
+        (status.as_u16(), done["changed"].as_i64()),
+        (200, Some(1)),
+        "{done}"
+    );
+    assert!(public("fr").await.contains(&new));
+    let insecure = serde_json::json!({"old": new, "new": "http://plain.example/x"});
+    assert_eq!(
+        send_json(
+            &app,
+            Method::POST,
+            &admin,
+            "/admin/links/replace",
+            Some(insecure)
+        )
+        .await
+        .0,
+        400
+    );
+    app.cleanup().await.ok();
+}
+
+/// The promotion preview prices a draft without saving it: reach, sample
+/// prices, carts at the threshold, live promotions on the same products; read
+/// rights on promotions are enough
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_promotion_preview() {
+    use reqwest::Method;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let product = app
+        .create_test_product("Preview cement", Decimal::new(850, 2), 0)
+        .await
+        .unwrap();
+    let draft = serde_json::json!({"name": "Ten off", "kind": "percent_off", "value": "10",
+        "scope": "product", "target_id": product.to_string()});
+    let (status, preview) = send_json(
+        &app,
+        Method::POST,
+        &admin,
+        "/admin/promotions/preview",
+        Some(draft.clone()),
+    )
+    .await;
+    assert_eq!(status, 200, "{preview}");
+    assert_eq!(preview["reach"], 1);
+    assert_eq!(
+        (
+            preview["samples"][0]["base"].as_str(),
+            preview["samples"][0]["price"].as_str()
+        ),
+        (Some("8.50"), Some("7.65"))
+    );
+    let (_, list) = send_json(
+        &app,
+        Method::GET,
+        &admin,
+        "/admin/promotions?q=Ten%20off",
+        None,
+    )
+    .await;
+    assert_eq!(
+        list["promotions"].as_array().map(Vec::len),
+        Some(0),
+        "nothing saved"
+    );
+
+    let live = new_promotion(&app, &admin, draft.clone()).await;
+    let order_off = serde_json::json!({"name": "Five off from 30", "kind": "order_amount_off", "value": "5",
+        "min_amount": "30", "scope": "product", "target_id": product.to_string()});
+    let (_, preview) = send_json(
+        &app,
+        Method::POST,
+        &admin,
+        "/admin/promotions/preview",
+        Some(order_off),
+    )
+    .await;
+    let carts: Vec<(String, String)> = preview["carts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["label"].as_str().unwrap().into(),
+                c["discount"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        carts,
+        [
+            ("below_min".into(), "0".into()),
+            ("at_min".into(), "5".into())
+        ],
+        "{preview}"
+    );
+    assert_eq!(
+        preview["overlaps"][0]["id"], live,
+        "the live 10 % is on the same product"
+    );
+    let (_, editing) = send_json(
+        &app,
+        Method::POST,
+        &admin,
+        &format!("/admin/promotions/preview?exclude={live}"),
+        Some(draft),
+    )
+    .await;
+    assert_eq!(
+        editing["overlaps"].as_array().map(Vec::len),
+        Some(0),
+        "the promotion being edited is left out"
+    );
+
+    let bad = serde_json::json!({"name": "Broken", "kind": "percent_off", "value": "150"});
+    assert_eq!(
+        send_json(
+            &app,
+            Method::POST,
+            &admin,
+            "/admin/promotions/preview",
+            Some(bad)
+        )
+        .await
+        .0,
+        400
+    );
+    let (staff, password) = app.create_test_customer().await.unwrap();
+    let reader = app.login(&staff.email, &password).await.unwrap();
+    let probe = serde_json::json!({"name": "Probe", "kind": "free_delivery"});
+    assert_eq!(
+        send_json(
+            &app,
+            Method::POST,
+            &reader,
+            "/admin/promotions/preview",
+            Some(probe.clone())
+        )
+        .await
+        .0,
+        403
+    );
+    assign_role(&app, &admin, staff.id, serde_json::json!(["coupons:read"])).await;
+    let (status, body) = send_json(
+        &app,
+        Method::POST,
+        &reader,
+        "/admin/promotions/preview",
+        Some(probe),
+    )
+    .await;
+    assert_eq!(status, 200, "read is enough: {body}");
+    send_json(
+        &app,
+        Method::DELETE,
+        &admin,
+        &format!("/admin/promotions/{live}"),
+        None,
+    )
+    .await;
+    app.cleanup().await.ok();
+}
+
 /// Create a promotion as staff; its id
 async fn new_promotion(app: &TestApp, admin: &str, body: serde_json::Value) -> String {
     let (status, created) = call_json(app, admin, "/admin/promotions", Some(body)).await;

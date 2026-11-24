@@ -374,6 +374,11 @@ impl Migrator {
                 "articles_and_media",
                 include_str!("../../migrations/055_articles_and_media.sql"),
             ),
+            (
+                56,
+                "product_links",
+                include_str!("../../migrations/056_product_links.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

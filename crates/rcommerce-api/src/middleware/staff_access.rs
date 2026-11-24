@@ -35,6 +35,7 @@ const ADMIN_AREAS: &[(&str, Resource)] = &[
     ("/admin/articles", Resource::Content),
     ("/admin/article-categories", Resource::Content),
     ("/admin/media", Resource::Content),
+    ("/admin/links", Resource::Products),
     ("/admin/locations", Resource::Settings),
     ("/admin/promotions", Resource::Coupons),
     ("/admin/loyalty/settings", Resource::Settings),
@@ -43,7 +44,7 @@ const ADMIN_AREAS: &[(&str, Resource)] = &[
 ];
 
 /// POST routes that only read, so `read` is enough
-const READ_ONLY_POSTS: &[&str] = &["/coupons/validate"];
+const READ_ONLY_POSTS: &[&str] = &["/coupons/validate", "/admin/promotions/preview"];
 
 /// Admin GET routes open to any staff member (one role is enough): the
 /// back-office home, which shows each part only to those it concerns, and

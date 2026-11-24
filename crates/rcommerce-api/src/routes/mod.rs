@@ -36,6 +36,7 @@ pub mod pos_sale;
 pub mod price_history;
 pub mod price_lists;
 pub mod product;
+pub mod product_links;
 pub mod promotions;
 pub mod push;
 pub mod review;
