@@ -5653,6 +5653,220 @@ async fn test_category_counts_best_sellers_featured_and_offers() {
     app.cleanup().await.ok();
 }
 
+/// A shop lists the addresses its web orders go to (checked, replaced as a
+/// whole); a paid pickup order waits for the shop-order job with its shop,
+/// once; its slip prints as a PDF on A4 or an 80 mm ticket; customers reach
+/// none of it
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_shop_order_recipients_slip_and_pending_orders() {
+    use rcommerce_core::services::shop_orders;
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    let path = format!("/admin/locations/{location}/order-recipients");
+    let list = serde_json::json!({"recipients": [
+        {"email": " Counter@Shop.example ", "locale": "nl-BE"},
+        {"email": "printer@print.example", "active": false}]});
+    let (status, body) = send_json(&app, reqwest::Method::PUT, &admin, &path, Some(list)).await;
+    assert_eq!(status, 200, "{body}");
+    let (_, listed) = call_json(&app, &admin, &path, None).await;
+    assert_eq!(
+        listed["recipients"][0]["email"], "counter@shop.example",
+        "{listed}"
+    );
+    assert_eq!(listed["recipients"][0]["locale"], "nl");
+    assert_eq!(listed["recipients"][1]["active"], false);
+    assert_eq!(listed["slip_format"], "a4");
+    let twice = serde_json::json!({"recipients": [{"email": "a@shop.example"}, {"email": "A@shop.example"}]});
+    let (status, _) = send_json(&app, reqwest::Method::PUT, &admin, &path, Some(twice)).await;
+    assert_eq!(status, 400);
+    let nowhere = format!("/admin/locations/{}/order-recipients", Uuid::new_v4());
+    let empty = serde_json::json!({"recipients": []});
+    let (status, _) = send_json(&app, reqwest::Method::PUT, &admin, &nowhere, Some(empty)).await;
+    assert_eq!(status, 404);
+    for bad in [
+        serde_json::json!({"recipients": [{"email": "x@[10.0.0.5]"}]}),
+        serde_json::json!({"recipients": [{"email": "x@internal-host"}]}),
+        serde_json::json!({"recipients": [{"email": "a@shop.example", "customer_id": Uuid::new_v4()}]}),
+    ] {
+        let (status, body) = send_json(&app, reqwest::Method::PUT, &admin, &path, Some(bad)).await;
+        assert_eq!(status, 400, "{body}");
+    }
+    let added_by: Option<Uuid> = sqlx::query_scalar(
+        "SELECT added_by FROM location_order_recipients WHERE location_id = $1 LIMIT 1",
+    )
+    .bind(location)
+    .fetch_one(&app.db_pool)
+    .await
+    .unwrap();
+    assert!(added_by.is_some(), "who set the list is kept");
+    assert!(shop_orders::claim_test(&app.db_pool, location)
+        .await
+        .unwrap());
+    assert!(
+        !shop_orders::claim_test(&app.db_pool, location)
+            .await
+            .unwrap(),
+        "one test e-mail a minute"
+    );
+
+    let product = app
+        .create_test_product("Slip bricks", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 10, None)
+        .await
+        .unwrap();
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let order: Uuid = customer_pickup_order(&app, &token, &customer.email, location, product)
+        .await
+        .parse()
+        .unwrap();
+    let waiting = shop_orders::pending(&app.db_pool, 1000).await.unwrap();
+    let mine = waiting
+        .iter()
+        .find(|p| p.id == order)
+        .expect("waits for its shop");
+    assert_eq!(mine.location_id, Some(location));
+
+    for (query, format) in [("", "a4"), ("?format=ticket80&lang=nl", "ticket80")] {
+        let url = format!(
+            "{}/api/v1/admin/orders/{order}/slip.pdf{query}",
+            app.base_url()
+        );
+        let response = app
+            .http_client
+            .get(&url)
+            .bearer_auth(&admin)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "{format}");
+        assert_eq!(response.headers()["content-type"], "application/pdf");
+        assert!(
+            response.bytes().await.unwrap().starts_with(b"%PDF"),
+            "{format}"
+        );
+    }
+    let bad = format!(
+        "{}/api/v1/admin/orders/{order}/slip.pdf?format=letter",
+        app.base_url()
+    );
+    let response = app
+        .http_client
+        .get(&bad)
+        .bearer_auth(&admin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    let theirs = format!("{}/api/v1/admin/orders/{order}/slip.pdf", app.base_url());
+    let response = app
+        .http_client
+        .get(&theirs)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 403, "customers do not print slips");
+    let (status, _) = call_json(&app, &token, &path, None).await;
+    assert_eq!(status, 403, "nor read a shop's addresses");
+
+    // staff with the settings right alone run the shop, but neither choose who
+    // gets its orders nor print them
+    let (staff, staff_password) = app.create_test_customer().await.unwrap();
+    assign_role(
+        &app,
+        &admin,
+        staff.id,
+        serde_json::json!(["settings:write"]),
+    )
+    .await;
+    let staff_token = app.login(&staff.email, &staff_password).await.unwrap();
+    let (status, _) = call_json(&app, &staff_token, "/admin/locations", None).await;
+    assert_eq!(status, 200);
+    let list = serde_json::json!({"recipients": [{"email": "elsewhere@outside.example"}]});
+    let (status, _) = send_json(
+        &app,
+        reqwest::Method::PUT,
+        &staff_token,
+        &path,
+        Some(list.clone()),
+    )
+    .await;
+    assert_eq!(status, 403, "routing orders needs the orders right");
+    let test = format!("{path}/test");
+    let (status, _) = call_json(&app, &staff_token, &test, Some(serde_json::json!({}))).await;
+    assert_eq!(status, 403);
+    let response = app
+        .http_client
+        .get(&theirs)
+        .bearer_auth(&staff_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 403, "slips need the orders right");
+    assign_role(
+        &app,
+        &admin,
+        staff.id,
+        serde_json::json!(["settings:write", "orders:read"]),
+    )
+    .await;
+    let (status, body) =
+        send_json(&app, reqwest::Method::PUT, &staff_token, &path, Some(list)).await;
+    assert_eq!(status, 200, "{body}");
+
+    // a sale at the till leaves at the counter: never sent to the shop, and
+    // left out of the web orders
+    let web = format!("/orders?location_id={location}&web=true");
+    let till = format!("/orders?location_id={location}&web=false");
+    let listed = |body: &serde_json::Value| {
+        body["orders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["id"] == order.to_string())
+    };
+    assert!(listed(&call_json(&app, &admin, &web, None).await.1));
+    sqlx::query(
+        "UPDATE carts SET session_token = 'pos:' || gen_random_uuid() \
+         WHERE id = (SELECT (metadata->>'cart_id')::uuid FROM orders WHERE id = $1)",
+    )
+    .bind(order)
+    .execute(&app.db_pool)
+    .await
+    .unwrap();
+    let waiting = shop_orders::pending(&app.db_pool, 1000).await.unwrap();
+    assert!(waiting.iter().all(|p| p.id != order), "a till basket");
+    assert!(!listed(&call_json(&app, &admin, &web, None).await.1));
+    assert!(listed(&call_json(&app, &admin, &till, None).await.1));
+
+    shop_orders::mark_sent(&app.db_pool, order, 1)
+        .await
+        .unwrap();
+    let notified: Option<String> =
+        sqlx::query_scalar("SELECT metadata->>'shop_notified' FROM orders WHERE id = $1")
+            .bind(order)
+            .fetch_one(&app.db_pool)
+            .await
+            .unwrap();
+    assert!(notified.is_some(), "marked sent");
+    let (_, events) = call_json(&app, &admin, &format!("/orders/{order}/events"), None).await;
+    let kinds: Vec<&str> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"shop_notified"), "{kinds:?}");
+    app.cleanup().await.ok();
+}
+
 /// Ready, then collected by `collector`, by staff
 async fn collect(app: &TestApp, admin: &str, order: &str, collector: &str) {
     let ready = format!("/orders/{order}/pickup/ready");

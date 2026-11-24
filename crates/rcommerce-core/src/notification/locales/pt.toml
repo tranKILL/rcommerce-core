@@ -395,3 +395,24 @@ Total: {{ cart_total }}
 {{ company_name }}
 Cancelar a subscrição: {{ unsubscribe_url }}
 '''
+
+[order_slip]
+title = "Nota de encomenda"
+placed = "Feita em"
+test = "TESTE — não é uma encomenda real"
+pickup = "Levantamento em {location}"
+ready = "Pronta em"
+delivery = "Entrega"
+paid = "Paga"
+to_pay = "A pagar"
+customer = "Cliente"
+address = "Morada de entrega"
+notes = "Observações"
+sku = "Ref."
+total = "Total"
+units = "{count} artigo(s)"
+
+[shop_order]
+subject = "Encomenda web {{ order_number }} para {{ location }}"
+test_subject = "Teste: e-mails de encomendas de {{ location }}"
+intro = "Chegou uma encomenda web para {{ location }}. A nota de encomenda segue em anexo (PDF)."

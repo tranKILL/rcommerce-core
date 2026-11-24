@@ -28,7 +28,7 @@ const LOGO_BOX: (f32, f32) = (180.0, 64.0);
 const BUYER_LOGO_BOX: (f32, f32) = (150.0, 44.0);
 
 /// Width of `text` in points, from the font's glyph advances
-fn measure(font: &ParsedFont, size: f32, text: &str) -> f32 {
+pub(super) fn measure(font: &ParsedFont, size: f32, text: &str) -> f32 {
     let units = f32::from(font.pdf_font_metrics.units_per_em.max(1));
     let advance: f32 = text
         .chars()

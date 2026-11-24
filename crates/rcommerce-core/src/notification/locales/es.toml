@@ -395,3 +395,24 @@ Total: {{ cart_total }}
 {{ company_name }}
 Darse de baja: {{ unsubscribe_url }}
 '''
+
+[order_slip]
+title = "Hoja de pedido"
+placed = "Realizado el"
+test = "PRUEBA — no es un pedido real"
+pickup = "Recogida en {location}"
+ready = "Listo el"
+delivery = "Entrega"
+paid = "Pagado"
+to_pay = "Pendiente de pago"
+customer = "Cliente"
+address = "Dirección de entrega"
+notes = "Observaciones"
+sku = "Ref."
+total = "Total"
+units = "{count} artículo(s)"
+
+[shop_order]
+subject = "Pedido web {{ order_number }} para {{ location }}"
+test_subject = "Prueba: correos de pedidos de {{ location }}"
+intro = "Ha llegado un pedido web para {{ location }}. La hoja de pedido va adjunta (PDF)."

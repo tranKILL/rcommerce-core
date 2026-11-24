@@ -395,3 +395,24 @@ Totale: {{ cart_total }}
 {{ company_name }}
 Annulla l'iscrizione: {{ unsubscribe_url }}
 '''
+
+[order_slip]
+title = "Buono d'ordine"
+placed = "Effettuato il"
+test = "TEST — non è un ordine reale"
+pickup = "Ritiro a {location}"
+ready = "Pronto il"
+delivery = "Consegna"
+paid = "Pagato"
+to_pay = "Da pagare"
+customer = "Cliente"
+address = "Indirizzo di consegna"
+notes = "Note"
+sku = "Rif."
+total = "Totale"
+units = "{count} articolo/i"
+
+[shop_order]
+subject = "Ordine web {{ order_number }} per {{ location }}"
+test_subject = "Prova: e-mail degli ordini di {{ location }}"
+intro = "È arrivato un ordine web per {{ location }}. Il buono d'ordine è allegato (PDF)."

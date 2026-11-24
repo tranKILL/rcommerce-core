@@ -395,3 +395,24 @@ Totaal: {{ cart_total }}
 {{ company_name }}
 Uitschrijven: {{ unsubscribe_url }}
 '''
+
+[order_slip]
+title = "Bestelbon"
+placed = "Geplaatst op"
+test = "TEST — dit is geen echte bestelling"
+pickup = "Afhalen in {location}"
+ready = "Klaar op"
+delivery = "Levering"
+paid = "Betaald"
+to_pay = "Te betalen"
+customer = "Klant"
+address = "Leveringsadres"
+notes = "Opmerkingen"
+sku = "Ref."
+total = "Totaal"
+units = "{count} artikel(en)"
+
+[shop_order]
+subject = "Webbestelling {{ order_number }} voor {{ location }}"
+test_subject = "Test: bestellingsmail van {{ location }}"
+intro = "Er komt een webbestelling binnen voor {{ location }}. De bestelbon is bijgevoegd (pdf)."

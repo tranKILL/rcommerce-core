@@ -395,3 +395,24 @@ Toplam: {{ cart_total }}
 {{ company_name }}
 Abonelikten çık: {{ unsubscribe_url }}
 '''
+
+[order_slip]
+title = "Sipariş fişi"
+placed = "Sipariş tarihi"
+test = "TEST — gerçek bir sipariş değil"
+pickup = "{location} mağazasından teslim alma"
+ready = "Hazır olma"
+delivery = "Teslimat"
+paid = "Ödendi"
+to_pay = "Ödenecek"
+customer = "Müşteri"
+address = "Teslimat adresi"
+notes = "Notlar"
+sku = "Ref."
+total = "Toplam"
+units = "{count} ürün"
+
+[shop_order]
+subject = "{{ location }} için web siparişi {{ order_number }}"
+test_subject = "Test: {{ location }} sipariş e-postaları"
+intro = "{{ location }} için bir web siparişi geldi. Sipariş fişi ektedir (PDF)."

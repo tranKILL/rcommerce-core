@@ -1,6 +1,7 @@
 //! Invoice data types and PDF generation for order invoices.
 
 pub mod legal;
+pub mod slip;
 
 use std::sync::Arc;
 

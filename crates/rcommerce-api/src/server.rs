@@ -99,6 +99,7 @@ pub async fn build_app(config: &Config) -> Result<Router> {
         spawn_cart_cleanup(config, &app_state);
         spawn_stock_alerts(&app_state);
         spawn_cart_reminders(&app_state);
+        spawn_shop_order_notices(&app_state);
         spawn_catalogue_sync_loop(config, &app_state);
         spawn_subscription_billing_loop(config, &app_state);
         spawn_peppol_loop(config, &app_state);
@@ -138,6 +139,7 @@ async fn build_multi_store_router(
         spawn_cart_cleanup(&store.config, &app_state);
         spawn_stock_alerts(&app_state);
         spawn_cart_reminders(&app_state);
+        spawn_shop_order_notices(&app_state);
         spawn_catalogue_sync_loop(&store.config, &app_state);
         spawn_subscription_billing_loop(&store.config, &app_state);
         spawn_peppol_loop(&store.config, &app_state);
@@ -301,6 +303,7 @@ async fn run_tls_server(config: Config) -> Result<()> {
     spawn_cart_cleanup(&config, &app_state);
     spawn_stock_alerts(&app_state);
     spawn_cart_reminders(&app_state);
+    spawn_shop_order_notices(&app_state);
     spawn_catalogue_sync_loop(&config, &app_state);
     spawn_subscription_billing_loop(&config, &app_state);
     spawn_state_cleanup(&app_state);
@@ -1446,6 +1449,29 @@ fn spawn_cart_reminders(app_state: &AppState) {
     });
 }
 
+/// Spawn the loop that sends each paid web order to the shop preparing it
+/// (see `routes::shop_orders`): every minute, the first run 30 s after start,
+/// one store instance at a time; off without a notification service
+fn spawn_shop_order_notices(app_state: &AppState) {
+    if app_state.notification_service.is_none() {
+        return;
+    }
+    let state = app_state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        loop {
+            let pool = state.db.pool().clone();
+            let run = crate::routes::shop_orders::send_pending(&state);
+            match run_exclusive(&pool, job_names::SHOP_ORDER_NOTICES, run).await {
+                Ok(Some(n)) if n > 0 => info!("shop orders: {} sent to their shop", n),
+                Ok(_) => {}
+                Err(e) => warn!("shop orders failed: {}", e),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
+    });
+}
+
 /// Spawn the subscription billing loop when enabled
 /// (`[subscriptions] enabled`). First run ~60s after startup, then every
 /// `billing_interval_minutes`. For each due subscription a renewal order is
@@ -1868,6 +1894,7 @@ pub fn api_routes(app_state: AppState) -> Router<AppState> {
         .merge(crate::routes::two_factor::admin_router())
         .merge(crate::routes::marketing::admin_router())
         .merge(crate::routes::cart_reminders::admin_router())
+        .merge(crate::routes::shop_orders::admin_router())
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             admin_middleware,

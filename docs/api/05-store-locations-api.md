@@ -10,7 +10,7 @@ A store location is an inventory location (`inventory_locations`) marked `is_pub
 
 ```
 /api/v1/locations          (storefront)
-/api/v1/admin/locations    (management, admin token)
+/api/v1/admin/locations    (management, staff with `settings`)
 ```
 
 ## Storefront
@@ -83,9 +83,10 @@ GET /api/v1/locations/{id-or-slug}?lang=fr
 
 Same fields as the list. Answers `404` for an unknown, private or inactive location.
 
-## Management (admin)
+## Management (staff)
 
-All management routes need an admin access token. Customers get `403`.
+Management routes need an admin, or staff with the `settings` permission: `read` for
+the `GET` routes, `write` for the others. Customers get `403`.
 
 | Route | Purpose |
 |---|---|
@@ -95,6 +96,7 @@ All management routes need an admin access token. Customers get `403`.
 | `PUT /admin/locations/{id}/opening-hours` | Replace the weekly hours (`204`) |
 | `POST /admin/locations/{id}/closures` | Add a closed day or special hours (`201`) |
 | `DELETE /admin/locations/{id}/closures/{closure_id}` | Remove one (`204`) |
+| `GET /admin/locations/{id}/translations` | Every language's description and pickup instructions |
 | `PUT /admin/locations/{id}/translations/{locale}` | Set the description and pickup instructions in one language (`204`) |
 | `DELETE /admin/locations/{id}/translations/{locale}` | Remove a translation (`204`) |
 
@@ -120,7 +122,9 @@ All management routes need an admin access token. Customers get `403`.
   "pickup_lead_minutes": 60,
   "services": ["pickup", "delivery", "showroom"],
   "manager_name": "Alex Martin",
-  "sort_order": 1
+  "sort_order": 1,
+  "image_url": "https://cdn.example.com/shops/central.jpg",
+  "slip_format": "a4"
 }
 ```
 
@@ -132,6 +136,10 @@ All management routes need an admin access token. Customers get `403`.
 - `pickup_lead_minutes` runs from 0 to 10,080 and defaults to 60.
 - `services` holds at most 30 lower-case names (letters and `_`).
 - Coordinates must be valid latitude and longitude.
+- `image_url` is an `https` address with a host, or an uploaded file path
+  (`/media/` then letters, digits, `.`, `_`, `-` and `/`, without `..`).
+- `slip_format` is the paper of the shop's order slips: `a4` (default) or `ticket80`
+  (80 mm receipt printer). See [19-shop-orders.md](19-shop-orders.md).
 - A duplicate `code` or `slug` is a `400`.
 
 ### Opening hours

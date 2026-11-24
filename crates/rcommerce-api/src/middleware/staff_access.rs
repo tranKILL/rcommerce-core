@@ -32,6 +32,7 @@ const ADMIN_AREAS: &[(&str, Resource)] = &[
     ("/admin/price-lists", Resource::Products),
     ("/admin/invoices", Resource::Orders),
     ("/admin/content", Resource::Settings),
+    ("/admin/locations", Resource::Settings),
     ("/admin/promotions", Resource::Coupons),
     ("/admin/loyalty/settings", Resource::Settings),
     ("/admin/loyalty", Resource::Customers),

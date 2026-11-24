@@ -395,3 +395,24 @@ Total : {{ cart_total }}
 {{ company_name }}
 Se désabonner : {{ unsubscribe_url }}
 '''
+
+[order_slip]
+title = "Bon de commande"
+placed = "Passée le"
+test = "TEST — ce n'est pas une vraie commande"
+pickup = "Retrait à {location}"
+ready = "Prête pour le"
+delivery = "Livraison"
+paid = "Payée"
+to_pay = "À payer"
+customer = "Client"
+address = "Adresse de livraison"
+notes = "Remarques"
+sku = "Réf."
+total = "Total"
+units = "{count} article(s)"
+
+[shop_order]
+subject = "Commande web {{ order_number }} pour {{ location }}"
+test_subject = "Essai : e-mail des commandes de {{ location }}"
+intro = "Une commande web arrive pour {{ location }}. Le bon de commande est joint (PDF)."

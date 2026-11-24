@@ -39,6 +39,7 @@ pub mod promotions;
 pub mod push;
 pub mod review;
 pub mod security_notice;
+pub mod shop_orders;
 pub mod staff_lists;
 pub mod statistics;
 pub mod stock_alerts;

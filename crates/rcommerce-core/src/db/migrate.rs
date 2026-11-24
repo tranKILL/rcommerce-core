@@ -364,6 +364,11 @@ impl Migrator {
                 "order_items_product_index",
                 include_str!("../../migrations/053_order_items_product_index.sql"),
             ),
+            (
+                54,
+                "shop_order_recipients",
+                include_str!("../../migrations/054_shop_order_recipients.sql"),
+            ),
         ];
 
         for (version, name, sql) in migrations {

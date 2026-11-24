@@ -42,6 +42,8 @@ pub struct OrderListQuery {
     pub location_id: Option<Uuid>,
     /// Only pickup orders (`true`), or only the others (`false`)
     pub pickup: Option<bool>,
+    /// Only orders placed online (`true`), or only till sales (`false`)
+    pub web: Option<bool>,
     /// `date` (default `-date`), `number`, `customer`, `items`, `total`,
     /// `mode` or `stage`; `-` in front for descending order
     pub sort: Option<String>,
@@ -132,6 +134,12 @@ fn push_filters(
     match query.pickup {
         Some(true) => qb.push(" AND (metadata->'pickup') IS NOT NULL"),
         Some(false) => qb.push(" AND (metadata->'pickup') IS NULL"),
+        None => qb,
+    };
+    let till = rcommerce_core::services::shop_orders::TILL_SALE;
+    match query.web {
+        Some(true) => qb.push(format!(" AND NOT {till}")),
+        Some(false) => qb.push(format!(" AND {till}")),
         None => qb,
     };
 }

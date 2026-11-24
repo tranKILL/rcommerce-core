@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, post, put},
-    Extension, Json, Router,
+    Json, Router,
 };
 use chrono::{DateTime, Duration, Utc};
 use rcommerce_core::common::locale::normalize_locale;
@@ -19,7 +19,6 @@ use rcommerce_core::services::stock_availability;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::middleware::JwtAuth;
 use crate::state::AppState;
 
 /// Special days listed with a location, and considered for its status
@@ -235,16 +234,6 @@ fn parse_product_ids(list: &str) -> Result<Vec<Uuid>, rcommerce_core::Error> {
     Ok(ids)
 }
 
-fn require_admin(auth: &JwtAuth) -> Result<(), rcommerce_core::Error> {
-    if auth.is_admin() {
-        Ok(())
-    } else {
-        Err(rcommerce_core::Error::Forbidden(
-            "Admin access required".to_string(),
-        ))
-    }
-}
-
 fn path_locale(locale: &str) -> Result<String, rcommerce_core::Error> {
     normalize_locale(locale).ok_or_else(|| {
         rcommerce_core::Error::validation("Locale must be a 2-3 letter language code")
@@ -254,9 +243,7 @@ fn path_locale(locale: &str) -> Result<String, rcommerce_core::Error> {
 /// Every location, private ones included (admin)
 pub async fn admin_list_locations(
     State(state): State<AppState>,
-    Extension(auth): Extension<JwtAuth>,
 ) -> Result<Json<Vec<LocationView>>, rcommerce_core::Error> {
-    require_admin(&auth)?;
     let repo = LocationRepository::new(state.db.pool().clone());
     let locations = repo.list(false, None).await?;
     Ok(Json(views(&repo, locations, None, None, Utc::now()).await?))
@@ -265,10 +252,8 @@ pub async fn admin_list_locations(
 /// Create a location (admin)
 pub async fn create_location(
     State(state): State<AppState>,
-    Extension(auth): Extension<JwtAuth>,
     Json(input): Json<LocationInput>,
 ) -> Result<(StatusCode, Json<LocationView>), rcommerce_core::Error> {
-    require_admin(&auth)?;
     input.check()?;
     let repo = LocationRepository::new(state.db.pool().clone());
     let location = repo.create(&input).await?;
@@ -279,11 +264,9 @@ pub async fn create_location(
 /// Replace a location's details (admin)
 pub async fn update_location(
     State(state): State<AppState>,
-    Extension(auth): Extension<JwtAuth>,
     Path(id): Path<Uuid>,
     Json(input): Json<LocationInput>,
 ) -> Result<Json<LocationView>, rcommerce_core::Error> {
-    require_admin(&auth)?;
     input.check()?;
     let repo = LocationRepository::new(state.db.pool().clone());
     let location = repo
@@ -297,11 +280,9 @@ pub async fn update_location(
 /// Replace a location's weekly opening hours (admin)
 pub async fn put_opening_hours(
     State(state): State<AppState>,
-    Extension(auth): Extension<JwtAuth>,
     Path(id): Path<Uuid>,
     Json(input): Json<OpeningHoursInput>,
 ) -> Result<StatusCode, rcommerce_core::Error> {
-    require_admin(&auth)?;
     input.check()?;
     let repo = LocationRepository::new(state.db.pool().clone());
     if repo.get(&id.to_string(), false, None).await?.is_none() {
@@ -314,11 +295,9 @@ pub async fn put_opening_hours(
 /// Add a closed day or special hours (admin)
 pub async fn add_closure(
     State(state): State<AppState>,
-    Extension(auth): Extension<JwtAuth>,
     Path(id): Path<Uuid>,
     Json(input): Json<ClosureInput>,
 ) -> Result<(StatusCode, Json<LocationClosure>), rcommerce_core::Error> {
-    require_admin(&auth)?;
     input.check()?;
     let closure = LocationRepository::new(state.db.pool().clone())
         .add_closure(id, &input)
@@ -329,10 +308,8 @@ pub async fn add_closure(
 /// Remove a closed day or special hours (admin)
 pub async fn delete_closure(
     State(state): State<AppState>,
-    Extension(auth): Extension<JwtAuth>,
     Path((id, closure_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, rcommerce_core::Error> {
-    require_admin(&auth)?;
     if LocationRepository::new(state.db.pool().clone())
         .delete_closure(id, closure_id)
         .await?
@@ -346,11 +323,9 @@ pub async fn delete_closure(
 /// Create or replace a location's text in one language (admin)
 pub async fn put_location_translation(
     State(state): State<AppState>,
-    Extension(auth): Extension<JwtAuth>,
     Path((id, locale)): Path<(Uuid, String)>,
     Json(input): Json<LocationTranslationInput>,
 ) -> Result<StatusCode, rcommerce_core::Error> {
-    require_admin(&auth)?;
     input.check()?;
     LocationRepository::new(state.db.pool().clone())
         .upsert_translation(id, &path_locale(&locale)?, &input)
@@ -358,13 +333,22 @@ pub async fn put_location_translation(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// A location's texts in every language (admin)
+pub async fn list_location_translations(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, rcommerce_core::Error> {
+    let texts = LocationRepository::new(state.db.pool().clone())
+        .translations(id)
+        .await?;
+    Ok(Json(serde_json::json!({ "translations": texts })))
+}
+
 /// Delete a location's text in one language (admin)
 pub async fn delete_location_translation(
     State(state): State<AppState>,
-    Extension(auth): Extension<JwtAuth>,
     Path((id, locale)): Path<(Uuid, String)>,
 ) -> Result<StatusCode, rcommerce_core::Error> {
-    require_admin(&auth)?;
     if LocationRepository::new(state.db.pool().clone())
         .delete_translation(id, &path_locale(&locale)?)
         .await?
@@ -387,7 +371,8 @@ pub fn router() -> Router<AppState> {
         .route("/products/:id/availability", get(product_availability))
 }
 
-/// Location management routes (mounted behind the admin middleware)
+/// Location management routes (behind the admin middleware: global admins,
+/// and staff with the `settings` permission)
 pub fn admin_router() -> Router<AppState> {
     Router::new()
         .route(
@@ -400,6 +385,10 @@ pub fn admin_router() -> Router<AppState> {
         .route(
             "/admin/locations/:id/closures/:closure_id",
             delete(delete_closure),
+        )
+        .route(
+            "/admin/locations/:id/translations",
+            get(list_location_translations),
         )
         .route(
             "/admin/locations/:id/translations/:locale",

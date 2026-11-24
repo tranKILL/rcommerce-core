@@ -395,3 +395,24 @@ Total: {{ cart_total }}
 {{ company_name }}
 Dezabonare: {{ unsubscribe_url }}
 '''
+
+[order_slip]
+title = "Bon de comandă"
+placed = "Plasată pe"
+test = "TEST — nu este o comandă reală"
+pickup = "Ridicare la {location}"
+ready = "Gata pe"
+delivery = "Livrare"
+paid = "Plătită"
+to_pay = "De plată"
+customer = "Client"
+address = "Adresa de livrare"
+notes = "Observații"
+sku = "Ref."
+total = "Total"
+units = "{count} articol(e)"
+
+[shop_order]
+subject = "Comanda web {{ order_number }} pentru {{ location }}"
+test_subject = "Test: e-mailurile comenzilor pentru {{ location }}"
+intro = "A sosit o comandă web pentru {{ location }}. Bonul de comandă este atașat (PDF)."

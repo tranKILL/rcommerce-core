@@ -22,6 +22,8 @@ pub mod job_names {
     pub const CART_CLEANUP: &str = "cart_cleanup";
     /// Stock alerts whose stock arrived (background loop)
     pub const STOCK_ALERTS: &str = "stock_alerts";
+    /// Web orders sent to the shop that prepares them (background loop)
+    pub const SHOP_ORDER_NOTICES: &str = "shop_order_notices";
     /// Reminders of carts left without an order (background loop)
     pub const CART_REMINDERS: &str = "cart_reminders";
 }

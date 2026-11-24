@@ -395,3 +395,24 @@ Razem: {{ cart_total }}
 {{ company_name }}
 Wypisz się: {{ unsubscribe_url }}
 '''
+
+[order_slip]
+title = "Dowód zamówienia"
+placed = "Złożone"
+test = "TEST — to nie jest prawdziwe zamówienie"
+pickup = "Odbiór w {location}"
+ready = "Gotowe na"
+delivery = "Dostawa"
+paid = "Opłacone"
+to_pay = "Do zapłaty"
+customer = "Klient"
+address = "Adres dostawy"
+notes = "Uwagi"
+sku = "Nr kat."
+total = "Razem"
+units = "{count} szt."
+
+[shop_order]
+subject = "Zamówienie internetowe {{ order_number }} dla {{ location }}"
+test_subject = "Test: e-maile z zamówieniami dla {{ location }}"
+intro = "Przyszło zamówienie internetowe dla {{ location }}. Dowód zamówienia jest w załączniku (PDF)."

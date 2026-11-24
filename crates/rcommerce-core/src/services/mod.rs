@@ -30,6 +30,7 @@ pub mod pricing_history;
 pub mod product_service;
 pub mod promotion_service;
 pub mod review_service;
+pub mod shop_orders;
 pub mod staff_service;
 pub mod statistics_service;
 pub mod stock_alerts;

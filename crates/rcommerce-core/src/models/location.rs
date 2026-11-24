@@ -40,6 +40,10 @@ pub struct StoreLocation {
     pub services: Vec<String>,
     pub manager_name: Option<String>,
     pub sort_order: i32,
+    /// Photo of the shop (an https address or an uploaded `/media/` file)
+    pub image_url: Option<String>,
+    /// Paper of the shop's order slips: `a4` or `ticket80`
+    pub slip_format: String,
     /// Translated in the requested locale (None for the base text)
     #[sqlx(default)]
     pub description: Option<String>,
@@ -113,6 +117,36 @@ pub struct LocationInput {
     pub manager_name: Option<String>,
     #[serde(default)]
     pub sort_order: i32,
+    /// Photo of the shop: an https address or an uploaded `/media/` file
+    #[validate(length(max = 2048))]
+    #[serde(default)]
+    pub image_url: Option<String>,
+    /// Paper of the shop's order slips: `a4` (default) or `ticket80`
+    #[serde(default = "default_slip_format")]
+    pub slip_format: String,
+}
+
+/// An https address with a host, or an uploaded file: `/media/` then letters,
+/// digits, `.`, `_`, `-` and `/`, with no `..` (nor `%`, so no encoded one)
+fn image_address(url: &str) -> bool {
+    if let Some(path) = url.strip_prefix("/media/") {
+        return !path.is_empty()
+            && !path.contains("..")
+            && path
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-/".contains(&b));
+    }
+    // The parser reads `https:///x` as `https://x`; ask for the host as written
+    url.len() <= 2048
+        && url
+            .strip_prefix("https://")
+            .is_some_and(|rest| !rest.starts_with('/'))
+        && url::Url::parse(url).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some())
+        && !url.contains(['"', '<', '>', '\\', ' '])
+}
+
+fn default_slip_format() -> String {
+    "a4".to_string()
 }
 
 fn default_true() -> bool {
@@ -151,6 +185,16 @@ impl LocationInput {
                     "Country code must be two upper-case letters (ISO 3166)",
                 ));
             }
+        }
+        if let Some(url) = self.image_url.as_deref().filter(|u| !u.is_empty()) {
+            if !image_address(url) {
+                return Err(Error::validation(
+                    "Image must be an https address or an uploaded /media/ file",
+                ));
+            }
+        }
+        if crate::invoice::slip::SlipFormat::parse(&self.slip_format).is_none() {
+            return Err(Error::validation("Slip format must be a4 or ticket80"));
         }
         if self.services.len() > 30
             || !self.services.iter().all(|s| {
@@ -265,6 +309,24 @@ mod tests {
 
     fn time(h: u32, m: u32) -> NaiveTime {
         NaiveTime::from_hms_opt(h, m, 0).unwrap()
+    }
+
+    #[test]
+    fn shop_photos_are_https_or_uploaded_files() {
+        for ok in ["https://cdn.example/shop.jpg", "/media/shops/north-1.webp"] {
+            assert!(image_address(ok), "{ok}");
+        }
+        for bad in [
+            "http://cdn.example/a.jpg",
+            "/media/%2e%2e/api/v1/x",
+            "/media/../secret",
+            "/media/",
+            "javascript:alert(1)",
+            "https://cdn.example/a\"onerror=1.jpg",
+            "https:///nohost.jpg",
+        ] {
+            assert!(!image_address(bad), "{bad}");
+        }
     }
 
     #[test]

@@ -395,3 +395,24 @@ Gesamt: {{ cart_total }}
 {{ company_name }}
 Abmelden: {{ unsubscribe_url }}
 '''
+
+[order_slip]
+title = "Bestellschein"
+placed = "Aufgegeben am"
+test = "TEST — keine echte Bestellung"
+pickup = "Abholung in {location}"
+ready = "Bereit am"
+delivery = "Lieferung"
+paid = "Bezahlt"
+to_pay = "Zu bezahlen"
+customer = "Kunde"
+address = "Lieferadresse"
+notes = "Bemerkungen"
+sku = "Art.-Nr."
+total = "Gesamt"
+units = "{count} Artikel"
+
+[shop_order]
+subject = "Webbestellung {{ order_number }} für {{ location }}"
+test_subject = "Test: Bestell-E-Mails von {{ location }}"
+intro = "Für {{ location }} ist eine Webbestellung eingegangen. Der Bestellschein ist angehängt (PDF)."

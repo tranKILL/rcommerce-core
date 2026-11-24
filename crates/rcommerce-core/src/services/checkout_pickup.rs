@@ -138,6 +138,8 @@ mod tests {
             services: vec!["pickup".to_string()],
             manager_name: None,
             sort_order: 0,
+            image_url: None,
+            slip_format: "a4".to_string(),
             description: None,
             pickup_instructions: None,
             created_at: Utc::now(),

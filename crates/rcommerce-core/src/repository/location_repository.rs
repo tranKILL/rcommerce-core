@@ -14,11 +14,20 @@ use crate::models::location::{
 };
 use crate::{Error, Result};
 
+/// A location's description and pickup instructions in one language
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct LocationText {
+    pub locale: String,
+    pub description: Option<String>,
+    pub pickup_instructions: Option<String>,
+}
+
 /// Location columns plus its translation in the requested locale (`$1`)
 const LOCATION_SELECT: &str = "SELECT l.id, l.name, l.code, l.slug, l.is_active, l.is_public,
        l.is_pickup_point, l.phone, l.email, l.address_line1, l.address_line2, l.postal_code,
        l.city, l.country_code, l.latitude, l.longitude, l.timezone, l.pickup_lead_minutes,
-       l.services, l.manager_name, l.sort_order, t.description, t.pickup_instructions,
+       l.services, l.manager_name, l.sort_order, l.image_url, l.slip_format,
+       t.description, t.pickup_instructions,
        l.created_at, l.updated_at
 FROM inventory_locations l
 LEFT JOIN location_translations t ON t.location_id = l.id AND t.locale = $1";
@@ -138,8 +147,10 @@ impl LocationRepository {
         let id: Uuid = sqlx::query_scalar(
             "INSERT INTO inventory_locations (name, code, slug, is_active, is_public, is_pickup_point,
                  phone, email, address_line1, address_line2, postal_code, city, country_code,
-                 latitude, longitude, timezone, pickup_lead_minutes, services, manager_name, sort_order)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                 latitude, longitude, timezone, pickup_lead_minutes, services, manager_name, sort_order,
+                 image_url, slip_format)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                 $21, $22)
              RETURNING id",
         )
         .bind(&input.name)
@@ -162,6 +173,8 @@ impl LocationRepository {
         .bind(&input.services)
         .bind(&input.manager_name)
         .bind(input.sort_order)
+        .bind(input.image_url.as_deref().filter(|u| !u.is_empty()))
+        .bind(&input.slip_format)
         .fetch_one(&self.pool)
         .await
         .map_err(map_constraint)?;
@@ -177,7 +190,8 @@ impl LocationRepository {
                  is_public = $6, is_pickup_point = $7, phone = $8, email = $9, address_line1 = $10,
                  address_line2 = $11, postal_code = $12, city = $13, country_code = $14,
                  latitude = $15, longitude = $16, timezone = $17, pickup_lead_minutes = $18,
-                 services = $19, manager_name = $20, sort_order = $21, updated_at = NOW()
+                 services = $19, manager_name = $20, sort_order = $21, image_url = $22,
+                 slip_format = $23, updated_at = NOW()
              WHERE id = $1",
         )
         .bind(id)
@@ -201,6 +215,8 @@ impl LocationRepository {
         .bind(&input.services)
         .bind(&input.manager_name)
         .bind(input.sort_order)
+        .bind(input.image_url.as_deref().filter(|u| !u.is_empty()))
+        .bind(&input.slip_format)
         .execute(&self.pool)
         .await
         .map_err(map_constraint)?;
@@ -286,7 +302,18 @@ impl LocationRepository {
         Ok(())
     }
 
-    /// Delete a location's text in one locale; false when there was none
+    /// A location's texts in every language it has
+    pub async fn translations(&self, id: Uuid) -> Result<Vec<LocationText>> {
+        Ok(sqlx::query_as(
+            "SELECT locale, description, pickup_instructions FROM location_translations \
+             WHERE location_id = $1 ORDER BY locale",
+        )
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Delete a location's text in one language; false when there was none
     pub async fn delete_translation(&self, id: Uuid, locale: &str) -> Result<bool> {
         let result =
             sqlx::query("DELETE FROM location_translations WHERE location_id = $1 AND locale = $2")

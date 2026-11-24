@@ -396,3 +396,24 @@ Total: {{ cart_total }}
 {{ company_name }}
 Unsubscribe: {{ unsubscribe_url }}
 '''
+
+[order_slip]
+title = "Order slip"
+placed = "Placed on"
+test = "TEST — not a real order"
+pickup = "Pickup at {location}"
+ready = "Ready on"
+delivery = "Delivery"
+paid = "Paid"
+to_pay = "To pay"
+customer = "Customer"
+address = "Delivery address"
+notes = "Notes"
+sku = "Ref."
+total = "Total"
+units = "{count} item(s)"
+
+[shop_order]
+subject = "Web order {{ order_number }} for {{ location }}"
+test_subject = "Test: order e-mails of {{ location }}"
+intro = "A web order has arrived for {{ location }}. The order slip is attached (PDF)."
