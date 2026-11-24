@@ -128,7 +128,7 @@ pub struct LocationInput {
 
 /// An https address with a host, or an uploaded file: `/media/` then letters,
 /// digits, `.`, `_`, `-` and `/`, with no `..` (nor `%`, so no encoded one)
-fn image_address(url: &str) -> bool {
+pub(crate) fn image_address(url: &str) -> bool {
     if let Some(path) = url.strip_prefix("/media/") {
         return !path.is_empty()
             && !path.contains("..")

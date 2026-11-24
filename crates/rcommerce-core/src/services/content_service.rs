@@ -11,6 +11,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::common::locale::normalize_locale;
+use crate::services::content_rules;
 use crate::{Error, Result};
 
 /// Text fields of a block: field name -> text
@@ -94,6 +95,40 @@ impl ContentService {
         Ok(None)
     }
 
+    /// Each of `keys` in the first of `locales` that has it (keys without a
+    /// block are left out), in one query
+    pub async fn get_many(
+        &self,
+        keys: &[String],
+        locales: &[&str],
+    ) -> Result<BTreeMap<String, ContentBlock>> {
+        for key in keys {
+            check_key(key)?;
+        }
+        let locales: Vec<String> = locales.iter().filter_map(|l| normalize_locale(l)).collect();
+        let rows: Vec<(String, String, sqlx::types::Json<Fields>, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT DISTINCT ON (key) key, locale, content, updated_at FROM content_blocks \
+             WHERE key = ANY($1) AND locale = ANY($2) \
+             ORDER BY key, array_position($2, locale::text)",
+        )
+        .bind(keys)
+        .bind(&locales)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(key, locale, content, updated_at)| {
+                let block = ContentBlock {
+                    key: key.clone(),
+                    locale,
+                    content: content.0,
+                    updated_at,
+                };
+                (key, block)
+            })
+            .collect())
+    }
+
     /// Block `key` in every language that has it
     pub async fn all_languages(&self, key: &str) -> Result<BTreeMap<String, Fields>> {
         check_key(key)?;
@@ -119,6 +154,7 @@ impl ContentService {
             let locale = normalize_locale(locale)
                 .ok_or_else(|| Error::validation(format!("unknown language {locale}")))?;
             let fields = clean(fields)?;
+            content_rules::check(key, &locale, &fields)?;
             if fields.is_empty() {
                 sqlx::query("DELETE FROM content_blocks WHERE key = $1 AND locale = $2")
                     .bind(key)

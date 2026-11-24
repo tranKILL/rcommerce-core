@@ -5251,6 +5251,96 @@ async fn test_content_blocks_per_language() {
     app.cleanup().await.ok();
 }
 
+/// The site settings (shared by every language), footer and site meta: each
+/// checked by its own rules, and read together in one call
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_site_settings_footer_and_meta_blocks() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let put = |key: &str, body: serde_json::Value| {
+        let path = format!("/admin/content/{key}");
+        let admin = admin.clone();
+        let app = &app;
+        async move { send_json(app, reqwest::Method::PUT, &admin, &path, Some(body)).await }
+    };
+    let sections = serde_json::json!({"home_sections": "hero, best_sellers:8, branches"});
+    let (status, body) = put(
+        "site_settings",
+        serde_json::json!({"languages": {"fr": sections}}),
+    )
+    .await;
+    assert_eq!(status, 400, "shared by every language: {body}");
+    let (status, body) = put(
+        "site_settings",
+        serde_json::json!({"languages": {"und": sections}}),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let bad =
+        serde_json::json!({"languages": {"en": {"legal_links": "Terms | javascript:alert(1)"}}});
+    assert_eq!(put("footer", bad).await.0, 400);
+    let footer = serde_json::json!({"languages": {
+        "en": {"about": "Builders' merchant", "column_1_title": "Help",
+               "column_1_links": "Branches | /en/depots\nTerms | https://example.com/terms"},
+        "fr": {"about": "Négoce de bois et de briques"}}});
+    let (status, body) = put("footer", footer).await;
+    assert_eq!(status, 200, "{body}");
+    let meta = serde_json::json!({"languages": {"en": {"title_suffix": "The Store"}}});
+    assert_eq!(put("site_meta", meta).await.0, 200);
+
+    let read = |query: &str| {
+        app.http_client
+            .get(format!("{}/api/v1/content?{query}", app.base_url()))
+            .send()
+    };
+    let nl: serde_json::Value = read("keys=footer,site_meta,site_settings,nothing_here&lang=nl")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let blocks = &nl["blocks"];
+    assert_eq!(blocks["site_settings"]["locale"], "und", "{nl}");
+    assert_eq!(
+        blocks["site_settings"]["content"]["home_sections"],
+        "hero, best_sellers:8, branches"
+    );
+    assert_eq!(
+        blocks["footer"]["locale"], "en",
+        "no Dutch footer: the default language"
+    );
+    assert_eq!(blocks["site_meta"]["content"]["title_suffix"], "The Store");
+    assert!(blocks.get("nothing_here").is_none());
+    let fr: serde_json::Value = read("keys=footer&lang=fr")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        fr["blocks"]["footer"]["content"]["about"],
+        "Négoce de bois et de briques"
+    );
+    let many = (0..11)
+        .map(|i| format!("k{i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    assert_eq!(read(&format!("keys={many}")).await.unwrap().status(), 400);
+    assert_eq!(read("keys=").await.unwrap().status(), 400);
+
+    for (key, lang) in [
+        ("site_settings", "und"),
+        ("footer", "en"),
+        ("footer", "fr"),
+        ("site_meta", "en"),
+    ] {
+        let clear = serde_json::json!({"languages": {lang: {}}});
+        assert_eq!(put(key, clear).await.0, 200);
+    }
+    app.cleanup().await.ok();
+}
+
 /// Create a promotion as staff; its id
 async fn new_promotion(app: &TestApp, admin: &str, body: serde_json::Value) -> String {
     let (status, created) = call_json(app, admin, "/admin/promotions", Some(body)).await;
