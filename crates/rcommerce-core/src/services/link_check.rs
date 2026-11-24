@@ -9,11 +9,13 @@
 //!   server error or timeout;
 //! - **ok** otherwise.
 //!
-//! Requests go only to public addresses: each host is resolved first, private,
-//! loopback and link-local addresses are refused, the request is sent to the
-//! address checked (no second lookup), and each redirect is checked the same
-//! way. HEAD first, then a one-byte GET for sites that refuse HEAD; 10 s per
-//! request, 5 redirects at most, one request per host per second.
+//! Requests go only to public addresses on the web ports (80, 443, 8080,
+//! 8443): each host is resolved first, private, loopback, link-local and
+//! special addresses are refused (also inside IPv6: mapped, compatible, NAT64,
+//! 6to4), the request is sent to the address checked (no second lookup, no
+//! proxy), and each redirect is checked the same way. HEAD first, then a
+//! one-byte GET for sites that refuse HEAD; 10 s per request, 5 redirects at
+//! most, one request per host per second, a minute for the whole check.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -49,11 +51,12 @@ pub enum Outcome {
     NotAllowed(String),
 }
 
-/// Who may be asked: tests also allow the loopback address of their local
-/// server; everything private stays refused
+/// Who may be asked: tests also allow the loopback address and any port of
+/// their local server; everything private stays refused
 #[derive(Debug, Clone, Copy)]
 pub struct Policy {
     pub allow_loopback: bool,
+    pub any_port: bool,
     pub timeout: Duration,
 }
 
@@ -61,10 +64,16 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             allow_loopback: false,
+            any_port: false,
             timeout: Duration::from_secs(10),
         }
     }
 }
+
+/// Ports the checker asks (websites)
+const WEB_PORTS: [u16; 4] = [80, 443, 8080, 8443];
+/// The longest a whole check may take (lookups, redirects, retries)
+const CHECK_LIMIT: Duration = Duration::from_secs(60);
 
 /// Whether `ip` is a public address
 fn public(ip: IpAddr, allow_loopback: bool) -> bool {
@@ -83,22 +92,44 @@ fn public(ip: IpAddr, allow_loopback: bool) -> bool {
                 || o[0] == 0
                 || (o[0] == 100 && (64..128).contains(&o[1])) // carrier-grade NAT
                 || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+                || (o[0] == 198 && (18..20).contains(&o[1])) // benchmarking
+                || (o[0] == 192 && o[1] == 88 && o[2] == 99) // 6to4 relay
                 || o[0] >= 240)
         }
         IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return public(IpAddr::V4(v4), allow_loopback);
-            }
             if v6.is_loopback() {
                 return allow_loopback;
             }
-            let first = v6.segments()[0];
-            !(v6.is_unspecified()
-                || v6.is_multicast()
-                || (first & 0xfe00) == 0xfc00 // unique local
-                || (first & 0xffc0) == 0xfe80 // link local
-                || first == 0x2001 && v6.segments()[1] == 0x0db8) // documentation
+            // An IPv4 address carried inside IPv6 is judged as IPv4
+            if let Some(v4) = embedded_v4(v6) {
+                return public(IpAddr::V4(v4), allow_loopback);
+            }
+            let s = v6.segments();
+            // Only global unicast (2000::/3), minus special ranges
+            (s[0] & 0xe000) == 0x2000
+                && !(s[0] == 0x2001 && s[1] == 0x0db8) // documentation
+                && !(s[0] == 0x2001 && s[1] == 0) // Teredo
+                && !(s[0] == 0x2001 && s[1] < 0x0200) // other IETF special ranges
         }
+    }
+}
+
+/// The IPv4 address inside a mapped (::ffff:a.b.c.d), compatible
+/// (::a.b.c.d), NAT64 (64:ff9b::/96, 64:ff9b:1::/48) or 6to4 (2002::/16) address
+fn embedded_v4(v6: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
+    let s = v6.segments();
+    let v4 = |hi: u16, lo: u16| {
+        std::net::Ipv4Addr::new((hi >> 8) as u8, hi as u8, (lo >> 8) as u8, lo as u8)
+    };
+    if let Some(mapped) = v6.to_ipv4_mapped() {
+        return Some(mapped);
+    }
+    match s {
+        [0, 0, 0, 0, 0, 0, hi, lo] if hi != 0 || lo > 1 => Some(v4(hi, lo)),
+        [0x64, 0xff9b, 0, 0, 0, 0, hi, lo] => Some(v4(hi, lo)),
+        [0x64, 0xff9b, 1, ..] => Some(v4(s[6], s[7])),
+        [0x2002, hi, lo, ..] => Some(v4(hi, lo)),
+        _ => None,
     }
 }
 
@@ -114,22 +145,26 @@ async fn resolve(url: &reqwest::Url, policy: Policy) -> std::result::Result<Sock
         .host_str()
         .ok_or_else(|| Outcome::NotAllowed("no host".into()))?;
     let port = url.port_or_known_default().unwrap_or(443);
-    let found: Vec<SocketAddr> = tokio::net::lookup_host((host.trim_matches(['[', ']']), port))
+    if !policy.any_port && !WEB_PORTS.contains(&port) {
+        return Err(Outcome::NotAllowed(format!(
+            "port {port} is not a web port"
+        )));
+    }
+    let lookup = tokio::net::lookup_host((host.trim_matches(['[', ']']), port));
+    let found: Vec<SocketAddr> = tokio::time::timeout(policy.timeout, lookup)
         .await
-        .map_err(|e| Outcome::Unreachable(format!("name lookup failed: {e}")))?
+        .map_err(|_| Outcome::Unreachable("the name lookup took too long".into()))?
+        .map_err(|_| Outcome::Unreachable("the name does not resolve".into()))?
         .collect();
     if found.is_empty() {
         return Err(Outcome::Unreachable("the name has no address".into()));
     }
     // Every address must be public: a name may mix public and private ones
-    if let Some(bad) = found
-        .iter()
-        .find(|a| !public(a.ip(), policy.allow_loopback))
-    {
-        return Err(Outcome::NotAllowed(format!(
-            "{} is not a public address",
-            bad.ip()
-        )));
+    // (the address itself is not said: staff must not learn internal names)
+    if found.iter().any(|a| !public(a.ip(), policy.allow_loopback)) {
+        return Err(Outcome::NotAllowed(
+            "the name leads to a non-public address".into(),
+        ));
     }
     Ok(found[0])
 }
@@ -150,6 +185,9 @@ async fn request(
         .redirect(reqwest::redirect::Policy::none())
         .timeout(policy.timeout)
         .user_agent("Mozilla/5.0 (compatible; StoreLinkCheck/1.0)")
+        // never through a proxy from the environment: it would look the name up
+        // again and undo the address check
+        .no_proxy()
         .resolve(&host, addr)
         .build()
         .map_err(|e| Outcome::Unreachable(e.to_string()))?;
@@ -179,8 +217,14 @@ async fn probe(
     Ok(head)
 }
 
-/// Check one address
+/// Check one address (a minute at most)
 pub async fn check(url: &str, policy: Policy) -> Outcome {
+    tokio::time::timeout(CHECK_LIMIT, check_hops(url, policy))
+        .await
+        .unwrap_or(Outcome::Timeout)
+}
+
+async fn check_hops(url: &str, policy: Policy) -> Outcome {
     let Ok(mut current) = reqwest::Url::parse(url) else {
         return Outcome::NotAllowed("not an address".into());
     };
@@ -489,54 +533,133 @@ impl LinkChecks {
         Ok(used)
     }
 
-    /// Replace an address everywhere it is shown (product links, article
-    /// bodies, footers); how many places changed
-    pub async fn replace(&self, old: &str, new: &str) -> Result<u64> {
+    /// Replace an address where `parts` allow (product links always,
+    /// article bodies and footers when the caller may change them); how many
+    /// places changed
+    pub async fn replace(&self, old: &str, new: &str, parts: Parts) -> Result<u64> {
+        if !crate::services::product_links::outside_address(old) {
+            return Err(Error::validation(
+                "the old address must be an http or https address",
+            ));
+        }
         if !crate::services::content_rules::link_address(new) || !new.starts_with("https://") {
             return Err(Error::validation(
                 "the new address must be an https address",
             ));
         }
         let mut tx = self.pool.begin().await?;
-        let products = sqlx::query("UPDATE product_links SET url = $2 WHERE url = $1")
+        let mut changed = sqlx::query("UPDATE product_links SET url = $2 WHERE url = $1")
             .bind(old)
             .bind(new)
             .execute(&mut *tx)
             .await?
             .rows_affected();
-        let (old_attr, new_attr) = (
-            format!("href=\"{}\"", old.replace('&', "&amp;")),
-            format!("href=\"{}\"", new.replace('&', "&amp;")),
-        );
-        let articles = sqlx::query(
-            "UPDATE article_translations SET body_html = replace(body_html, $1, $2) \
-             WHERE strpos(body_html, $1) > 0",
-        )
-        .bind(&old_attr)
-        .bind(&new_attr)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-        let footers = sqlx::query(
-            "UPDATE content_blocks SET content = replace(content::text, $1, $2)::jsonb, updated_at = NOW() \
-             WHERE key = 'footer' AND strpos(content::text, $1) > 0",
-        )
-        .bind(format!("| {old}"))
-        .bind(format!("| {new}"))
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-        sqlx::query("DELETE FROM link_checks WHERE url = $1")
-            .bind(old)
+        if parts.articles {
+            // the whole attribute, quotes included: only that exact address
+            let (old_attr, new_attr) = (
+                format!("href=\"{}\"", old.replace('&', "&amp;")),
+                format!("href=\"{}\"", new.replace('&', "&amp;")),
+            );
+            changed += sqlx::query(
+                "UPDATE article_translations SET body_html = replace(body_html, $1, $2) \
+                 WHERE strpos(body_html, $1) > 0",
+            )
+            .bind(&old_attr)
+            .bind(&new_attr)
             .execute(&mut *tx)
-            .await?;
+            .await?
+            .rows_affected();
+        }
+        if parts.footers {
+            changed += replace_in_footers(&mut tx, old, new).await?;
+        }
+        // the old address keeps its record while it is still shown somewhere
+        if !self.used_in_tx(&mut tx, old).await? {
+            sqlx::query("DELETE FROM link_checks WHERE url = $1")
+                .bind(old)
+                .execute(&mut *tx)
+                .await?;
+        }
         sqlx::query("INSERT INTO link_checks (url) VALUES ($1) ON CONFLICT (url) DO NOTHING")
             .bind(new)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        Ok(products + articles + footers)
+        Ok(changed)
     }
+
+    /// Whether `url` is still shown somewhere (in the transaction)
+    async fn used_in_tx(&self, conn: &mut sqlx::PgConnection, url: &str) -> Result<bool> {
+        let attribute = format!("href=\"{}\"", url.replace('&', "&amp;"));
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM product_links WHERE url = $1) \
+               OR EXISTS (SELECT 1 FROM article_translations WHERE strpos(body_html, $2) > 0) \
+               OR EXISTS (SELECT 1 FROM content_blocks WHERE key = 'footer' AND strpos(content::text, $1) > 0)",
+        )
+        .bind(url)
+        .bind(attribute)
+        .fetch_one(conn)
+        .await?)
+    }
+}
+
+/// Which places a replacement may change besides product links
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Parts {
+    pub articles: bool,
+    pub footers: bool,
+}
+
+/// Footer link lines (`Label | address`) whose address is exactly `old`
+/// pointed at `new`; the text and whether it changed
+pub fn replace_lines(text: &str, old: &str, new: &str) -> (String, bool) {
+    let mut changed = false;
+    let lines: Vec<String> = text
+        .lines()
+        .map(|line| match line.split_once('|') {
+            Some((label, address)) if address.trim() == old => {
+                changed = true;
+                format!("{}| {new}", label)
+            }
+            _ => line.to_string(),
+        })
+        .collect();
+    (lines.join("\n"), changed)
+}
+
+/// Rewrite the footers' link lines whose address is `old`; how many footers changed
+async fn replace_in_footers(conn: &mut sqlx::PgConnection, old: &str, new: &str) -> Result<u64> {
+    type Footer = (
+        String,
+        sqlx::types::Json<std::collections::BTreeMap<String, String>>,
+    );
+    let footers: Vec<Footer> = sqlx::query_as(
+        "SELECT locale, content FROM content_blocks WHERE key = 'footer' FOR UPDATE",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut changed = 0;
+    for (locale, mut fields) in footers {
+        let mut any = false;
+        for text in fields.0.values_mut() {
+            let (next, did) = replace_lines(text, old, new);
+            if did {
+                *text = next;
+                any = true;
+            }
+        }
+        if any {
+            sqlx::query(
+                "UPDATE content_blocks SET content = $2, updated_at = NOW() WHERE key = 'footer' AND locale = $1",
+            )
+            .bind(&locale)
+            .bind(&fields)
+            .execute(&mut *conn)
+            .await?;
+            changed += 1;
+        }
+    }
+    Ok(changed)
 }
 
 #[cfg(test)]
@@ -571,6 +694,46 @@ mod tests {
             IpAddr::V6("2606:4700::1111".parse().unwrap()),
             false
         ));
+    }
+
+    #[test]
+    fn ipv4_hidden_in_ipv6_and_special_ranges_are_refused() {
+        for private in [
+            "64:ff9b::a00:1",
+            "64:ff9b:1::a00:1",
+            "::a00:1",
+            "2002:a00:1::",
+            "2001::1",
+            "fec0::1",
+            "100::1",
+        ] {
+            let ip: Ipv6Addr = private.parse().unwrap();
+            assert!(!public(IpAddr::V6(ip), false), "{private}");
+        }
+        assert!(
+            public(IpAddr::V6("64:ff9b::5db8:d822".parse().unwrap()), false),
+            "NAT64 of a public IPv4"
+        );
+        for private in ["198.18.0.1", "198.19.255.1", "192.88.99.1"] {
+            let ip: Ipv4Addr = private.parse().unwrap();
+            assert!(!public(IpAddr::V4(ip), false), "{private}");
+        }
+    }
+
+    #[test]
+    fn footer_lines_change_only_for_the_exact_address() {
+        let text = "Terms | https://a.example/t\nTerms old | https://a.example/terms\nBranches | /fr/depots";
+        let (next, changed) = replace_lines(text, "https://a.example/t", "https://b.example/t");
+        assert!(changed);
+        assert_eq!(next, "Terms | https://b.example/t\nTerms old | https://a.example/terms\nBranches | /fr/depots");
+        let (_, changed) = replace_lines(text, "https://", "https://evil.example");
+        assert!(!changed, "a prefix matches nothing");
+    }
+
+    #[tokio::test]
+    async fn only_web_ports_are_asked() {
+        let outcome = check("http://example.com:5432/", Policy::default()).await;
+        assert!(matches!(outcome, Outcome::NotAllowed(_)), "{outcome:?}");
     }
 
     #[test]

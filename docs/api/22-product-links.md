@@ -20,7 +20,8 @@ none: any) and an optional `label` (120 characters).
 
 - `GET /products/{id}/links?lang=nl` (public): `{ data: [{ id, kind, url, locale,
   label, position }] }`. Links in the language asked for come first, then links for
-  any language, then the others. Links the checker found broken are left out.
+  any language, then the others. Links the checker found broken are left out, and so
+  are the links of inactive products.
 - `GET /admin/products/{id}/links` (`products` read): `{ links: [...] }`.
 - `PUT /admin/products/{id}/links` (`products` write) with `{ links: [{ kind, url,
   locale, label }] }` replaces them, in that order. `404` for an unknown product,
@@ -42,13 +43,16 @@ and footer links. Each address is checked once a week, and every day while it fa
 
 **Requests.**
 - **Method:** HEAD, then a one-byte GET for sites that refuse HEAD.
-- **Limits:** 10 seconds per request, 5 redirects at most, one request per host per second.
-- **User agent:** a generic one.
+- **Limits:** 10 seconds per request and a minute for a whole check, 5 redirects at most, one request per host per second.
+- **Ports:** the web ports only (80, 443, 8080, 8443).
+- **User agent:** a generic one, never through a proxy.
 
 **Public addresses only.**
 - **Resolving:** each host is resolved first. Private, loopback, link-local,
-  carrier-grade NAT, multicast and documentation addresses are refused, in IPv4 and
-  IPv6, including IPv4 inside IPv6.
+  carrier-grade NAT, multicast, benchmarking and documentation addresses are refused.
+  In IPv6 only global unicast addresses are allowed, and an IPv4 address carried
+  inside IPv6 (mapped, compatible, NAT64, 6to4) is judged as IPv4. The error never
+  names the address a name resolved to.
 - **No second lookup:** the request goes to the address that was checked.
 - **Redirects:** each redirect is checked the same way.
 
@@ -58,9 +62,11 @@ and footer links. Each address is checked once a week, and every day while it fa
   last_checked_at, used_in: [{ kind: product|article|footer, id, title }] }] }`,
   500 at most.
 - `POST /admin/links/recheck` with `{ url }`: checks an address the store shows now,
-  and answers its new record.
-- `POST /admin/links/replace` with `{ old, new }`: replaces the address in product
-  links, article bodies and footers, and answers `{ changed }`. The new address must
-  be `https`. Each replacement is logged (`audit` target).
+  and answers its new record. One recheck per staff member every 10 seconds (`429`).
+- `POST /admin/links/replace` with `{ old, new }`: replaces the exact address in product
+  links, in article bodies (with `content` write) and in footer link lines (with
+  `settings` write), and answers `{ changed }`. `old` must be a whole http(s) address
+  and `new` an `https` one. Each replacement is logged with both addresses (`audit`
+  target).
 
 Tables: `product_links`, `link_checks` (migration 056).

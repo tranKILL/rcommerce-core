@@ -8,7 +8,8 @@
 //!   look at, with where each is shown
 //! - `POST /admin/links/recheck` `{"url": "…"}`: check one address now
 //! - `POST /admin/links/replace` `{"old": "…", "new": "https://…"}`: replace
-//!   an address in product links, article bodies and footers
+//!   an address in product links, and in article bodies (with `content`
+//!   write) and footers (with `settings` write)
 
 use axum::{
     extract::{Path, Query, State},
@@ -16,14 +17,15 @@ use axum::{
     Extension, Json, Router,
 };
 use rcommerce_core::common::locale::normalize_locale;
-use rcommerce_core::services::link_check::{self, LinkChecks, Policy};
+use rcommerce_core::middleware::rate_limit::RateLimitError;
+use rcommerce_core::services::link_check::{self, LinkChecks, Parts, Policy};
 use rcommerce_core::services::product_links::{LinkInput, ProductLinks};
-use rcommerce_core::Error;
+use rcommerce_core::{Action, Error, Resource};
 use serde::Deserialize;
 use tracing::info;
 use uuid::Uuid;
 
-use crate::middleware::JwtAuth;
+use crate::middleware::{staff_access::staff_can, JwtAuth};
 use crate::state::AppState;
 
 fn links(state: &AppState) -> ProductLinks {
@@ -105,9 +107,33 @@ pub struct RecheckBody {
     pub url: String,
 }
 
-/// `POST /admin/links/recheck`: only addresses the store shows
+/// Seconds between two rechecks by the same staff member
+const RECHECK_GAP: u64 = 10;
+
+/// When each staff member last asked for a recheck
+static RECHECKS: std::sync::Mutex<Option<std::collections::HashMap<Uuid, std::time::Instant>>> =
+    std::sync::Mutex::new(None);
+
+/// One recheck per staff member every `RECHECK_GAP` seconds
+fn may_recheck(staff: Uuid) -> bool {
+    let Ok(mut last) = RECHECKS.lock() else {
+        return false;
+    };
+    let last = last.get_or_insert_with(std::collections::HashMap::new);
+    let now = std::time::Instant::now();
+    last.retain(|_, at| now.duration_since(*at).as_secs() < RECHECK_GAP);
+    if last.contains_key(&staff) {
+        return false;
+    }
+    last.insert(staff, now);
+    true
+}
+
+/// `POST /admin/links/recheck`: only addresses the store shows, one a staff
+/// member every 10 seconds (429 otherwise)
 async fn recheck(
     State(state): State<AppState>,
+    Extension(auth): Extension<JwtAuth>,
     Json(body): Json<RecheckBody>,
 ) -> Result<Json<serde_json::Value>, Error> {
     let known: bool =
@@ -117,6 +143,11 @@ async fn recheck(
             .await?;
     if !known {
         return Err(Error::not_found("The store does not show this address"));
+    }
+    if !may_recheck(auth.customer_id) {
+        return Err(Error::RateLimit(RateLimitError::RateLimited {
+            retry_after: RECHECK_GAP,
+        }));
     }
     let outcome = link_check::check(&body.url, Policy::default()).await;
     let store = checks(&state);
@@ -148,8 +179,14 @@ async fn replace(
     Extension(auth): Extension<JwtAuth>,
     Json(body): Json<ReplaceBody>,
 ) -> Result<Json<serde_json::Value>, Error> {
-    let changed = checks(&state).replace(&body.old, &body.new).await?;
-    info!(target: "audit", actor = %auth.customer_id, changed, "outside link replaced");
+    // article bodies and footers belong to other staff rights
+    let parts = Parts {
+        articles: staff_can(&state, &auth, Resource::Content, Action::Write).await,
+        footers: staff_can(&state, &auth, Resource::Settings, Action::Write).await,
+    };
+    let changed = checks(&state).replace(&body.old, &body.new, parts).await?;
+    info!(target: "audit", actor = %auth.customer_id, old = %body.old, new = %body.new, changed,
+          "outside link replaced");
     Ok(Json(serde_json::json!({ "changed": changed })))
 }
 

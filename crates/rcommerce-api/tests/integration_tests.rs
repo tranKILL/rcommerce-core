@@ -5615,6 +5615,7 @@ async fn test_link_checker_outcomes() {
     tokio::spawn(async move { axum::serve(listener, site).await.ok() });
     let local = Policy {
         allow_loopback: true,
+        any_port: true,
         timeout: std::time::Duration::from_secs(1),
     };
     assert_eq!(check(&format!("{base}/ok"), local).await, Outcome::Ok(200));
@@ -5745,6 +5746,20 @@ async fn test_product_links_and_link_report() {
     );
     assert!(public("fr").await.contains(&new));
     let insecure = serde_json::json!({"old": new, "new": "http://plain.example/x"});
+    let prefix = serde_json::json!({"old": "https://", "new": "https://evil.example/"});
+    assert_eq!(
+        send_json(
+            &app,
+            Method::POST,
+            &admin,
+            "/admin/links/replace",
+            Some(prefix)
+        )
+        .await
+        .0,
+        400,
+        "the old address must be a whole address"
+    );
     assert_eq!(
         send_json(
             &app,

@@ -175,11 +175,12 @@ impl ProductLinks {
         Ok(Some(self.list(product).await?))
     }
 
-    /// The links shoppers see: in `locale` first, then those for any language,
-    /// then the others; broken ones left out
+    /// The links shoppers see (active products only): in `locale` first, then
+    /// those for any language, then the others; broken ones left out
     pub async fn public(&self, product: Uuid, locale: &str) -> Result<Vec<ProductLink>> {
         Ok(sqlx::query_as::<_, ProductLink>(
             "SELECT l.id, l.kind, l.url, l.locale, l.label, l.position FROM product_links l \
+             JOIN products p ON p.id = l.product_id AND p.is_active \
              LEFT JOIN link_checks c ON c.url = l.url \
              WHERE l.product_id = $1 AND COALESCE(c.state, 'pending') <> 'broken' \
              ORDER BY COALESCE(l.locale = $2, false) DESC, (l.locale IS NULL) DESC, l.position",

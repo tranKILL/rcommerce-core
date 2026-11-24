@@ -287,7 +287,9 @@ fn units_around(amount: Decimal, price: Decimal) -> (i32, i32) {
     if price <= Decimal::ZERO {
         return (1, 1);
     }
-    let at = (amount / price)
+    let at = amount
+        .checked_div(price)
+        .unwrap_or(Decimal::MAX)
         .ceil()
         .to_i32()
         .unwrap_or(i32::MAX)
@@ -308,7 +310,13 @@ fn carts(promo: &Promotion, product: Option<&Covered>) -> Vec<ExampleCart> {
             promo.get_quantity.unwrap_or(1),
         );
         out.push(example(promo, product, buy, "buy_only", None));
-        out.push(example(promo, product, buy + get, "buy_and_get", None));
+        out.push(example(
+            promo,
+            product,
+            buy.saturating_add(get),
+            "buy_and_get",
+            None,
+        ));
     } else if promo.kind == "spend_tiers" {
         let mut tiers: Vec<Decimal> = promo
             .tiers
@@ -316,6 +324,7 @@ fn carts(promo: &Promotion, product: Option<&Covered>) -> Vec<ExampleCart> {
             .flat_map(|t| t.0.iter().map(|x| x.min_amount))
             .collect();
         tiers.sort();
+        tiers.dedup();
         for tier in tiers {
             let (at, below) = units_around(tier, product.price);
             if Decimal::from(below) * product.price < tier {

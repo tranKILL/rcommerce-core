@@ -3,7 +3,9 @@
 `POST /admin/promotions/preview` takes a promotion as `POST /admin/promotions` does
 and answers what it would do, without saving anything. It only reads, so staff with
 `coupons` read may call it. `?exclude=<id>` leaves the promotion being edited out of
-the overlaps. A draft that would be refused on save is a `400` with the same message.
+the overlaps. A draft that would be refused on save is a `400` with the same message. Promotions have
+at most 10 spending tiers, amounts up to 10,000,000 and buy X get Y quantities up to
+1,000.
 
 ```json
 {

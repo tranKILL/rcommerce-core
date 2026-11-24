@@ -181,7 +181,7 @@ fn check_kind(p: &NewPromotion) -> Result<()> {
         "fixed_price" if at_least(p.value, Decimal::ZERO) => Ok(()),
         "amount_off" | "fixed_price" => Err(invalid("value must be an amount of at least 0")),
         "buy_x_get_y" => match (p.buy_quantity, p.get_quantity) {
-            (Some(b), Some(g)) if b >= 1 && g >= 1 => {
+            (Some(b), Some(g)) if (1..=MAX_UNITS).contains(&b) && (1..=MAX_UNITS).contains(&g) => {
                 check_percent(p.value.or(Some(Decimal::ONE_HUNDRED)))
             }
             _ => Err(invalid("buy_quantity and get_quantity must be at least 1")),
@@ -199,12 +199,23 @@ fn check_kind(p: &NewPromotion) -> Result<()> {
     }
 }
 
+/// Most spending tiers one promotion has
+const MAX_TIERS: usize = 10;
+/// The largest amount a condition or tier names
+const MAX_AMOUNT: i64 = 10_000_000;
+/// The largest quantity buy X get Y names
+const MAX_UNITS: i32 = 1_000;
+
 fn check_tiers(tiers: Option<&[SpendTier]>) -> Result<()> {
     let tiers = tiers
         .filter(|t| !t.is_empty())
         .ok_or_else(|| invalid("spend_tiers needs at least one tier"))?;
+    if tiers.len() > MAX_TIERS {
+        return Err(invalid("spend_tiers holds at most 10 tiers"));
+    }
     let ok = tiers.iter().all(|t| {
         t.min_amount > Decimal::ZERO
+            && t.min_amount <= Decimal::from(MAX_AMOUNT)
             && t.percent > Decimal::ZERO
             && t.percent <= Decimal::ONE_HUNDRED
     });
@@ -219,8 +230,10 @@ fn check_tiers(tiers: Option<&[SpendTier]>) -> Result<()> {
 
 /// Conditions and dates
 fn check_conditions(p: &NewPromotion) -> Result<()> {
-    if p.min_amount.is_some_and(|m| m < Decimal::ZERO) {
-        return Err(invalid("min_amount must be at least 0"));
+    if p.min_amount
+        .is_some_and(|m| m < Decimal::ZERO || m > Decimal::from(MAX_AMOUNT))
+    {
+        return Err(invalid("min_amount must be between 0 and 10,000,000"));
     }
     let below_one = |v: Option<i32>| v.is_some_and(|v| v < 1);
     if below_one(p.min_quantity) || below_one(p.max_uses) || below_one(p.max_uses_per_customer) {
