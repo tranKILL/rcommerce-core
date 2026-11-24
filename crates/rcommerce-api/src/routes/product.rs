@@ -4,6 +4,7 @@ use axum::{
     routing::{get, post, put},
     Extension, Json, Router,
 };
+use rcommerce_core::repository::postgres::product_search::BEST_SELLING;
 use rcommerce_core::services::promotion_service::{self, ProductOffers};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -26,18 +27,18 @@ use rcommerce_core::{Error, Resource, SortDirection, SortParams};
 
 /// The order a listing asks for (`None`: newest first)
 fn listing_sort(sort: Option<&str>) -> Result<Option<SortParams>, Error> {
-    let (field, direction) = match sort.map(str::trim).filter(|s| !s.is_empty()) {
-        None | Some("newest") => return Ok(None),
-        Some("price_asc") => ("price", SortDirection::Asc),
-        Some("price_desc") => ("price", SortDirection::Desc),
-        Some("name_asc") => ("title", SortDirection::Asc),
-        Some("name_desc") => ("title", SortDirection::Desc),
-        Some(_) => {
-            return Err(Error::validation(
-                "sort must be newest, price_asc, price_desc, name_asc or name_desc",
-            ))
-        }
-    };
+    let (field, direction) =
+        match sort.map(str::trim).filter(|s| !s.is_empty()) {
+            None | Some("newest") => return Ok(None),
+            Some("price_asc") => ("price", SortDirection::Asc),
+            Some("price_desc") => ("price", SortDirection::Desc),
+            Some("name_asc") => ("title", SortDirection::Asc),
+            Some("name_desc") => ("title", SortDirection::Desc),
+            Some("best_selling") => (BEST_SELLING, SortDirection::Desc),
+            Some(_) => return Err(Error::validation(
+                "sort must be newest, best_selling, price_asc, price_desc, name_asc or name_desc",
+            )),
+        };
     Ok(Some(SortParams {
         field: field.to_string(),
         direction,
@@ -124,18 +125,32 @@ async fn product_page(
         per_page: params.per_page.unwrap_or(20).clamp(1, 100),
     };
     let query = params.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
-    let plain_search = sort.is_none() && params.min_price.is_none() && params.max_price.is_none();
+    let on_sale = params.on_sale == Some(true);
+    let plain_search = sort.is_none()
+        && params.min_price.is_none()
+        && params.max_price.is_none()
+        && params.featured != Some(true)
+        && !on_sale;
     match query {
         Some(query) if plain_search => {
             search_page(state, i18n, query, locale, category_id, &pagination).await
         }
         _ => {
+            let product_ids = if on_sale {
+                let mut conn = state.db.pool().acquire().await?;
+                promotion_service::on_sale_products(&mut conn, &promotion_service::Buyer::default())
+                    .await?
+            } else {
+                None
+            };
             let filter = rcommerce_core::models::ProductFilter {
                 status: Some(rcommerce_core::models::ProductStatus::Active),
                 category_id,
                 query: query.map(str::to_string),
                 price_min: params.min_price,
                 price_max: params.max_price,
+                featured: params.featured,
+                product_ids,
                 ..Default::default()
             };
             state
@@ -390,8 +405,13 @@ pub struct ListProductsParams {
     /// whole word), then every word as a substring ignoring case, accents, spaces
     /// and decimal comma vs dot
     q: Option<String>,
-    /// `newest` (default), `price_asc`, `price_desc`, `name_asc` or `name_desc`
+    /// `newest` (default), `best_selling` (units sold over 90 days), `price_asc`,
+    /// `price_desc`, `name_asc` or `name_desc`
     sort: Option<String>,
+    /// `true`: only products staff marked as featured
+    featured: Option<bool>,
+    /// `true`: only products with a retail offer (reduced price or promotion)
+    on_sale: Option<bool>,
     /// Lowest price, excluding tax
     min_price: Option<rust_decimal::Decimal>,
     /// Highest price, excluding tax
@@ -734,14 +754,15 @@ pub fn router() -> Router<AppState> {
 }
 
 /// List all active product categories (`?lang=` for translated names and slugs),
-/// in display order, each with its parent (`null` for a top category)
+/// in display order, each with its parent (`null` for a top category) and
+/// `product_count`: its active products and those of the categories below it
 pub async fn list_categories(
     State(state): State<AppState>,
     Query(params): Query<LangParams>,
 ) -> Result<Json<serde_json::Value>, rcommerce_core::Error> {
     let locale = requested_locale(params.lang.as_deref());
     let cat_repo = PostgresCategoryRepository::new(state.db.pool().clone());
-    let categories = cat_repo.list(1000, 0).await?;
+    let (categories, counts) = tokio::try_join!(cat_repo.list(1000, 0), cat_repo.product_counts())?;
     let mut translations = match locale.as_deref() {
         Some(locale) => {
             let ids: Vec<Uuid> = categories.iter().map(|c| c.id).collect();
@@ -762,6 +783,7 @@ pub async fn list_categories(
                 "locale": t.as_ref().map(|t| &t.locale),
                 "parent_id": c.parent_id,
                 "sort_order": c.sort_order,
+                "product_count": counts.get(&c.id).copied().unwrap_or(0),
             })
         }).collect::<Vec<_>>()
     })))

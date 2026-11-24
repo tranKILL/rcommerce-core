@@ -25,6 +25,18 @@ const SORTABLE: [&str; 7] = [
     "inventory_quantity",
 ];
 
+/// Sort "field" of the best-selling order: units sold over 90 days, newest first
+/// among equals
+pub const BEST_SELLING: &str = "best_selling";
+
+/// Units of a product sold in the last 90 days: paid orders, not drafts nor
+/// test orders; a bundle's parts count with their bundle only
+const SOLD_90_DAYS: &str = "(SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi \
+     JOIN orders o ON o.id = oi.order_id \
+     WHERE oi.product_id = products.id AND oi.bundle_parent_id IS NULL \
+       AND o.created_at > NOW() - INTERVAL '90 days' AND NOT o.draft AND NOT o.test \
+       AND o.status::text IN ('confirmed', 'processing', 'shipped', 'delivered', 'completed'))";
+
 /// Escape user input for use inside a LIKE pattern matched with ESCAPE '\'.
 /// Without this, '%' and '_' in the query would act as wildcards and a
 /// backslash could break out of the escaping scheme.
@@ -91,6 +103,12 @@ pub fn push_filter(
     if let Some(max) = filter.price_max {
         qb.push(" AND price <= ").push_bind(max);
     }
+    if filter.featured == Some(true) {
+        qb.push(" AND is_featured = true");
+    }
+    if let Some(ids) = &filter.product_ids {
+        qb.push(" AND id = ANY(").push_bind(ids.clone()).push(")");
+    }
     for term in search_terms(filter.query.as_deref()) {
         push_term(qb, term);
     }
@@ -125,6 +143,9 @@ pub fn push_order(
             .push(")) DESC, ");
     }
     match sort {
+        Some(sort) if sort.field == BEST_SELLING => {
+            qb.push(format!("{SOLD_90_DAYS} DESC, created_at DESC, id"));
+        }
         Some(sort) => {
             if !SORTABLE.contains(&sort.field.as_str()) {
                 return Err(crate::Error::validation("Invalid sort field"));

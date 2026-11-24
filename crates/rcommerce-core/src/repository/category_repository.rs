@@ -124,6 +124,25 @@ impl PostgresCategoryRepository {
         }
         Ok(by_product)
     }
+
+    /// Active products in each category or any category below it, counted
+    /// once each; categories without any are left out of the map
+    pub async fn product_counts(&self) -> Result<std::collections::HashMap<Uuid, i64>> {
+        let rows: Vec<(Uuid, i64)> = sqlx::query_as(
+            "WITH RECURSIVE tree(ancestor, id) AS ( \
+               SELECT id, id FROM product_categories \
+               UNION SELECT t.ancestor, c.id FROM product_categories c \
+                 JOIN tree t ON c.parent_id = t.id) \
+             SELECT t.ancestor, COUNT(DISTINCT r.product_id) FROM tree t \
+             JOIN product_category_relations r ON r.category_id = t.id \
+             JOIN products p ON p.id = r.product_id AND p.is_active \
+             GROUP BY t.ancestor",
+        )
+        .fetch_all(&self.db)
+        .await
+        .map_err(|e| Error::Other(format!("Failed to count category products: {}", e)))?;
+        Ok(rows.into_iter().collect())
+    }
 }
 
 #[async_trait]

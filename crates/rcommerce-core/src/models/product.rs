@@ -502,6 +502,12 @@ pub struct ProductFilter {
     pub updated_after: Option<DateTime<Utc>>,
     /// Case-insensitive substring search across title and description
     pub query: Option<String>,
+    /// Only products staff marked as featured
+    #[serde(default)]
+    pub featured: Option<bool>,
+    /// Only these products (e.g. those a promotion covers)
+    #[serde(default)]
+    pub product_ids: Option<Vec<Uuid>>,
 }
 
 /// Inventory status filter

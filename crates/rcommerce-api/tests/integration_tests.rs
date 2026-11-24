@@ -5434,6 +5434,225 @@ async fn test_cart_promotions_add_up_when_combinable() {
     app.cleanup().await.ok();
 }
 
+/// The signed-in customer's cart with `quantity` of `product` added
+async fn my_cart_with(
+    app: &TestApp,
+    token: &str,
+    product: Uuid,
+    quantity: i32,
+) -> serde_json::Value {
+    let (_, cart) = call_json(app, token, "/carts/me", None).await;
+    let cart_id: Uuid = cart["cart"]["id"].as_str().unwrap().parse().unwrap();
+    app.add_item_to_cart(cart_id, product, quantity, token)
+        .await
+        .unwrap();
+    call_json(app, token, "/carts/me", None).await.1
+}
+
+/// "-10 euros on the first order" (`order_amount_off`) and "-10 % on the first
+/// order" (`percent_off`): a customer's first order gets both, the next one
+/// neither; a cancelled first order does not count; listings never show them,
+/// since the buyer is unknown there
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_first_order_promotions() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    let product = app
+        .create_test_product("Welcome bricks", Decimal::new(1000, 2), 0)
+        .await
+        .unwrap();
+    app.app_state
+        .inventory_service
+        .receive_stock(product, location, 20, None)
+        .await
+        .unwrap();
+    let mut ids = Vec::new();
+    for (name, kind) in [
+        ("Welcome 10 euros", "order_amount_off"),
+        ("Welcome 10 percent", "percent_off"),
+    ] {
+        let body = serde_json::json!({"name": name, "kind": kind, "value": 10, "scope": "product",
+            "target_id": product, "first_order_only": true, "combinable": true});
+        ids.push(new_promotion(&app, &admin, body).await);
+    }
+    let (_, page) = call_json(&app, &admin, &format!("/products/{product}"), None).await;
+    assert!(
+        page["product"]["promotion"].is_null(),
+        "not on listings: {page}"
+    );
+
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let cart = my_cart_with(&app, &token, product, 1).await;
+    assert_eq!(
+        money(&cart["items"][0]["unit_price"]),
+        Decimal::new(900, 2),
+        "{cart}"
+    );
+    let first = customer_pickup_order(&app, &token, &customer.email, location, product).await;
+    let (_, placed) = call_json(&app, &token, &format!("/orders/{first}"), None).await;
+    // 3 x 9.00 = 27.00, then 10.00 off the order
+    assert_eq!(
+        money(&placed["discount_total"]),
+        Decimal::new(1000, 2),
+        "{placed}"
+    );
+    assert_eq!(
+        money(&placed["subtotal"]),
+        Decimal::new(2700, 2),
+        "{placed}"
+    );
+
+    let cart = my_cart_with(&app, &token, product, 1).await;
+    assert_eq!(
+        money(&cart["items"][0]["unit_price"]),
+        Decimal::new(1000, 2),
+        "{cart}"
+    );
+    assert_eq!(
+        money(&cart["cart"]["discount_total"]),
+        Decimal::ZERO,
+        "{cart}"
+    );
+
+    let (other, other_password) = app.create_test_customer().await.unwrap();
+    let other_token = app.login(&other.email, &other_password).await.unwrap();
+    let cancelled =
+        customer_pickup_order(&app, &other_token, &other.email, location, product).await;
+    let body = serde_json::json!({"status": "cancelled"});
+    let path = format!("/orders/{cancelled}/status");
+    let (status, _) = send_json(&app, reqwest::Method::PUT, &admin, &path, Some(body)).await;
+    assert_eq!(status, 200);
+    let cart = my_cart_with(&app, &other_token, product, 1).await;
+    assert_eq!(
+        money(&cart["items"][0]["unit_price"]),
+        Decimal::new(900, 2),
+        "{cart}"
+    );
+    // 10.00 off a 9.00 cart stops at the cart's amount
+    assert_eq!(
+        money(&cart["cart"]["discount_total"]),
+        Decimal::new(900, 2),
+        "{cart}"
+    );
+    assert_eq!(money(&cart["cart"]["total"]), Decimal::ZERO, "{cart}");
+    let cart = my_cart_with(&app, &other_token, product, 2).await;
+    assert_eq!(
+        money(&cart["cart"]["discount_total"]),
+        Decimal::new(1000, 2),
+        "{cart}"
+    );
+    for id in ids {
+        let path = format!("/admin/promotions/{id}");
+        send_json(&app, reqwest::Method::DELETE, &admin, &path, None).await;
+    }
+    app.cleanup().await.ok();
+}
+
+/// Categories count the active products in them and below them; listings sort
+/// by units sold over 90 days and keep only featured products or those on offer
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_category_counts_best_sellers_featured_and_offers() {
+    let app = TestApp::new().await.expect("Failed to create test app");
+    let admin = app.admin_token().await.expect("Failed to create admin");
+    let location = create_pickup_location(&app, &admin).await;
+    // the best seller is the older product, so a tie on sales would put it last
+    let (popular, child) = product_in_category(&app, Decimal::new(1200, 2)).await;
+    let (quiet, _) = product_in_category(&app, Decimal::new(1000, 2)).await;
+    let (hidden, _) = product_in_category(&app, Decimal::new(800, 2)).await;
+    let (top, empty) = (Uuid::new_v4(), Uuid::new_v4());
+    for (id, parent) in [(top, None), (empty, Some(top))] {
+        sqlx::query("INSERT INTO product_categories (id, name, slug, parent_id) VALUES ($1, 'Tree', $2, $3)")
+            .bind(id)
+            .bind(format!("tree-{id}"))
+            .bind(parent)
+            .execute(&app.db_pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("UPDATE product_categories SET parent_id = $1 WHERE id = $2")
+        .bind(top)
+        .bind(child)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE product_category_relations SET category_id = $1 WHERE product_id = ANY($2)",
+    )
+    .bind(child)
+    .bind(vec![quiet, hidden])
+    .execute(&app.db_pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE products SET is_active = (id <> $1), is_featured = (id = $2) WHERE id = ANY($3)",
+    )
+    .bind(hidden)
+    .bind(quiet)
+    .bind(vec![quiet, popular, hidden])
+    .execute(&app.db_pool)
+    .await
+    .unwrap();
+
+    let (_, list) = call_json(&app, &admin, "/categories", None).await;
+    let count = |id: Uuid| {
+        list["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id.to_string())
+            .map(|c| c["product_count"].clone())
+    };
+    assert_eq!(count(child), Some(2.into()), "active products only");
+    assert_eq!(count(top), Some(2.into()), "with the categories below");
+    assert_eq!(count(empty), Some(0.into()));
+
+    app.app_state
+        .inventory_service
+        .receive_stock(popular, location, 10, None)
+        .await
+        .unwrap();
+    let (customer, password) = app.create_test_customer().await.unwrap();
+    let token = app.login(&customer.email, &password).await.unwrap();
+    let sold = customer_pickup_order(&app, &token, &customer.email, location, popular).await;
+    // a test order does not count as a sale; this one stands for a real order
+    sqlx::query("UPDATE orders SET test = false WHERE id = $1::uuid")
+        .bind(&sold)
+        .execute(&app.db_pool)
+        .await
+        .unwrap();
+    let ids = |page: &serde_json::Value| -> Vec<String> {
+        page["products"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let listing = format!("/products?category=tree-{top}");
+    let (_, best) = call_json(&app, &admin, &format!("{listing}&sort=best_selling"), None).await;
+    assert_eq!(
+        ids(&best),
+        [popular.to_string(), quiet.to_string()],
+        "{best}"
+    );
+    let (_, featured) = call_json(&app, &admin, &format!("{listing}&featured=true"), None).await;
+    assert_eq!(ids(&featured), [quiet.to_string()], "{featured}");
+    let sale = serde_json::json!({"name": "Popular sale", "kind": "percent_off", "value": 5,
+        "scope": "product", "target_id": popular});
+    let sale = new_promotion(&app, &admin, sale).await;
+    let (_, offers) = call_json(&app, &admin, &format!("{listing}&on_sale=true"), None).await;
+    assert_eq!(ids(&offers), [popular.to_string()], "{offers}");
+    let (status, _) = call_json(&app, &admin, &format!("{listing}&sort=sold"), None).await;
+    assert_eq!(status, 400);
+    let path = format!("/admin/promotions/{sale}");
+    send_json(&app, reqwest::Method::DELETE, &admin, &path, None).await;
+    app.cleanup().await.ok();
+}
+
 /// Ready, then collected by `collector`, by staff
 async fn collect(app: &TestApp, admin: &str, order: &str, collector: &str) {
     let ready = format!("/orders/{order}/pickup/ready");

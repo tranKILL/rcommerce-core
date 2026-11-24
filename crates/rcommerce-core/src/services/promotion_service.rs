@@ -434,6 +434,40 @@ pub async fn live_promotions(conn: &mut PgConnection, buyer: &Buyer) -> Result<V
         .await?)
 }
 
+/// The products a shopper sees an offer on (a reduced price, or a promotion
+/// such as buy X get Y): those the live promotions for `buyer` cover, except
+/// promotions on the whole cart. `None`: every product.
+pub async fn on_sale_products(conn: &mut PgConnection, buyer: &Buyer) -> Result<Option<Vec<Uuid>>> {
+    let promotions: Vec<Promotion> = live_promotions(&mut *conn, buyer)
+        .await?
+        .into_iter()
+        .filter(|p| p.scope != "all" || !CART_KINDS.contains(&p.kind.as_str()))
+        .collect();
+    if promotions.iter().any(|p| p.scope == "all") {
+        return Ok(None);
+    }
+    let of = |scope: &str| -> Vec<Uuid> {
+        promotions
+            .iter()
+            .filter(|p| p.scope == scope)
+            .filter_map(|p| p.target_id)
+            .collect()
+    };
+    let ids = sqlx::query_scalar(
+        "WITH RECURSIVE below(id) AS (SELECT unnest($1::uuid[]) \
+           UNION SELECT c.id FROM product_categories c JOIN below b ON c.parent_id = b.id) \
+         SELECT product_id FROM product_category_relations WHERE category_id IN (SELECT id FROM below) \
+         UNION SELECT unnest($2::uuid[]) \
+         UNION SELECT product_id FROM product_variants WHERE id = ANY($3)",
+    )
+    .bind(of("category"))
+    .bind(of("product"))
+    .bind(of("variant"))
+    .fetch_all(conn)
+    .await?;
+    Ok(Some(ids))
+}
+
 /// A cancelled or refunded order gives its promotion uses back
 pub async fn release_uses(conn: &mut PgConnection, order_id: Uuid) -> Result<()> {
     sqlx::query("DELETE FROM promotion_uses WHERE order_id = $1")
